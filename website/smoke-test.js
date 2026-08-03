@@ -4,6 +4,15 @@ const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
+// The shape of every route depends on one constant in the page. Read it from the
+// source rather than hard-coding a single form: these checks previously asserted
+// `?view=explore` literally, so turning PRETTY_URLS on for a host that rewrites
+// (netlify.toml / vercel.json) would have failed the suite for the wrong reason
+// -- and worse, a check written the other way round would have silently passed
+// while asserting nothing.
+const PRETTY_URLS = /const\s+PRETTY_URLS\s*=\s*true/.test(html);
+const URL_MODE = PRETTY_URLS ? 'pretty paths' : 'query strings';
+
 async function run() {
   const errors = [];
 
@@ -56,7 +65,10 @@ async function run() {
   await new Promise((resolve) => setTimeout(resolve, 60));
   checks.push(['Explore opens its own page',
     doc.getElementById('view-home').hidden && !doc.getElementById('view-explore').hidden, '']);
-  checks.push(['explore page has its own URL', /view=explore/.test(window.location.search), window.location.search || '(none)']);
+  // `route` is path + query, so the same assertion works whichever form the app writes.
+  const route = () => window.location.pathname + window.location.search;
+  checks.push([`explore page has its own URL (${URL_MODE})`,
+    PRETTY_URLS ? /\/explore$/.test(route()) : /view=explore/.test(route()), route()]);
 
   // Every card must carry the launchpad essentials: cover art, market cap,
   // bonding-curve progress and a contract address.
@@ -75,7 +87,8 @@ async function run() {
 
   checks.push(['clicking a card opens the token page', doc.getElementById('view-explore').hidden && !doc.getElementById('view-token').hidden, '']);
   checks.push(['token page shows the right token', doc.getElementById('tp-name').textContent === firstRowName, doc.getElementById('tp-name').textContent + ' vs ' + firstRowName]);
-  checks.push(['token page has its own URL', /\?token=/.test(window.location.search), window.location.search || '(none)']);
+  checks.push([`token page has its own URL (${URL_MODE})`,
+    PRETTY_URLS ? /\/token\/[^/]+$/.test(route()) : /\?token=/.test(route()), route()]);
   checks.push(['token page renders a chart', doc.querySelectorAll('#tp-chart path').length === 2, String(doc.querySelectorAll('#tp-chart path').length)]);
   checks.push(['token page shows a contract address', /^0x[0-9a-f]{40}$/.test(doc.getElementById('tp-addr').textContent), doc.getElementById('tp-addr').textContent]);
 
@@ -100,8 +113,8 @@ async function run() {
   doc.getElementById('tp-back').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 60));
   checks.push(['back returns to the explore board',
-    !doc.getElementById('view-explore').hidden && doc.getElementById('view-token').hidden && !/token=/.test(window.location.search),
-    window.location.search || '(none)']);
+    !doc.getElementById('view-explore').hidden && doc.getElementById('view-token').hidden && !/token/.test(route()),
+    route()]);
 
   // Sorting: assert the ORDER rather than a specific token, so the check stays
   // valid as the preview dataset changes.
