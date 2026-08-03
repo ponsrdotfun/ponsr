@@ -17,8 +17,13 @@ research calls for (Part 4): no "investment", "returns", "profit" or "guaranteed
 because the bot *causes* tokens to exist and promotional language is the thing that
 changes how that gets characterised.
 
-**A — mechanical, clearest** · 152 chars
-> Tag me on X with a name and a ticker. Your token goes live on Robinhood Chain via the Pons factory. You pay nothing to launch. Neutral tool, not advice.
+> **Corrected 2026-08-04.** Option A previously read "the Pons factory" with a
+> capital P, which breaks pons's own attribution terms — they ask for lowercase
+> plus a link back — and it is the rule `CLAUDE.md` lists under "what NOT to do".
+> Every option below now writes **pons** lowercase, and A carries the link.
+
+**A — mechanical, clearest, and the only one that satisfies the attribution terms in full** · 157 chars
+> Tag me with a name and a ticker — your token goes live on Robinhood Chain via the pons factory (ponsfamily.com). Free to launch. Neutral tool, unaffiliated.
 
 **B — brand-led, echoes the site's tagline** · 158 chars
 > Every launch, on the record. Tag @ponsrdotfun with a name and ticker — your token deploys on Robinhood Chain. Creators keep 95% of fees. Neutral tool.
@@ -34,18 +39,29 @@ changes how that gets characterised.
 - **Name:** `Ponsr`
 - **Handle:** `@ponsrdotfun`
 - **Location:** `Robinhood Chain` (X allows free text; it reinforces the chain without a claim)
-- **Website:** `https://ponsr.fun`
+- **Website:** `https://ponsr.fun` — this field is currently empty on the live account.
+  It is the only clickable link X gives an account by default, and it is the whole
+  point of the profile; leaving it blank means every visitor has to guess.
 - **Pinned post:** worth writing once the bot is live on testnet — a single example
   tweet showing the tag → reply → token address round trip is the clearest possible
   explanation of the product.
 
-## One thing to decide before going public
+## The separation from pons, and why the spelling matters
 
-The account name sits one character away from **Pons**, the launchpad this bot builds
-on top of. Ponsr is a third-party tool, not Pons — the bio wording above says
-"via the Pons factory" rather than implying any affiliation, and the visual identity
-(robot, emerald) is deliberately nothing like theirs. Worth keeping that separation
-in the pinned post and anywhere else the account explains itself.
+The account name sits one character away from **pons**, the launchpad this bot builds
+on top of. Ponsr is an independent third-party tool, not pons.
+
+Two rules follow from that, and neither is stylistic:
+
+1. **Always write "pons" in lowercase, and link back to ponsfamily.com.** Those are
+   pons's own attribution terms. Capitalising it as a proper noun in the same
+   sentence as "Ponsr" is exactly what makes the two read as one brand.
+2. **Never state or imply affiliation.** Not in the bio, not in a pinned post, not
+   in a reply. The visual identity (robot, emerald) is deliberately nothing like
+   theirs for the same reason.
+
+Both rules are recorded in `CLAUDE.md` under "What NOT to do" — this file is just
+where they get applied to the X account.
 
 ## Regenerating
 
