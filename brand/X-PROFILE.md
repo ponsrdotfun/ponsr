@@ -39,9 +39,10 @@ changes how that gets characterised.
 - **Name:** `Ponsr`
 - **Handle:** `@ponsrdotfun`
 - **Location:** `Robinhood Chain` (X allows free text; it reinforces the chain without a claim)
-- **Website:** `https://ponsr.fun` — this field is currently empty on the live account.
-  It is the only clickable link X gives an account by default, and it is the whole
-  point of the profile; leaving it blank means every visitor has to guess.
+- **Website:** `https://ponsr.fun` — set 2026-08-04, once the site was live and its
+  certificate valid. Worth having waited: X's website field is the account's only
+  clickable link by default, and pointing it at a domain that 404s or throws a
+  certificate warning is worse than leaving it blank.
 - **Pinned post:** worth writing once the bot is live on testnet — a single example
   tweet showing the tag → reply → token address round trip is the clearest possible
   explanation of the product.

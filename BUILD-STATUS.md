@@ -53,6 +53,8 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 
 ## Website
 
+**Live at https://ponsr.fun** since 2026-08-04 (Netlify, auto-deploys from `main`).
+
 Branded **Ponsr**. One self-contained `index.html` — no build step, no JS dependencies.
 Three client-side routes, each with a real URL so they can be linked, refreshed and shared:
 `/` (landing), `?view=explore` (the board), `?token=SYMBOL` (token detail).

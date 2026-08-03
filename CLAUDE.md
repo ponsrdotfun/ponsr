@@ -34,9 +34,14 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is done and passing** (45 smoke checks). Three routes in one static file:
-  `/` landing, `?view=explore` board, `?token=SYMBOL` detail. `fetchLedger()` is the single
-  integration point for real data.
+- **Website is live at https://ponsr.fun** (50 smoke checks). Netlify, auto-deploying from
+  `main` — a push publishes, there is no manual step. Three routes in one static file:
+  `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
+  still reads the old `?view=` / `?token=` forms, so existing links keep working.
+  `fetchLedger()` is the single integration point for real data.
+- **X account is `@ponsrdotfun`**, live with profile art, banner and bio. `BOT_X_HANDLE`
+  in `config.ts` now defaults to it — it is what the bot matches mentions against, not
+  decoration.
 
 ### Unsettled — these WERE settled, and the pons docs reopened them
 
