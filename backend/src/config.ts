@@ -20,7 +20,7 @@ const ConfigSchema = z.object({
 
   // -- X data provider (Part 10: twitterapi.io, confirmed to support both read + write) --
   TWITTERAPI_IO_KEY: z.string().optional(),
-  BOT_X_HANDLE: z.string().default('bot_lo'),
+  BOT_X_HANDLE: z.string().default('ponsrdotfun'), // x.com/ponsrdotfun
 
   // -- Robinhood Chain RPC (Part 10: Alchemy free tier, or fallback public RPC) --
   RPC_URL: z.string().default('https://rpc.testnet.chain.robinhood.com'),
