@@ -1,6 +1,6 @@
 # Cara pakai eval set parser
 
-Companion untuk `parser-eval-set.json` — 28 contoh tweet buat bandingin model mana yang paling reliable buat parsing intent launch.
+Companion untuk `backend/scripts/parser-eval-set.json` — 28 contoh tweet buat bandingin model mana yang paling reliable buat parsing intent launch. (Dulu ada salinan kedua di `docs/`; dihapus 2026-08-04 karena dua file identik pasti bakal beda sendiri suatu saat, dan `run-eval.ts` cuma baca yang di `backend/scripts/`.)
 
 ## Struktur eval set
 
