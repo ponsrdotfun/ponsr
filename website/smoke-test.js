@@ -298,6 +298,27 @@ async function run() {
       && doc.querySelectorAll('.steps .step').length > 0,
     doc.querySelectorAll('.steps .step.pop').length + '/' + doc.querySelectorAll('.steps .step').length]);
 
+  // ---- Footer: attribution and non-affiliation ----
+  // These are not cosmetic. pons's attribution terms ask for lowercase "pons"
+  // plus a link back, and "Ponsr" is one letter away from "pons" -- the
+  // non-affiliation sentence is the thing keeping that from reading as an
+  // endorsement. Nothing guarded any of it until now, so a footer tidy-up could
+  // have quietly removed all three.
+  const footer = doc.querySelector('footer');
+  const footerText = footer ? footer.textContent : '';
+  checks.push(['footer links back to ponsfamily.com',
+    !!(footer && footer.querySelector('a[href*="ponsfamily.com"]'))]);
+  checks.push(['footer states Ponsr is not affiliated with pons',
+    /not operated by, affiliated with, or endorsed by pons/i.test(footerText)]);
+  checks.push(['footer writes "pons" lowercase, never "Pons"',
+    !/\bPons\b/.test(footerText), footerText.match(/\bPons\b/) ? 'found capitalised "Pons"' : 'ok']);
+
+  const fx = doc.querySelector('.footer-x');
+  checks.push(['footer links to the @ponsrdotfun X account',
+    !!(fx && /x\.com\/ponsrdotfun/.test(fx.getAttribute('href') || ''))]);
+  checks.push(['X link opens in a new tab safely (noopener)',
+    !!(fx && (fx.getAttribute('rel') || '').includes('noopener'))]);
+
   let failCount = 0;
   for (const [name, pass, detail] of checks) {
     console.log((pass ? 'PASS' : 'FAIL') + ' -- ' + name + (detail ? ' (' + detail + ')' : ''));

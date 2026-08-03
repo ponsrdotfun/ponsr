@@ -662,6 +662,13 @@
   .footer-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
   footer .brand { font-size: 18px; }
   footer p { font-size: 13px; color: var(--dim); max-width: 60ch; line-height: 1.6; }
+  .footer-brand { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  /* Padded to clear the 44px minimum hit area the rest of the site holds to --
+     the label alone is only ~18px tall, which is a miss on a phone. */
+  .footer-x { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 12px 6px 0;
+    font-size: 13px; color: var(--dim); text-decoration: none; transition: color .2s var(--ease-out); }
+  .footer-x svg { width: 14px; height: 14px; }
+  .footer-x:hover, .footer-x:focus-visible { color: var(--ink); }
 
   /* RESPONSIVE */
   @media (max-width: 900px) {
@@ -1010,9 +1017,15 @@
 
 <footer>
   <div class="container footer-inner">
-    <div class="brand">
-      <span class="logo-badge sm"><img src="logo-transparent.png" alt=""></span>
-      Ponsr
+    <div class="footer-brand">
+      <div class="brand">
+        <span class="logo-badge sm"><img src="logo-transparent.png" alt=""></span>
+        Ponsr
+      </div>
+      <a class="footer-x" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+        @ponsrdotfun
+      </a>
     </div>
     <p>Ponsr is a neutral tool for launching tokens on Robinhood Chain via the <a href="https://ponsfamily.com" target="_blank" rel="noopener noreferrer">pons</a> factory. Ponsr is an independent third-party tool — it is not operated by, affiliated with, or endorsed by pons. Launching a token is not an investment recommendation. Most launches do not retain value — this ledger records what happened, not what will happen.</p>
   </div>
