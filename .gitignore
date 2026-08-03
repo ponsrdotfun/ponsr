@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# SECRETS — never commit these.
+# backend/.env holds ANTHROPIC_API_KEY, TWITTERAPI_IO_KEY and, on testnet,
+# TREASURY_SIGNER_PRIVATE_KEY. Committing it publishes a key that can spend the
+# treasury. `.env.example` is the file that belongs in the repo; `.env` never is.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+# ---------------------------------------------------------------------------
+# USER DATA — the bot's database maps X user IDs to wallet addresses.
+# That is personal data and operational state; it does not belong in git.
+# (SQLite in WAL mode also writes -wal and -shm sidecar files.)
+# ---------------------------------------------------------------------------
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# ---------------------------------------------------------------------------
+# DEPENDENCIES & BUILD OUTPUT
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Hardhat / solc caches. contracts-test/artifacts.json is deliberately NOT
+# ignored — it is the checked-in compile output the contract tests load.
+cache/
+artifacts/
+typechain/
+typechain-types/
+
+# ---------------------------------------------------------------------------
+# LOGS & SCRATCH
+# ---------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+.nyc_output/
+*.tmp
+pons-factory-abi.json
+
+# ---------------------------------------------------------------------------
+# EDITOR / OS
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+*.swp
+.vscode/*
+!.vscode/extensions.json
+
+# ---------------------------------------------------------------------------
+# CLAUDE CODE
+#
+# settings.local.json records machine-specific absolute paths and per-machine
+# permission grants, so it stays local.
+#
+# .claude/skills/ is third-party tooling installed into this working copy
+# (ui-ux-pro-max and friends) -- 8.5 MB and ~180 files of somebody else's code,
+# each carrying its own licence. It is not part of Ponsr, it is not needed to
+# build or run anything here, and vendoring it would republish other people's
+# work under this repo. Install skills locally instead.
+#
+# CLAUDE.md and .claude/launch.json ARE committed: the first is this project's
+# own context, the second is how the dev server is started.
+# ---------------------------------------------------------------------------
+.claude/settings.local.json
+.claude/skills/
