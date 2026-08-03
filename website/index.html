@@ -1486,8 +1486,14 @@
      paths to index.html -- otherwise the first refresh on /explore is a 404.
      vercel.json / netlify.toml in the repo root carry the rewrite rules; flip
      this in the same commit that deploys them. Pretty mode assumes the site is
-     served from the domain root. */
-  const PRETTY_URLS = false;
+     served from the domain root.
+
+     Turned on 2026-08-04, deploying to Netlify, whose netlify.toml rewrites ship
+     from the same commit -- so the app never writes a path the host cannot serve.
+     Note this breaks `python -m http.server` for local previews (it has no
+     rewrites, so a direct hit on /explore 404s); use `netlify dev` instead, which
+     applies netlify.toml the way production does. */
+  const PRETTY_URLS = true;
 
   function safeDecode(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
 
