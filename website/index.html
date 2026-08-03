@@ -1,0 +1,2211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ponsr — Every launch, on the record.</title>
+<link rel="icon" type="image/png" href="logo-transparent.png">
+<link rel="apple-touch-icon" href="logo-transparent.png">
+<meta name="description" content="Every token launched through Ponsr, tracked in real time. See what your position would be worth if you never sold.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     PONSR — DESIGN TOKENS
+     Aesthetic: brushed platinum / obsidian. A "private vault"
+     for token launches — cool, metallic, alive. Swap the metal
+     ramp below to re-theme the whole site in one place.
+     ============================================================ */
+  :root {
+    --void: #050607;
+    --ink-2: #0E1218;
+    --line: #242A33;
+    --line-soft: rgba(190, 205, 225, 0.10);
+
+    --silver: #C4CDDA;
+    --silver-bright: #F1F5FA;
+    --silver-dim: #828C9B;
+    --steel: #9AA4B2;
+    --ivory: #E9EDF3;
+    --mute: #8B94A1;
+    /* --dim was #5A626E, which measured 3.05:1–3.29:1 against our surfaces and
+       failed WCAG AA (4.5:1) everywhere it carried text. #7F8794 is the lightest-
+       but-still-quiet value that clears 4.5:1 on every background we use it on. */
+    --dim: #7F8794;
+
+    --up: #46C88C;
+    --down: #DD8080;
+    --emerald: #46C88C;
+    --emerald-bright: #82E3B3;
+    --live: #46C88C;
+
+    --glow-cool: rgba(150, 180, 220, 0.16);
+    --glow-silver: rgba(205, 218, 236, 0.14);
+    --glow-emerald: rgba(70, 200, 140, 0.20);
+    /* Brushed metal needs alternating light/dark bands to read as metal rather
+       than as a grey ramp -- 10 stops, per the premium-surface guidance. */
+    --metal: linear-gradient(168deg,
+      #FDFEFF 0%, #E6EBF2 8%, #C7D0DC 18%, #F3F6FA 27%, #B4BECC 39%,
+      #8D98A7 51%, #C6CFDC 63%, #9CA7B5 75%, #EAEFF6 88%, #B0BAC8 100%);
+    /* Layered depth: rim light, contact shadow, mid falloff, ambient. A single
+       shadow reads flat no matter how large it is. */
+    --lift-1: inset 0 1px 0 rgba(255,255,255,0.055), 0 1px 2px rgba(0,0,0,0.30),
+              0 6px 14px rgba(0,0,0,0.26), 0 18px 38px rgba(0,0,0,0.30);
+    --lift-2: inset 0 1px 0 rgba(255,255,255,0.075), 0 2px 4px rgba(0,0,0,0.32),
+              0 12px 26px rgba(0,0,0,0.34), 0 34px 70px rgba(0,0,0,0.42);
+    --lift-3: inset 0 1px 0 rgba(255,255,255,0.09), 0 3px 6px rgba(0,0,0,0.34),
+              0 18px 40px rgba(0,0,0,0.40), 0 54px 110px rgba(0,0,0,0.52);
+    /* Fine film grain, baked at low alpha, layered onto surfaces (not just the
+       page) so panels read as material instead of flat fills. */
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.42'/%3E%3C/svg%3E");
+    --metal-emerald: linear-gradient(168deg, #EAF6EF 0%, #82E3B3 44%, #2E9A67 82%, #6FD7A4 100%);
+
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-body: 'Inter', -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --container: 1160px;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    /* CSS equivalents of the GSAP easings the motion presets call for, so the
+       timing feel matches the spec without pulling in the GSAP runtime. */
+    --ease-expo-out: cubic-bezier(0.16, 1, 0.3, 1);      /* expo.out      */
+    --ease-back-out: cubic-bezier(0.34, 1.56, 0.64, 1);  /* back.out(1.4) */
+    --ease-expo-inout: cubic-bezier(0.87, 0, 0.13, 1);   /* expo.inOut    */
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 92px; scrollbar-width: thin; scrollbar-color: #2A2F38 #0A0C10; }
+  body {
+    background: var(--void); color: var(--ivory); font-family: var(--font-body);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility; font-optical-sizing: auto; letter-spacing: -0.006em;
+    overflow-x: hidden; position: relative;
+  }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: #0A0C10; }
+  ::-webkit-scrollbar-thumb { background: #2A2F38; border: 3px solid #0A0C10; border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3A414C; }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: rgba(196, 205, 218, 0.22); color: #fff; }
+  :focus-visible { outline: 2px solid var(--silver); outline-offset: 3px; border-radius: 2px; }
+  .container { max-width: var(--container); margin: 0 auto; padding: 0 30px; }
+
+  .metal-text {
+    background: var(--metal); -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+
+  /* ============================================================
+     LIVING BACKGROUND
+     ============================================================ */
+  .bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .bg-base { position: absolute; inset: 0; background: radial-gradient(130% 90% at 50% -12%, #12161d 0%, var(--ink-2) 40%, var(--void) 100%); }
+  .bg-grid {
+    position: absolute; inset: -2px;
+    background-image:
+      linear-gradient(rgba(150,170,200,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150,170,200,0.05) 1px, transparent 1px);
+    background-size: 62px 62px; mask-image: radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 78%);
+    -webkit-mask-image: radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 78%);
+    animation: gridpan 40s linear infinite;
+  }
+  @keyframes gridpan { from { background-position: 0 0, 0 0; } to { background-position: 62px 62px, 62px 62px; } }
+  .bg-glow { position: absolute; width: 72vmax; height: 72vmax; border-radius: 50%; filter: blur(14px); opacity: 0.6; will-change: transform; }
+  .bg-glow.g1 { top: -30vmax; left: -16vmax; background: radial-gradient(circle, rgba(150,180,220,0.22) 0%, rgba(150,180,220,0.05) 36%, transparent 64%); animation: drift1 28s ease-in-out infinite alternate; }
+  .bg-glow.g2 { bottom: -32vmax; right: -20vmax; background: radial-gradient(circle, rgba(205,218,236,0.16) 0%, rgba(205,218,236,0.04) 38%, transparent 66%); animation: drift2 36s ease-in-out infinite alternate; }
+  .bg-glow.g3 { top: 34%; left: 44%; width: 48vmax; height: 48vmax; background: radial-gradient(circle, rgba(70,200,140,0.11) 0%, transparent 62%); animation: drift3 46s ease-in-out infinite alternate; }
+  @keyframes drift1 { from { transform: translate(0,0) scale(1);} to { transform: translate(14vmax,9vmax) scale(1.2);} }
+  @keyframes drift2 { from { transform: translate(0,0) scale(1.12);} to { transform: translate(-12vmax,-7vmax) scale(0.9);} }
+  @keyframes drift3 { from { transform: translate(-7vmax,-5vmax) scale(0.9);} to { transform: translate(9vmax,7vmax) scale(1.18);} }
+  .bg-sweep { position: absolute; inset: 0; background: linear-gradient(115deg, transparent 40%, rgba(220,232,248,0.05) 50%, transparent 60%); background-size: 260% 100%; animation: sweep 12s ease-in-out infinite; }
+  @keyframes sweep { 0%,100% { background-position: 130% 0; } 50% { background-position: -30% 0; } }
+  .bg-particles { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bg-grain { position: absolute; inset: 0; opacity: 0.045; mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  .bg-vignette { position: absolute; inset: 0; background: radial-gradient(120% 100% at 50% 38%, transparent 52%, rgba(0,0,0,0.6) 100%); }
+
+  nav, main, footer, .overlay, .scroll-progress, .toast-wrap { position: relative; z-index: 2; }
+
+  /* Cursor glow */
+  .cursor-glow { position: fixed; top: 0; left: 0; width: 460px; height: 460px; border-radius: 50%; pointer-events: none; z-index: 3; transform: translate(-50%,-50%); background: radial-gradient(circle, var(--glow-cool), transparent 62%); opacity: 0; transition: opacity 0.4s ease; will-change: transform; }
+
+  /* Scroll progress */
+  .scroll-progress { position: fixed; top: 0; left: 0; height: 2px; width: 0%; background: linear-gradient(90deg, var(--silver-dim), var(--silver-bright)); box-shadow: 0 0 14px var(--glow-silver); z-index: 60; transition: width 0.1s linear; }
+
+  /* ============================================================
+     NAV
+     ============================================================ */
+  nav { position: sticky; top: 0; z-index: 40; background: rgba(5,6,7,0.5); backdrop-filter: blur(14px); border-bottom: 1px solid transparent; transition: background 0.3s ease, border-color 0.3s ease; }
+  nav { backdrop-filter: blur(15px) saturate(1.18); }
+  nav.scrolled { background: rgba(5,6,7,0.86); border-bottom-color: var(--line); box-shadow: 0 1px 0 rgba(255,255,255,0.045), 0 14px 40px rgba(0,0,0,0.40); }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: 0.005em; }
+  .brand .logo { width: 30px; height: 30px; }
+  .nav-links { display: flex; gap: 30px; font-size: 14px; color: var(--mute); }
+  .nav-links a { position: relative; transition: color 0.2s ease; }
+  .nav-links a::after { content: ''; position: absolute; left: 0; right: 0; bottom: -5px; height: 1px; background: var(--silver); transform: scaleX(0); transform-origin: left; transition: transform 0.28s cubic-bezier(0.2,0.8,0.2,1); }
+  .nav-links a:hover { color: var(--ivory); }
+  .nav-links a:hover::after { transform: scaleX(1); }
+  .nav-live { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--live); padding: 6px 12px; border: 1px solid rgba(70,200,140,0.30); border-radius: 100px; background: rgba(70,200,140,0.06); }
+  .nav-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); animation: livepulse 1.8s ease-in-out infinite; }
+  @keyframes livepulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: 0.35; transform: scale(0.7);} }
+
+  /* Logo mark */
+  .logo { display: block; }
+  /* Transparent art: no box, no ring — the robot itself is the mark. */
+  .logo-badge { width: 34px; height: 34px; display: inline-flex; flex-shrink: 0; }
+  .logo-badge img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .logo-badge.sm { width: 26px; height: 26px; }
+  /* Nav logo "alive": idle bob + emerald power-glow + playful hover wiggle */
+  nav .logo-badge img { animation: logoBob 3.2s ease-in-out infinite, logoGlow 3.2s ease-in-out infinite; }
+  @keyframes logoBob { 0%,100% { transform: translateY(1px); } 50% { transform: translateY(-2.5px); } }
+  @keyframes logoGlow {
+    0%,100% { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.55)) drop-shadow(0 0 6px rgba(70,200,140,0.35)); }
+    50%     { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.55)) drop-shadow(0 0 13px rgba(70,200,140,0.7)); }
+  }
+  nav .brand:hover .logo-badge img { animation: logoWiggle 0.6s ease, logoGlow 3.2s ease-in-out infinite; }
+  @keyframes logoWiggle {
+    0%   { transform: rotate(0deg) scale(1); }
+    25%  { transform: rotate(-10deg) scale(1.1); }
+    55%  { transform: rotate(7deg) scale(1.1); }
+    80%  { transform: rotate(-3deg) scale(1.05); }
+    100% { transform: rotate(0deg) scale(1.05); }
+  }
+
+  /* ============================================================
+     BUTTONS — full-animation
+     ============================================================ */
+  .btn { font-family: var(--font-body); font-size: 14px; font-weight: 600; letter-spacing: 0.01em; padding: 15px 28px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; transition: transform 0.2s var(--ease), box-shadow 0.28s ease, border-color 0.25s ease, background 0.25s ease, color 0.25s ease; position: relative; overflow: hidden; will-change: transform; }
+  .btn > span { position: relative; z-index: 2; }
+  /* Press feedback at the 0.97 scale the style guide calls for -- deliberate
+     enough to feel physical, still inside the 150-300ms interaction budget. */
+  .btn:active { transform: scale(0.97); transition-duration: 0.12s; }
+  .btn-primary { background: var(--metal); color: #0B0E13; box-shadow: 0 8px 30px rgba(196,205,218,0.16), inset 0 1px 0 rgba(255,255,255,0.5); }
+  .btn-primary:hover { box-shadow: 0 14px 44px rgba(196,205,218,0.30), inset 0 1px 0 rgba(255,255,255,0.6); transform: translateY(-2px); }
+  .btn-primary::after { content: ''; position: absolute; top: 0; left: -130%; width: 55%; height: 100%; z-index: 1; background: linear-gradient(100deg, transparent, rgba(255,255,255,0.75), transparent); transform: skewX(-18deg); }
+  .btn-primary:hover::after { animation: shimmer 0.9s ease; }
+  @keyframes shimmer { to { left: 170%; } }
+  .btn-ghost { background: rgba(255,255,255,0.02); color: var(--ivory); border-color: var(--line); }
+  .btn-ghost::before { content: ''; position: absolute; inset: 0; z-index: 0; background: linear-gradient(120deg, rgba(196,205,218,0.14), rgba(196,205,218,0.04)); transform: translateX(-101%); transition: transform 0.4s cubic-bezier(0.2,0.8,0.2,1); }
+  .btn-ghost:hover { border-color: var(--steel); transform: translateY(-2px); }
+  .btn-ghost:hover::before { transform: translateX(0); }
+
+  /* ============================================================
+     HERO
+     ============================================================ */
+  .hero { min-height: calc(100vh - 72px); display: flex; align-items: center; justify-content: center; text-align: center; padding: 40px 0 220px; position: relative; overflow: hidden; }
+  .hero-inner { width: 100%; position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; }
+  .hero-aura { position: absolute; top: 44%; left: 50%; width: 920px; max-width: 130vw; aspect-ratio: 1; transform: translate(-50%,-50%); background: radial-gradient(circle, rgba(70,200,140,0.11) 0%, rgba(150,180,220,0.10) 24%, transparent 58%); filter: blur(10px); z-index: 1; pointer-events: none; animation: halo 8s ease-in-out infinite; }
+
+  /* Hero robot centerpiece — floating, glowing, orbiting */
+  .hero-bot { position: relative; width: 150px; height: 150px; margin: 0 auto 30px; display: flex; align-items: center; justify-content: center; opacity: 0; animation: heroBotIn 1s cubic-bezier(.2,.8,.2,1) 0.15s forwards; }
+  @keyframes heroBotIn { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
+  .hero-bot-halo { position: absolute; inset: -16%; border-radius: 50%; background: radial-gradient(circle, rgba(70,200,140,0.32) 0%, rgba(70,200,140,0.09) 40%, transparent 68%); filter: blur(6px); animation: heroBotHalo 3.6s ease-in-out infinite; }
+  @keyframes heroBotHalo { 0%,100% { opacity: .55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.09); } }
+  .hero-bot-ring { position: absolute; inset: 1%; border-radius: 50%; border: 1px solid rgba(196,205,218,0.16); }
+  .hero-bot-ring.r2 { inset: -9%; border: 1px dashed rgba(70,200,140,0.38); animation: spin 24s linear infinite; }
+  .hero-bot-tilt { position: relative; z-index: 3; transition: transform 0.3s ease; transform-style: preserve-3d; will-change: transform; }
+  /* Free-floating robot — transparent art, no disc/box. The glow comes from the
+     art itself via drop-shadow, so it reads as a hologram hovering in space. */
+  .hero-bot-avatar { position: relative; width: 132px; height: 132px; display: block; animation: heroBotFloat 5.5s ease-in-out infinite; }
+  .hero-bot-avatar img { width: 100%; height: 100%; object-fit: contain; display: block; animation: heroBotAura 3.6s ease-in-out infinite; }
+
+  /* Cursor-tracking eyes.
+     The base art (logo-noeyes.png) has its eyes erased, and these two elements are
+     positioned exactly where they were (coordinates measured from the original art),
+     so the pupils can dart toward the pointer like a real gaze. */
+  .bot-eyes { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+  .eye { position: absolute; width: 8.7%; height: 14.2%; transform: translate(-50%, -50%); }
+  .eye-l { left: 34.5%; top: 55.9%; }
+  .eye-r { left: 65.4%; top: 55.9%; }
+  .eye i {
+    position: absolute; inset: 0; border-radius: 36% / 27%;
+    background: linear-gradient(180deg, #5FE0A2, #34B87C);
+    box-shadow: 0 0 5px rgba(70,200,140,0.95), 0 0 13px rgba(70,200,140,0.55);
+    transform: translate(var(--ex, 0px), var(--ey, 0px));
+    transition: transform 0.14s ease-out;
+    animation: eyeBlink 6.5s ease-in-out infinite;
+  }
+  /* the little specular pixel the original art had, top-left of each eye */
+  .eye i::after { content: ''; position: absolute; left: 20%; top: 14%; width: 26%; height: 17%; background: rgba(255,255,255,0.92); border-radius: 1px; }
+  @keyframes eyeBlink {
+    0%, 92%, 100% { transform: translate(var(--ex, 0px), var(--ey, 0px)) scaleY(1); }
+    95%           { transform: translate(var(--ex, 0px), var(--ey, 0px)) scaleY(0.12); }
+  }
+  @keyframes heroBotAura {
+    0%,100% { filter: drop-shadow(0 10px 18px rgba(0,0,0,0.6)) drop-shadow(0 0 16px rgba(70,200,140,0.42)) drop-shadow(0 0 40px rgba(70,200,140,0.22)); }
+    50%     { filter: drop-shadow(0 10px 18px rgba(0,0,0,0.6)) drop-shadow(0 0 26px rgba(70,200,140,0.72)) drop-shadow(0 0 68px rgba(70,200,140,0.42)); }
+  }
+  /* Reflected pool of light beneath the robot, so it feels grounded, not pasted */
+  .hero-bot-shadow { position: absolute; left: 50%; bottom: -6%; width: 96px; height: 16px; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(ellipse, rgba(70,200,140,0.30), transparent 70%); filter: blur(4px); z-index: 1; animation: heroBotShadow 5.5s ease-in-out infinite; }
+  @keyframes heroBotShadow { 0%,100% { opacity: .5; width: 88px; } 50% { opacity: .85; width: 104px; } }
+  @keyframes heroBotFloat {
+    0%   { transform: translate(0, -6px) rotate(-1.6deg); }
+    25%  { transform: translate(5px, 1px) rotate(1deg) scale(1.015); }
+    50%  { transform: translate(0, 7px) rotate(1.6deg); }
+    75%  { transform: translate(-5px, 1px) rotate(-1deg) scale(1.015); }
+    100% { transform: translate(0, -6px) rotate(-1.6deg); }
+  }
+  /* Kept very faint so it reads as a scanning aura, not a solid disc behind the art */
+  .hero-radar { position: absolute; inset: -14%; border-radius: 50%; background: conic-gradient(from 0deg, rgba(70,200,140,0.12), rgba(70,200,140,0.015) 26%, transparent 44%); z-index: 1; animation: spin 7s linear infinite; }
+
+  /* Rising energy motes — the bit of magic that makes it feel alive */
+  .mote { position: absolute; bottom: 12%; width: 4px; height: 4px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 8px var(--emerald); opacity: 0; z-index: 2; }
+  .mote.m1 { left: 16%; animation: moteRise 4.4s ease-in-out infinite; }
+  .mote.m2 { left: 40%; width: 3px; height: 3px; animation: moteRise 5.6s ease-in-out 1.1s infinite; }
+  .mote.m3 { left: 66%; animation: moteRise 5s ease-in-out 2.2s infinite; }
+  .mote.m4 { left: 86%; width: 3px; height: 3px; animation: moteRise 6.2s ease-in-out 0.6s infinite; }
+  @keyframes moteRise {
+    0%   { opacity: 0; transform: translateY(0) scale(0.6); }
+    18%  { opacity: 0.95; }
+    70%  { opacity: 0.5; }
+    100% { opacity: 0; transform: translateY(-108px) scale(1.15); }
+  }
+  .hero-bot-gauge { position: absolute; inset: -22%; z-index: 1; animation: spin 44s linear infinite; }
+  .hero-orbit { position: absolute; border-radius: 50%; z-index: 2; pointer-events: none; }
+  .hero-orbit i { position: absolute; top: -4px; left: 50%; border-radius: 50%; }
+  .hero-orbit.o1 { inset: -9%; animation: spin 13s linear infinite; }
+  .hero-orbit.o1 i { width: 8px; height: 8px; margin-left: -4px; background: #46C88C; box-shadow: 0 0 10px #46C88C; }
+  .hero-orbit.o2 { inset: -22%; animation: spin 19s linear infinite reverse; }
+  .hero-orbit.o2 i { width: 6px; height: 6px; margin-left: -3px; background: #EDF1F6; box-shadow: 0 0 8px rgba(237,241,246,0.7); }
+  .hud-bracket { position: absolute; width: 15px; height: 15px; border: 2px solid rgba(196,205,218,0.42); z-index: 2; }
+  .hud-bracket.tl { top: -17%; left: -17%; border-right: none; border-bottom: none; }
+  .hud-bracket.tr { top: -17%; right: -17%; border-left: none; border-bottom: none; }
+  .hud-bracket.bl { bottom: -17%; left: -17%; border-right: none; border-top: none; }
+  .hud-bracket.br { bottom: -17%; right: -17%; border-left: none; border-top: none; }
+  .hud-chip { position: absolute; top: 50%; width: 122px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(14,18,24,0.68); backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 32px rgba(0,0,0,0.45); z-index: 4; text-align: left; }
+  .hud-chip.left { right: 100%; margin-right: 30px; animation: hudFloatA 5s ease-in-out infinite; }
+  .hud-chip.right { left: 100%; margin-left: 30px; animation: hudFloatB 5.6s ease-in-out infinite; }
+  @keyframes hudFloatA { 0%,100% { transform: translateY(calc(-50% - 5px)); } 50% { transform: translateY(calc(-50% + 5px)); } }
+  @keyframes hudFloatB { 0%,100% { transform: translateY(calc(-50% + 5px)); } 50% { transform: translateY(calc(-50% - 5px)); } }
+  .hud-k { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--emerald); }
+  .hud-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 8px var(--emerald); animation: livepulse 1.8s ease-in-out infinite; }
+  .hud-v { font-family: var(--font-mono); font-size: 15px; color: var(--ivory); margin-top: 6px; }
+  .hud-v.up { color: var(--emerald); }
+  .hud-spark { width: 100%; height: 22px; display: block; }
+  .hero-eyebrow { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--silver); margin-bottom: 32px; opacity: 0; padding: 8px 15px; border: 1px solid var(--line-soft); border-radius: 100px; background: rgba(196,205,218,0.04); }
+  .hero-eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--silver); box-shadow: 0 0 10px var(--silver); animation: livepulse 2.4s ease-in-out infinite; }
+  /* NOTE: no `text-wrap: balance` here. The headline already has explicit line
+     breaks (each .reveal-line is a block), so balancing buys nothing -- and once
+     the first line is split into inline-block characters, the balancer treats
+     every character as its own breakable item and stacks them one per line. */
+  .hero h1 { font-family: var(--font-display); font-weight: 500; font-size: clamp(50px, 9.2vw, 132px); line-height: 0.94; letter-spacing: -0.026em; max-width: 15ch; margin: 0 auto; font-optical-sizing: auto; }
+  .hero h1 .reveal-line { display: block; overflow: hidden; padding-bottom: 0.05em; }
+  /* Direct child only. A descendant selector here would also capture the
+     per-word/per-character spans injected by splitHeadline() and force them to
+     display:block, stacking the headline one character per line. */
+  .hero h1 .reveal-line > span { display: block; transform: translateY(114%); opacity: 0; }
+  .hero h1 em { font-style: italic; font-weight: 600; }
+  .hero-sub { margin: 30px auto 0; max-width: 52ch; font-size: clamp(16px, 1.5vw, 20px); color: var(--mute); opacity: 0; line-height: 1.65; text-wrap: pretty; }
+  .hero-cta { margin-top: 42px; display: flex; gap: 15px; align-items: center; justify-content: center; flex-wrap: wrap; opacity: 0; }
+
+  /* Motion preset 9 (Stagger List / Complex): per-character headline reveal.
+     Spec: opacity 0 -> 1, y 20px, rotateX -40deg, 0.6s, stagger 15ms, expo.out.
+     Per the preset's own guidance this is reserved for short headlines only --
+     ours is five words -- and the split spans are aria-hidden with the real
+     sentence exposed via aria-label on the <h1>, so screen readers still read
+     it as one string rather than character by character. */
+  /* Characters are grouped into word wrappers so a line can only ever break
+     between words, exactly like normal text -- without this, each character is
+     its own inline-block and can wrap individually onto its own line. */
+  .hero h1 .wd { display: inline-block; white-space: nowrap; }
+  .hero h1 .ch { display: inline-block; opacity: 0; transform: translateY(20px) rotateX(-40deg); transform-origin: 50% 100%; will-change: transform, opacity; }
+  .hero h1 .ch.in { opacity: 1; transform: none; transition: opacity 0.6s var(--ease-expo-out), transform 0.6s var(--ease-expo-out); }
+
+  /* Motion preset 3 (Hover / Complex): magnetic cursor pull on the single
+     primary CTA. Pull strength is clamped so the button never leaves its own
+     hit box, and the preset warns against using this on more than 1-2 focal
+     elements per screen -- this is the only one. */
+  .btn.magnetic { will-change: transform; }
+
+  /* Animated metallic sheen sweeping across the headline */
+  .hero h1 .sheen { background: linear-gradient(100deg, #7E8794 0%, #FBFDFF 16%, #C4CDDA 32%, #7E8794 52%, #E2E8F1 74%, #8A95A4 100%); background-size: 240% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; animation: sheen 6.5s linear infinite; }
+  @keyframes sheen { to { background-position: -240% 0; } }
+
+  /* Live stat bar embedded in the hero */
+  .hero-livebar { margin-top: 48px; display: inline-flex; align-items: stretch; opacity: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background-image: var(--grain), linear-gradient(180deg, rgba(30,35,43,0.62), rgba(14,18,24,0.62));
+    background-blend-mode: overlay, normal;
+    backdrop-filter: blur(15px) saturate(1.18); box-shadow: var(--lift-2); }
+  .livechip { padding: 18px 30px; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .livechip:last-child { border-right: none; }
+  .livechip .k { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 7px; }
+  .livechip .v { font-family: var(--font-mono); font-size: clamp(24px, 3vw, 30px); font-weight: 500; color: var(--ivory); font-variant-numeric: tabular-nums; transition: color 0.3s ease; line-height: 1; }
+  .livechip .v.bump { color: var(--silver-bright); text-shadow: 0 0 22px var(--glow-silver); }
+  .livechip .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--live); box-shadow: 0 0 8px var(--live); animation: livepulse 1.8s ease-in-out infinite; }
+
+  /* Full-bleed emerald "market horizon" chart at the base of the hero */
+  .hero-horizon { position: absolute; left: 0; right: 0; bottom: 0; height: 220px; z-index: 1; pointer-events: none; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+  .hero-horizon svg { width: 100%; height: 100%; display: block; }
+  .hero-horizon .hline { fill: none; stroke: var(--emerald); stroke-width: 2; filter: drop-shadow(0 0 12px var(--glow-emerald)); stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 2.6s cubic-bezier(0.4,0,0.2,1); }
+  .hero-horizon.drawn .hline { stroke-dashoffset: 0; }
+  .hero-horizon .harea { opacity: 0; transition: opacity 1.8s ease 0.5s; }
+  .hero-horizon.drawn .harea { opacity: 1; }
+
+  @keyframes halo { 0%,100% { opacity: 0.5; transform: scale(1);} 50% { opacity: 0.95; transform: scale(1.06);} }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============================================================
+     TICKER
+     ============================================================ */
+  .ticker { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(14,18,24,0.6); overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent); mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent); }
+  /* Duration is recomputed from the real track width in buildTicker(); this value
+     is only the fallback, sized for a calm ~34px/s at the default item count. */
+  .ticker-track { display: flex; gap: 44px; white-space: nowrap; width: max-content; padding: 15px 0; animation: marquee 75s linear infinite; }
+  .ticker:hover .ticker-track { animation-play-state: paused; }
+  @keyframes marquee { from { transform: translateX(0);} to { transform: translateX(-50%);} }
+  .ticker-item { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 13px; color: var(--mute); }
+  .ticker-item .sym { color: var(--ivory); }
+  .ticker-item .chg.up { color: var(--up); }
+  .ticker-item .chg.down { color: var(--down); }
+  .ticker-item .sep { color: var(--dim); }
+  .ticker-item.flash { animation: flash 0.6s ease; }
+  @keyframes flash { 0% { color: var(--silver-bright); text-shadow: 0 0 12px var(--glow-silver);} 100% {} }
+
+  /* ============================================================
+     REVEAL
+     ============================================================ */
+  .reveal { opacity: 0; transform: translateY(30px); filter: blur(6px); transition: opacity 0.8s ease, transform 0.8s cubic-bezier(0.2,0.8,0.2,1), filter 0.8s ease; }
+  .reveal.in { opacity: 1; transform: none; filter: none; }
+  .section { padding: 100px 0; }
+  .section-eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--silver); margin-bottom: 16px; }
+  .section-title { font-family: var(--font-display); font-weight: 500; font-size: clamp(32px, 4.2vw, 52px); letter-spacing: -0.018em; line-height: 1.04; text-wrap: balance; }
+  .section-lead { margin-top: 18px; max-width: 54ch; color: var(--mute); font-size: 17px; line-height: 1.65; text-wrap: pretty; }
+
+  /* STAT BAND */
+  .stat-strip { margin-top: 60px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .stat { padding: 28px 30px; border-right: 1px solid var(--line); position: relative; }
+  .stat::before { content: ''; position: absolute; left: 0; top: 0; height: 2px; width: 0; background: var(--metal); transition: width 0.9s ease; }
+  .stat-strip.in .stat::before { width: 46px; }
+  .stat:last-child { border-right: none; }
+  .stat-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .stat-value { font-family: var(--font-mono); font-size: clamp(28px, 3.6vw, 42px); font-weight: 500; color: var(--ivory); font-variant-numeric: tabular-nums; transition: color 0.3s ease; }
+  .stat-value.bump { color: var(--silver-bright); text-shadow: 0 0 24px var(--glow-silver); }
+
+  /* HOW IT WORKS */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 56px; }
+  /* Motion preset 8 (Stagger List / Standard): grid entrance, scale 0.92 + y16,
+     0.4s, 60ms stagger, back.out(1.4). The preset explicitly warns against
+     back.out on dense data tables, so the ledger keeps its plain fade instead. */
+  .steps .step { opacity: 0; transform: translateY(16px) scale(0.92); }
+  .steps .step.pop { opacity: 1; transform: none; transition: opacity 0.6s var(--ease-expo-out), transform 0.6s var(--ease-back-out); }
+  .step { padding: 36px 30px 40px; border: 1px solid var(--line); border-radius: 12px;
+    background-image: var(--grain), linear-gradient(180deg, rgba(31,36,44,0.58), rgba(19,23,29,0.58));
+    background-blend-mode: overlay, normal;
+    backdrop-filter: blur(15px) saturate(1.18); box-shadow: var(--lift-1);
+    position: relative; overflow: hidden; transform-style: preserve-3d; transition: transform 0.35s var(--ease), border-color 0.3s ease, box-shadow 0.3s ease; }
+  .step::before { content: ''; position: absolute; inset: 0; background: radial-gradient(340px circle at var(--mx,50%) var(--my,0%), var(--glow-silver), transparent 60%); opacity: 0; transition: opacity 0.3s ease; }
+  .step:hover { border-color: var(--steel); box-shadow: 0 30px 70px rgba(0,0,0,0.5); }
+  .step:hover::before { opacity: 1; }
+  .step-num { font-family: var(--font-mono); font-size: 13px; color: var(--silver); letter-spacing: 0.1em; }
+  .step-icon { margin: 20px 0 22px; color: var(--silver); }
+  .step h3 { font-family: var(--font-display); font-weight: 500; font-size: 23px; margin-bottom: 10px; }
+  .step p { color: var(--mute); font-size: 15px; line-height: 1.65; }
+  .step .connector { position: absolute; top: 54px; right: -12px; color: var(--dim); font-size: 18px; z-index: 3; }
+
+  /* SPOTLIGHT */
+  .spotlight-card { margin-top: 50px; display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 0; align-items: stretch; border: 1px solid var(--steel); border-radius: 16px; overflow: hidden;
+    background-image: var(--grain), linear-gradient(135deg, rgba(33,39,48,0.78), rgba(13,17,22,0.78));
+    background-blend-mode: overlay, normal;
+    box-shadow: var(--lift-3); }
+  .spotlight-left { padding: 46px 42px; display: flex; flex-direction: column; justify-content: center; }
+  .spotlight-badge { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--emerald); padding: 6px 13px; border: 1px solid rgba(70,200,140,0.30); border-radius: 100px; margin-bottom: 24px; background: rgba(70,200,140,0.06); }
+  .spotlight-name { font-family: var(--font-display); font-weight: 600; font-size: clamp(32px, 3.8vw, 46px); line-height: 1.0; }
+  .spotlight-sym { font-family: var(--font-mono); color: var(--mute); font-size: 15px; margin-top: 8px; }
+  .spotlight-figure { margin-top: 32px; }
+  .spotlight-figure .lbl { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); }
+  .spotlight-figure .val { font-family: var(--font-mono); font-weight: 600; font-size: clamp(36px, 4.6vw, 58px); font-variant-numeric: tabular-nums; margin-top: 10px; }
+  #sp-val { background: var(--metal-emerald); filter: drop-shadow(0 0 34px var(--glow-emerald)); }
+  .spotlight-meta { margin-top: 26px; display: flex; gap: 32px; }
+  .spotlight-meta .k { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+  .spotlight-meta .v { font-family: var(--font-mono); font-size: 16px; color: var(--ivory); margin-top: 6px; }
+  .spotlight-right { position: relative; min-height: 320px; background: radial-gradient(120% 120% at 100% 0%, rgba(196,205,218,0.08), transparent 55%); border-left: 1px solid var(--line); }
+  .spotlight-chart { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .spotlight-chart .line { fill: none; stroke: var(--emerald); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 2.1s cubic-bezier(0.4,0,0.2,1); filter: drop-shadow(0 0 8px var(--glow-emerald)); }
+  .spotlight-card.drawn .spotlight-chart .line { stroke-dashoffset: 0; }
+  .spotlight-chart .area { opacity: 0; transition: opacity 1.4s ease 0.5s; }
+  .spotlight-card.drawn .spotlight-chart .area { opacity: 1; }
+
+  /* LEDGER */
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; gap: 16px; flex-wrap: wrap; }
+  .section-head h2 { font-family: var(--font-display); font-weight: 500; font-size: clamp(30px, 3.6vw, 44px); }
+  .ledger-status { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--mute); }
+  .ledger-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); animation: livepulse 1.8s ease-in-out infinite; }
+  .ledger { margin-top: 28px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background-image: var(--grain), linear-gradient(180deg, rgba(20,24,31,0.56), rgba(12,15,20,0.56));
+    background-blend-mode: overlay, normal;
+    backdrop-filter: blur(15px) saturate(1.18); box-shadow: var(--lift-1); }
+  /* Card grid ("explore" board) -- the launchpad-standard way to browse a large
+     set of tokens: cover art first, then the numbers that matter at a glance. */
+  #ledger-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; padding: 18px; }
+  .tcard { display: flex; flex-direction: column; text-align: left; padding: 0; cursor: pointer; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 14px; color: var(--ivory);
+    background-image: var(--grain), linear-gradient(180deg, rgba(28,33,41,0.72), rgba(16,20,26,0.72));
+    background-blend-mode: overlay, normal;
+    box-shadow: var(--lift-1);
+    font-family: var(--font-body); opacity: 0; transform: translateY(14px);
+    transition: transform 0.28s var(--ease), border-color 0.25s ease, box-shadow 0.3s ease, opacity 0.5s ease; }
+  .tcard.visible { opacity: 1; transform: translateY(0); }
+  .tcard:hover, .tcard:focus-visible { border-color: var(--steel); transform: translateY(-5px); box-shadow: var(--lift-2); }
+  .tcard-art { position: relative; display: block; aspect-ratio: 1; overflow: hidden; background: #0d1015; }
+  .tcard-art .cardart { width: 100%; height: 100%; display: block; transition: transform 0.5s var(--ease); }
+  .tcard:hover .cardart { transform: scale(1.06); }
+  .tcard-badge { position: absolute; top: 10px; right: 10px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 4px 9px; border-radius: 100px; background: rgba(8,10,13,0.78); backdrop-filter: blur(6px);
+    border: 1px solid var(--line); color: var(--mute); }
+  .tcard-badge.graduated { color: var(--emerald); border-color: rgba(70,200,140,0.42); }
+  .tcard-body { display: block; padding: 14px 15px 15px; }
+  .tcard-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .tcard-names { display: block; min-width: 0; }
+  .tcard-name { display: block; font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tcard-top .token-symbol { display: block; margin-top: 3px; }
+  .tcard-chg { font-family: var(--font-mono); font-size: 12.5px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .tcard-chg.up { color: var(--up); }
+  .tcard-chg.down { color: var(--down); }
+  .tcard-mc { display: block; margin-top: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .tcard-mc b { font-size: 17px; font-weight: 600; color: var(--ivory); transition: color 0.3s ease; }
+  .tcard-mc b.bump { color: var(--silver-bright); text-shadow: 0 0 18px var(--glow-silver); }
+  .tcard-mc i { font-style: normal; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-left: 3px; }
+  /* Bonding-curve fill: how close this token is to graduating. */
+  .tcard-bar { display: block; height: 3px; border-radius: 3px; background: rgba(255,255,255,0.07); margin-top: 12px; overflow: hidden; }
+  .tcard-bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--emerald), var(--emerald-bright)); transition: width 0.6s var(--ease); }
+  .tcard-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 11px;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--dim); }
+  .tcard-age { flex-shrink: 0; }
+  .monogram { width: 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle at 30% 24%, #232833, #0F1217); border: 1px solid var(--steel); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 17px; color: var(--silver); flex-shrink: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,0.06); }
+  .token-symbol { font-family: var(--font-mono); font-size: 12px; color: var(--mute); margin-top: 2px; }
+  .col-mono { font-family: var(--font-mono); font-size: 15px; font-variant-numeric: tabular-nums; color: var(--ivory); transition: color 0.3s ease; }
+  .col-mono.bump { color: var(--silver-bright); }
+  .col-age { font-size: 13px; color: var(--mute); font-family: var(--font-mono); }
+  .ledger-empty { padding: 64px 20px; text-align: center; color: var(--mute); }
+  .ledger-empty p:first-child { font-family: var(--font-display); font-size: 20px; color: var(--ivory); margin-bottom: 8px; }
+
+  /* Ledger controls */
+  .ledger-controls { display: flex; align-items: center; gap: 12px; margin-top: 26px; flex-wrap: wrap; }
+  .ledger-search { flex: 1; min-width: 220px; position: relative; display: flex; align-items: center; }
+  .ledger-search input { width: 100%; padding: 13px 16px 13px 42px; background: rgba(14,18,24,0.6); border: 1px solid var(--line); border-radius: 10px; color: var(--ivory); font-family: var(--font-body); font-size: 14px; transition: border-color 0.2s ease, background 0.2s ease; }
+  .ledger-search input::placeholder { color: var(--dim); }
+  .ledger-search input:focus { outline: none; border-color: var(--steel); background: rgba(20,24,30,0.85); }
+  .ledger-search svg { position: absolute; left: 15px; color: var(--dim); pointer-events: none; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: rgba(14,18,24,0.6); }
+  /* 14px vertical padding puts the control at exactly the 44px tap minimum (was 40px). */
+  .seg button { padding: 14px 15px; background: transparent; border: none; border-right: 1px solid var(--line); color: var(--mute); font-family: var(--font-mono); font-size: 12px; cursor: pointer; transition: color 0.2s ease, background 0.2s ease; white-space: nowrap; }
+  .seg button:last-child { border-right: none; }
+  .seg button:hover { color: var(--ivory); background: rgba(196,205,218,0.05); }
+  .seg button.active { color: #0B0E13; background: var(--metal); font-weight: 600; }
+
+  /* ============================================================
+     PAGE TRANSITIONS  (motion preset 12 — Page Transition / Complex)
+     Spec asks for a 500-800ms expo.inOut shared-element morph, which in GSAP
+     needs the paid Flip plugin. The View Transitions API does the same FLIP
+     work natively, so the effect is built on that and simply doesn't run on
+     browsers without it (the route still changes, just without the morph).
+     ============================================================ */
+  ::view-transition-old(root), ::view-transition-new(root) {
+    animation-duration: 0.62s; animation-timing-function: var(--ease-expo-inout);
+  }
+  ::view-transition-old(root) { animation-name: vtOut; }
+  ::view-transition-new(root) { animation-name: vtIn; }
+  @keyframes vtOut { to { opacity: 0; transform: translateY(-14px) scale(0.985); } }
+  @keyframes vtIn { from { opacity: 0; transform: translateY(18px) scale(0.99); } }
+  /* The card's cover art and the token page's monogram share this name, so the
+     browser morphs one into the other instead of cross-fading the whole page. */
+  ::view-transition-group(token-hero) {
+    animation-duration: 0.66s; animation-timing-function: var(--ease-expo-inout);
+  }
+  /* Both snapshots keep the browser's default fade. `animation: none` looked
+     cleaner while both ends existed, but it also meant an *unmatched* old
+     snapshot never animated out -- on back navigation the tile was left frozen
+     mid-flight over the page. The content is identical on both sides, so the
+     fade is invisible in the matched case and is the safety net in the other. */
+  ::view-transition-image-pair(token-hero) { isolation: auto; }
+  ::view-transition-old(token-hero), ::view-transition-new(token-hero) {
+    animation-duration: 0.66s; animation-timing-function: var(--ease-expo-inout);
+    mix-blend-mode: normal; width: 100%; height: 100%; object-fit: cover;
+  }
+  /* The page-level transition already animates the incoming view. Running the
+     token page's own entrance on top of it double-animates and reads as a stutter. */
+  html.vt-active .tokenpage { animation: none; }
+
+  /* Loading skeleton (motion preset 15): a gradient background-position sweep,
+     which reads as "loading" far more clearly than an opacity pulse. */
+  .skel { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .skel-art { aspect-ratio: 1; }
+  .skel-line { height: 11px; border-radius: 5px; margin: 13px 15px 0; }
+  .skel-line.s { width: 45%; }
+  .skel-line.m { width: 68%; }
+  .skel-line.l { width: 86%; margin-bottom: 16px; }
+  .skel-art, .skel-line {
+    background: linear-gradient(100deg, rgba(255,255,255,0.03) 20%, rgba(255,255,255,0.09) 40%, rgba(255,255,255,0.03) 60%);
+    background-size: 200% 100%;
+    animation: skelSweep 1.4s ease-in-out infinite;
+  }
+  @keyframes skelSweep { from { background-position: 200% 0; } to { background-position: -40% 0; } }
+
+  /* Landing-page hand-off into the explore view */
+  .explore-cta { display: flex; align-items: center; justify-content: space-between; gap: 30px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: 16px; padding: 38px 36px;
+    background-image: var(--grain), linear-gradient(135deg, rgba(32,38,47,0.66), rgba(13,17,22,0.66));
+    background-blend-mode: overlay, normal;
+    box-shadow: var(--lift-2); }
+  .explore-cta .section-lead { margin-top: 12px; font-size: 16px; }
+  @media (max-width: 720px) { .explore-cta { padding: 26px 22px; } }
+
+  /* Pagination */
+  .pager { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; padding: 6px 18px 22px; }
+  .pager:empty { display: none; }
+  .pager button { min-width: 44px; height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: rgba(20,23,29,0.6); color: var(--mute); font-family: var(--font-mono); font-size: 13px; cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.2s var(--ease); }
+  .pager button:hover:not(:disabled) { color: var(--ivory); border-color: var(--steel); transform: translateY(-2px); }
+  .pager button[aria-current="page"] { background: var(--metal); color: #0B0E13; font-weight: 700; border-color: transparent; }
+  .pager button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .pager .gap { color: var(--dim); padding: 0 4px; font-family: var(--font-mono); font-size: 13px; user-select: none; }
+
+  /* Status pill -- used on the cards and on the token page */
+  .tstatus { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--line); color: var(--mute); }
+  .tstatus.graduated { color: var(--emerald); border-color: rgba(70,200,140,0.3); background: rgba(70,200,140,0.06); }
+  @keyframes freshpop { 0% { background: rgba(70,200,140,0.16); } 100% { background: transparent; } }
+  .tcard.fresh { animation: freshpop 2.5s ease; border-color: var(--emerald); }
+
+  /* ============================================================
+     TOKEN DETAIL PAGE
+     ============================================================ */
+  .tokenpage { padding: 46px 30px 90px; animation: tpIn 0.62s var(--ease-expo-out) both; }
+  @keyframes tpIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .tp-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--mute); padding: 10px 2px; transition: color 0.2s ease; }
+  .tp-back:hover { color: var(--ivory); }
+  .tp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-top: 14px; }
+  .tp-ident { display: flex; align-items: center; gap: 20px; min-width: 0; }
+  .tp-art { display: block; width: 108px; height: 108px; border-radius: 14px; overflow: hidden;
+    flex-shrink: 0; border: 1px solid var(--line); box-shadow: var(--lift-1); }
+  .tp-art .cardart { width: 100%; height: 100%; display: block; }
+  .tp-name { font-family: var(--font-display); font-weight: 500; font-size: clamp(30px, 4.4vw, 54px); line-height: 1.02; letter-spacing: -0.02em; }
+  .tp-sub { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .tp-sub .token-symbol { font-size: 14px; }
+  .tp-age { font-family: var(--font-mono); font-size: 12px; color: var(--dim); }
+
+  .tp-chartcard { margin-top: 34px; border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    background-image: var(--grain), linear-gradient(180deg, rgba(31,37,46,0.58), rgba(13,17,22,0.58));
+    background-blend-mode: overlay, normal;
+    backdrop-filter: blur(15px) saturate(1.18); box-shadow: var(--lift-2); }
+  .tp-chart-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 26px 28px 6px; flex-wrap: wrap; }
+  .tp-k { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+  .tp-mcap { font-family: var(--font-mono); font-size: clamp(30px, 4vw, 44px); font-weight: 600; color: var(--ivory); font-variant-numeric: tabular-nums; margin-top: 8px; transition: color 0.3s ease; }
+  .tp-mcap.bump { color: var(--silver-bright); text-shadow: 0 0 22px var(--glow-silver); }
+  .tp-change { font-family: var(--font-mono); font-size: 17px; padding: 7px 13px; border-radius: 100px; border: 1px solid var(--line); }
+  .tp-change.up { color: var(--up); border-color: rgba(70,200,140,0.32); background: rgba(70,200,140,0.07); }
+  .tp-change.down { color: var(--down); border-color: rgba(221,128,128,0.32); background: rgba(221,128,128,0.07); }
+  .tp-chart { display: block; width: 100%; height: 260px; }
+  .tp-chart .tline { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1.8s var(--ease-expo-out); }
+  .tp-chart.drawn .tline { stroke-dashoffset: 0; }
+  .tp-chart .tarea { opacity: 0; transition: opacity 1.2s ease 0.4s; }
+  .tp-chart.drawn .tarea { opacity: 1; }
+
+  .tp-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
+  .tp-stat { border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; background: rgba(14,18,24,0.45); transition: border-color 0.25s ease, transform 0.25s var(--ease); }
+  .tp-stat:hover { border-color: var(--steel); transform: translateY(-2px); }
+  .tp-v { font-family: var(--font-mono); font-size: 17px; color: var(--ivory); margin-top: 9px; }
+  .tp-addr { font-size: 12.5px; color: var(--steel); word-break: break-all; }
+
+  .tp-whatif { margin-top: 34px; border: 1px solid var(--steel); border-radius: 16px; padding: 34px;
+    background-image: var(--grain), linear-gradient(160deg, rgba(33,39,48,0.68), rgba(13,17,22,0.68));
+    background-blend-mode: overlay, normal;
+    box-shadow: var(--lift-3); }
+  .tp-whatif-lead { color: var(--mute); font-size: 15px; line-height: 1.65; max-width: 62ch; }
+  .tp-locked { display: flex; align-items: center; gap: 16px; margin-top: 24px; flex-wrap: wrap; }
+  .tp-demo-note { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+  .tp-figures { margin-top: 26px; animation: tpIn 0.45s var(--ease-expo-out) both; }
+  .tp-figure { padding: 24px 0 22px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: center; margin-bottom: 22px; }
+  .tp-figure-v { font-family: var(--font-mono); font-size: clamp(36px, 6vw, 50px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--silver-bright); text-shadow: 0 0 40px var(--glow-silver); margin-top: 10px; }
+
+  @media (max-width: 900px) { .tp-stats { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 720px) {
+    .tokenpage { padding: 30px 22px 70px; }
+    .tp-art { width: 76px; height: 76px; border-radius: 11px; }
+    .tp-whatif { padding: 24px 20px; }
+    .tp-chart { height: 200px; }
+  }
+
+  /* FAQ — native <details> accordion, no JS */
+  .faq-list { margin-top: 44px; border-top: 1px solid var(--line); }
+  .faq-item { border-bottom: 1px solid var(--line); }
+  .faq-item summary { list-style: none; cursor: pointer; padding: 24px 4px; display: flex; align-items: center; justify-content: space-between; gap: 20px; font-family: var(--font-display); font-size: clamp(18px, 2vw, 22px); font-weight: 500; color: var(--ivory); transition: color 0.2s ease; }
+  .faq-item summary::-webkit-details-marker { display: none; }
+  .faq-item summary:hover, .faq-item[open] summary { color: var(--silver-bright); }
+  .faq-item summary .plus { flex-shrink: 0; width: 22px; height: 22px; position: relative; color: var(--silver); }
+  .faq-item summary .plus::before, .faq-item summary .plus::after { content: ''; position: absolute; background: currentColor; }
+  .faq-item summary .plus::before { top: 50%; left: 0; right: 0; height: 1.5px; transform: translateY(-50%); }
+  .faq-item summary .plus::after { left: 50%; top: 0; bottom: 0; width: 1.5px; transform: translateX(-50%); transition: opacity 0.3s ease; }
+  .faq-item[open] summary .plus::after { opacity: 0; }
+  .faq-answer { padding: 0 4px 26px; color: var(--mute); font-size: 16px; line-height: 1.7; max-width: 72ch; text-wrap: pretty; }
+
+  /* Figure rows -- shared by the token page's what-if panel. (The old modal that
+     originally used these was replaced by the dedicated token page.) */
+  .statement-rows { display: flex; flex-direction: column; gap: 14px; }
+  .statement-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; }
+  .statement-row .label { color: var(--mute); }
+  .statement-row .value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .value.gain { color: var(--up); }
+  .value.loss { color: var(--down); }
+
+  /* TOASTS (real-time launch feed) */
+  .toast-wrap { position: fixed; left: 24px; bottom: 24px; z-index: 80; display: flex; flex-direction: column; gap: 10px; }
+  .toast { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border: 1px solid var(--steel); border-radius: 10px; background: rgba(20,23,29,0.9); backdrop-filter: blur(10px); box-shadow: 0 20px 50px rgba(0,0,0,0.5); font-size: 13px; color: var(--ivory); transform: translateX(-120%); opacity: 0; transition: transform 0.5s cubic-bezier(0.2,0.9,0.2,1), opacity 0.5s ease; }
+  .toast.show { transform: translateX(0); opacity: 1; }
+  .toast .tdot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); flex-shrink: 0; }
+  .toast .tsym { font-family: var(--font-mono); color: var(--silver-bright); }
+  .toast .tmeta { color: var(--mute); font-family: var(--font-mono); font-size: 11px; }
+
+  /* FOOTER */
+  footer { margin-top: 40px; border-top: 1px solid var(--line); padding: 56px 0 70px; background: rgba(5,6,7,0.5); }
+  .footer-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
+  footer .brand { font-size: 18px; }
+  footer p { font-size: 13px; color: var(--dim); max-width: 60ch; line-height: 1.6; }
+
+  /* RESPONSIVE */
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .spotlight-card { grid-template-columns: 1fr; }
+    .spotlight-right { min-height: 240px; border-left: none; border-top: 1px solid var(--line); }
+    .steps { grid-template-columns: 1fr; }
+    .step .connector { display: none; }
+  }
+  @media (max-width: 720px) {
+    .hero { min-height: auto; padding: 56px 0 150px; }
+    .hero-livebar { flex-direction: column; align-self: stretch; }
+    .livechip { border-right: none; border-bottom: 1px solid var(--line); align-items: center; }
+    .livechip:last-child { border-bottom: none; }
+    .hero-horizon { height: 130px; }
+    .hero-bot { width: 130px; height: 130px; margin-bottom: 22px; }
+    .hero-bot-avatar { width: 100px; height: 100px; }
+    .hud-chip, .hud-bracket, .hero-orbit, .hero-bot-gauge, .hero-radar { display: none; }
+    .stat-strip { grid-template-columns: 1fr; }
+    .stat { border-right: none; border-bottom: 1px solid var(--line); }
+    .stat:last-child { border-bottom: none; }
+    #ledger-body { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 12px; }
+    .ledger-controls { flex-direction: column; align-items: stretch; }
+    .seg { overflow-x: auto; }
+    .nav-links { display: none; }
+    .toast-wrap { left: 12px; right: 12px; bottom: 12px; }
+    .statement { padding: 30px 22px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+    .hero h1 .reveal-line > span { transform: none; opacity: 1; }
+    .hero-eyebrow, .hero-sub, .hero-cta, .reveal, .tcard { opacity: 1; transform: none; filter: none; }
+    .spotlight-chart .line { stroke-dashoffset: 0; }
+    .spotlight-chart .area { opacity: 1; }
+    .bg-grid, .bg-sweep, .bg-glow { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg" aria-hidden="true">
+  <div class="bg-base"></div>
+  <div class="bg-grid"></div>
+  <div class="bg-glow g1"></div>
+  <div class="bg-glow g2"></div>
+  <div class="bg-glow g3"></div>
+  <canvas class="bg-particles" id="particles"></canvas>
+  <div class="bg-sweep"></div>
+  <div class="bg-grain"></div>
+  <div class="bg-vignette"></div>
+</div>
+
+<div class="cursor-glow" id="cursor-glow" aria-hidden="true"></div>
+<div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
+
+<nav id="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="#top" aria-label="Ponsr home">
+      <span class="logo-badge"><img src="logo-transparent.png" alt="Ponsr logo"></span>
+      Ponsr
+    </a>
+    <div class="nav-links">
+      <a href="#how" id="nav-how">How it works</a>
+      <a href="#spotlight">Spotlight</a>
+      <a href="?view=explore" data-go="explore">Explore</a>
+      <a href="#faq">FAQ</a>
+      <span class="nav-live" aria-hidden="true"><span class="dot"></span> Live</span>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+<div id="view-home">
+  <section class="hero" id="hero">
+    <div class="hero-aura" aria-hidden="true"></div>
+    <div class="container hero-inner">
+      <div class="hero-bot">
+        <span class="hero-bot-halo" aria-hidden="true"></span>
+        <span class="hero-radar" aria-hidden="true"></span>
+        <svg class="hero-bot-gauge" viewBox="0 0 200 200" aria-hidden="true"><circle cx="100" cy="100" r="97" fill="none" stroke="rgba(196,205,218,0.28)" stroke-width="2" stroke-dasharray="1.5 6.2"/></svg>
+        <span class="hero-bot-ring" aria-hidden="true"></span>
+        <span class="hero-bot-ring r2" aria-hidden="true"></span>
+        <span class="hero-orbit o1" aria-hidden="true"><i></i></span>
+        <span class="hero-orbit o2" aria-hidden="true"><i></i></span>
+        <span class="hud-bracket tl" aria-hidden="true"></span>
+        <span class="hud-bracket tr" aria-hidden="true"></span>
+        <span class="hud-bracket bl" aria-hidden="true"></span>
+        <span class="hud-bracket br" aria-hidden="true"></span>
+        <div class="hud-chip left" aria-hidden="true">
+          <div class="hud-k"><span class="hud-dot"></span>Live</div>
+          <div class="hud-v">streaming</div>
+        </div>
+        <div class="hud-chip right" aria-hidden="true">
+          <svg class="hud-spark" viewBox="0 0 60 22" preserveAspectRatio="none"><path d="M2 18 L14 14 L26 16 L38 9 L50 5 L58 2" fill="none" stroke="#46C88C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div class="hud-v up">+312%</div>
+        </div>
+        <span class="hero-bot-shadow" aria-hidden="true"></span>
+        <span class="mote m1" aria-hidden="true"></span>
+        <span class="mote m2" aria-hidden="true"></span>
+        <span class="mote m3" aria-hidden="true"></span>
+        <span class="mote m4" aria-hidden="true"></span>
+        <span class="hero-bot-tilt"><span class="hero-bot-avatar">
+          <img src="logo-noeyes.png" alt="Ponsr">
+          <span class="bot-eyes" id="bot-eyes" aria-hidden="true">
+            <span class="eye eye-l"><i></i></span>
+            <span class="eye eye-r"><i></i></span>
+          </span>
+        </span></span>
+      </div>
+      <div class="hero-eyebrow"><span class="dot" aria-hidden="true"></span> Launched via Ponsr · Robinhood Chain</div>
+      <h1 aria-label="Every launch, on the record.">
+        <span class="reveal-line"><span>Every launch,</span></span>
+        <span class="reveal-line"><span class="sheen"><em>on the record.</em></span></span>
+      </h1>
+      <p class="hero-sub">Every token launched with a tag on X, tracked here in real time — open any token to see what your position would be worth today if you'd never sold.</p>
+      <div class="hero-cta">
+        <button class="btn btn-primary" data-go="explore"><span>Explore launches</span></button>
+        <button class="btn btn-ghost" id="how-it-works-btn"><span>How launching works</span></button>
+      </div>
+      <div class="hero-livebar" id="hero-livebar">
+        <div class="livechip"><span class="k">Tokens launched</span><span class="v"><span data-count-to="1284">0</span></span></div>
+        <div class="livechip"><span class="k"><span class="livedot" aria-hidden="true"></span>Launched today</span><span class="v"><span data-count-to="19">0</span></span></div>
+        <div class="livechip"><span class="k">Creator fees paid</span><span class="v"><span data-count-to="42" data-prefix="Ξ">0</span></span></div>
+      </div>
+    </div>
+    <div class="hero-horizon" id="hero-horizon" aria-hidden="true"><svg id="hero-chart" viewBox="0 0 1440 200" preserveAspectRatio="none"></svg></div>
+  </section>
+
+  <div class="ticker" aria-hidden="true"><div class="ticker-track" id="ticker-track"></div></div>
+
+  <section class="container section" id="how">
+    <div class="reveal">
+      <div class="section-eyebrow">Three steps, one tweet</div>
+      <h2 class="section-title">How launching works</h2>
+      <p class="section-lead">No dashboard, no wallet setup, no forms. If you can post on X, you can launch a token on Robinhood Chain.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01</div>
+        <div class="step-icon" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H7l-3 3z"/><path d="M8 9h8M8 12h5"/></svg></div>
+        <h3>Tag Ponsr</h3>
+        <p>Post on X mentioning Ponsr with a name and symbol — in any phrasing, casual or formal. The parser handles the rest.</p>
+        <span class="connector" aria-hidden="true">→</span>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <div class="step-icon" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 4v6c0 4-3 7-7 8-4-1-7-4-7-8V6z"/><path d="M9.5 12l2 2 3.5-4"/></svg></div>
+        <h3>It launches</h3>
+        <p>Your wallet is resolved automatically and the token deploys through the pons factory. The treasury fronts the fee — you pay nothing.</p>
+        <span class="connector" aria-hidden="true">→</span>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <div class="step-icon" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg></div>
+        <h3>Track forever</h3>
+        <p>Every launch lands on the live ledger. Come back anytime to see what your position would be worth had you simply held.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="container section" id="spotlight" style="padding-top:36px;">
+    <div class="reveal">
+      <div class="section-eyebrow">Spotlight</div>
+      <h2 class="section-title">The one that held.</h2>
+    </div>
+    <div class="spotlight-card reveal" id="spotlight-card">
+      <div class="spotlight-left">
+        <span class="spotlight-badge">◆ Top performer</span>
+        <div class="spotlight-name" id="sp-name">—</div>
+        <div class="spotlight-sym" id="sp-sym">—</div>
+        <div class="spotlight-figure">
+          <div class="lbl">Value today, had you held everything</div>
+          <div class="val metal-text" id="sp-val">$0</div>
+        </div>
+        <div class="spotlight-meta">
+          <div><div class="k">Market cap</div><div class="v" id="sp-mcap">—</div></div>
+          <div><div class="k">Launched</div><div class="v" id="sp-age">—</div></div>
+        </div>
+      </div>
+      <div class="spotlight-right">
+        <svg class="spotlight-chart" id="sp-chart" viewBox="0 0 520 320" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="container section" id="faq" style="padding-top:36px;">
+    <div class="reveal">
+      <div class="section-eyebrow">Questions</div>
+      <h2 class="section-title">Before you launch.</h2>
+      <p class="section-lead">Ponsr is neutral infrastructure — a tool, not an advisor. Here's the plain version.</p>
+    </div>
+    <div class="faq-list reveal">
+      <details class="faq-item">
+        <summary>What is Ponsr?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="faq-answer">Tag Ponsr on X with a token name and symbol, and it launches that token on Robinhood Chain through the <a href="https://ponsfamily.com" target="_blank" rel="noopener noreferrer">pons</a> factory, then replies with the live address. That's the whole job — it doesn't chat, trade, or give advice.</div>
+      </details>
+      <details class="faq-item">
+        <summary>What does it cost me?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="faq-answer">Nothing upfront. The Ponsr treasury fronts the network launch fee for every launch, so you don't need to hold ETH to start. You keep 95% of the creator trading fees your token earns; the remaining 5% goes to the treasury through a fixed, immutable fee-split contract.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Do you hold my keys?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="faq-answer">No. A wallet is generated for your X handle by an embedded-wallet provider, and Ponsr never stores your raw private key. The wallet is yours, and it stays exportable.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Are these tokens an investment?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="faq-answer">No. Ponsr is a neutral launching tool. Launching or holding a token is not an investment recommendation, and nothing here is a promise of returns. Most tokens launched through any permissionless tool lose their value — you launch and trade entirely at your own risk.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Where does the "what if" number come from?<span class="plus" aria-hidden="true"></span></summary>
+        <div class="faq-answer">From the on-chain buy and sell history of the wallet you connect — a record of what actually happened, not a prediction of what will. Illiquid or delisted tokens may show as unable to price.</div>
+      </details>
+    </div>
+  </section>
+
+  <section class="container section" id="explore-cta" style="padding-top:36px;">
+    <div class="explore-cta reveal">
+      <div>
+        <div class="section-eyebrow">The board</div>
+        <h2 class="section-title">Every launch, browsable.</h2>
+        <p class="section-lead">Search, sort and filter every token ever launched through Ponsr — market cap, holders, curve progress and age, updating live.</p>
+      </div>
+      <button class="btn btn-primary" data-go="explore"><span>Explore all launches →</span></button>
+    </div>
+  </section>
+</div><!-- /#view-home -->
+
+<!-- ============================================================
+     EXPLORE VIEW  (?view=explore). Kept off the landing page on purpose:
+     this is the tool, the home page is the pitch. Separating them keeps
+     search/filter/pagination from crowding the marketing copy, and gives
+     the board room to grow its own features.
+     ============================================================ -->
+<div id="view-explore" hidden>
+  <section class="container section" id="ledger" style="padding-top:46px;">
+    <div class="section-head">
+      <div>
+        <div class="section-eyebrow">Explore</div>
+        <h2 class="section-title">Every launch, on the record.</h2>
+      </div>
+      <span class="ledger-status"><span class="dot" aria-hidden="true"></span><span id="ledger-count"></span> · synced <span id="synced-ago">just now</span></span>
+    </div>
+    <div class="ledger-controls">
+      <label class="ledger-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="ledger-search" placeholder="Search token or symbol…" aria-label="Search tokens">
+      </label>
+      <div class="seg" id="ledger-sort" role="group" aria-label="Sort">
+        <button data-sort="newest" class="active">Newest</button>
+        <button data-sort="oldest">Oldest</button>
+        <button data-sort="mcap">Market cap</button>
+        <button data-sort="gainers">Gainers</button>
+        <button data-sort="holders">Holders</button>
+      </div>
+      <div class="seg" id="ledger-filter" role="group" aria-label="Filter">
+        <button data-filter="all" class="active">All</button>
+        <button data-filter="graduated">Graduated</button>
+        <button data-filter="curve">On curve</button>
+      </div>
+    </div>
+    <div class="ledger reveal">
+      <div id="ledger-body"></div>
+      <nav class="pager" id="pager" aria-label="Explore pages"></nav>
+    </div>
+  </section>
+
+</div><!-- /#view-explore -->
+
+<!-- ============================================================
+     TOKEN DETAIL VIEW  (Part 3 §6). Its own URL via ?token=<symbol>,
+     so it can be linked from the bot's reply on X, refreshed, and shared.
+     ============================================================ -->
+<div id="view-token" hidden>
+  <div class="container tokenpage">
+    <a class="tp-back" href="?view=explore" id="tp-back">← All launches</a>
+
+    <div class="tp-head">
+      <div class="tp-ident">
+        <!-- Carries the same generated cover art as the card, at the same square
+             aspect, so the shared-element morph is a clean uniform scale. When
+             this was a small circular monogram the browser had to stretch a wide
+             square snapshot into a small circle, which is what read as "broken". -->
+        <span class="tp-art" id="tp-art" aria-hidden="true"></span>
+        <div>
+          <h1 class="tp-name" id="tp-name">—</h1>
+          <div class="tp-sub">
+            <span class="token-symbol" id="tp-symbol">—</span>
+            <span class="tstatus" id="tp-status">—</span>
+            <span class="tp-age" id="tp-age">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="tp-actions">
+        <button class="btn btn-ghost" id="tp-share"><span>Share</span></button>
+      </div>
+    </div>
+
+    <div class="tp-chartcard">
+      <div class="tp-chart-head">
+        <div>
+          <div class="tp-k">Market cap</div>
+          <div class="tp-mcap" id="tp-mcap">—</div>
+        </div>
+        <div class="tp-change" id="tp-change">—</div>
+      </div>
+      <svg class="tp-chart" id="tp-chart" viewBox="0 0 900 260" preserveAspectRatio="none" aria-hidden="true"></svg>
+    </div>
+
+    <div class="tp-stats">
+      <div class="tp-stat"><div class="tp-k">Holders</div><div class="tp-v" id="tp-holders">—</div></div>
+      <div class="tp-stat"><div class="tp-k">Status</div><div class="tp-v" id="tp-status2">—</div></div>
+      <div class="tp-stat"><div class="tp-k">Launched</div><div class="tp-v" id="tp-launched">—</div></div>
+      <div class="tp-stat"><div class="tp-k">Contract</div><div class="tp-v tp-addr" id="tp-addr">—</div></div>
+    </div>
+
+    <!-- What-if panel. Gated behind an explicit connect-wallet step, per the
+         decision recorded in the master doc (Part 3 §9 / Open Questions #12). -->
+    <div class="tp-whatif" id="tp-whatif">
+      <div class="tp-whatif-head">
+        <div>
+          <div class="section-eyebrow" style="margin-bottom:6px;">If you never sold</div>
+          <p class="tp-whatif-lead">Connect the wallet you traded with and this shows what your position would be worth today — a record of what happened, not a prediction.</p>
+        </div>
+      </div>
+
+      <div class="tp-locked" id="tp-locked">
+        <button class="btn btn-primary" id="tp-connect"><span>Connect wallet</span></button>
+        <span class="tp-demo-note">Preview build — connects to sample data, not a real wallet.</span>
+      </div>
+
+      <div class="tp-figures" id="tp-figures" hidden>
+        <div class="tp-figure">
+          <div class="tp-k">Value today, had you held everything</div>
+          <div class="tp-figure-v" id="tp-neversold">$0</div>
+        </div>
+        <div class="statement-rows">
+          <div class="statement-row"><span class="label">Tokens ever bought</span><span class="value" id="tp-bought">—</span></div>
+          <div class="statement-row"><span class="label">What you actually have now</span><span class="value" id="tp-actual">—</span></div>
+          <div class="statement-row"><span class="label">Difference</span><span class="value" id="tp-delta">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="container footer-inner">
+    <div class="brand">
+      <span class="logo-badge sm"><img src="logo-transparent.png" alt=""></span>
+      Ponsr
+    </div>
+    <p>Ponsr is a neutral tool for launching tokens on Robinhood Chain via the <a href="https://ponsfamily.com" target="_blank" rel="noopener noreferrer">pons</a> factory. Ponsr is an independent third-party tool — it is not operated by, affiliated with, or endorsed by pons. Launching a token is not an investment recommendation. Most launches do not retain value — this ledger records what happened, not what will happen.</p>
+  </div>
+</footer>
+
+
+<div class="toast-wrap" id="toast-wrap" aria-hidden="true"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ============================================================
+  // MOCK DATA — replace fetchLedger() with a real API call to wire
+  // up the backend/indexer (Part 1 launches table + Part 3 what-if).
+  // The realtime layer below simulates live updates over this data;
+  // when a real feed exists, drive the same update helpers from it.
+  // ============================================================
+  const NOW = Date.now();
+  const S = 1000, M = 60 * S, H = 60 * M, D = 24 * H;
+  function tk(name, sym, ageMs, mcap, holders, status, trend, neverSold, bought, actual) {
+    return { id: sym.toLowerCase(), name: name, symbol: sym, launchedAt: NOW - ageMs, mcap: mcap,
+      holders: holders, status: status, trend: trend,
+      whatIf: { neverSold: neverSold, boughtTokens: bought, actual: actual } };
+  }
+  const MOCK_TOKENS = [
+    tk('Neon Wolf','WOLF', 40*S, 47000, 320, 'curve', [4,5,6,6,8,9,11,10,13,15], 5200, '210,000', 3100),
+    tk('Solar Flare','SOLAR', 3*M, 96000, 700, 'curve', [3,5,4,7,9,8,12,14,13,17], 12800, '430,000', 8800),
+    tk('Comet Cash','COMET', 12*M, 152000, 1010, 'graduated', [5,6,8,7,11,13,12,16,19,22], 28400, '690,000', 15200),
+    tk('Golden Bull','GBULL', 40*M, 512000, 3400, 'graduated', [6,8,9,12,15,18,17,23,28,33], 210000, '2,600,000', 188000),
+    tk('Titan Coin','TITAN', 90*M, 274000, 1620, 'graduated', [7,9,8,12,11,15,18,17,21,24], 76000, '1,240,000', 41000),
+    tk('Aurora Finance','AURA', 2*H, 184000, 1180, 'curve', [4,6,5,8,12,10,14,18,16,20], 41200, '812,000', 9800),
+    tk('Moon Doge','MOON', 5*H, 62000, 610, 'curve', [10,9,11,8,6,5,4,3,4,3], 890, '120,000', 4100),
+    tk('Pixel Panda','PANDA', 6*H, 33000, 260, 'curve', [9,8,7,6,7,5,6,4,5,4], 640, '96,000', 900),
+    tk('Vault Vibe','VYBE', 8*H, 205000, 1330, 'graduated', [4,6,7,9,8,12,14,16,15,19], 58000, '870,000', 39000),
+    tk('Turbo Inu','TURBO', 11*H, 340000, 2210, 'graduated', [3,4,4,6,9,15,22,28,34,40], 128400, '2,040,000', 61200),
+    tk('Rocket Fuel','FUEL', 14*H, 88000, 720, 'curve', [5,7,6,9,11,10,13,12,15,14], 19200, '520,000', 12400),
+    tk('Frost Byte','FROST', 20*H, 41000, 300, 'curve', [8,7,9,6,8,7,9,8,10,9], 3400, '150,000', 4200),
+    tk('Pixel Punk','PIXL', 26*H, 21000, 180, 'curve', [12,10,8,7,5,4,3,2,2,1], 210, '54,000', 0),
+    tk('Galaxy Cat','GCAT', 30*H, 758000, 4120, 'graduated', [5,8,7,11,16,14,19,26,31,38], 302000, '4,120,000', 302000),
+    tk('Ember Ape','EMBER', 2*D, 690000, 3900, 'graduated', [6,9,11,14,13,19,24,22,29,35], 264000, '3,400,000', 264000),
+    tk('Desert Rose','DROSE', 2*D + 4*H, 9200, 90, 'curve', [8,7,6,5,4,3,2,2,1,1], 84, '18,000', 0),
+    tk('Nova Net','NOVA', 3*D, 15000, 140, 'curve', [10,9,8,8,6,5,5,3,3,2], 320, '72,000', 0),
+    tk('Iron Empire','IRON', 3*D + 6*H, 445000, 3050, 'graduated', [6,9,8,13,11,17,22,19,26,31], 176000, '3,080,000', 176000),
+    tk('Quartz Coin','QRTZ', 4*D, 129000, 980, 'graduated', [5,6,7,7,9,10,12,11,14,16], 31000, '610,000', 22000),
+    tk('Star Fox','STARFOX', 4*D + 8*H, 118000, 940, 'graduated', [9,10,12,10,14,12,15,13,16,15], 22400, '640,000', 30100),
+    tk('Cobalt Cat','CBLT', 5*D, 27000, 210, 'curve', [7,6,8,7,6,5,6,4,4,3], 540, '88,000', 700),
+    tk('Zephyr','ZEPH', 6*D, 361000, 2400, 'graduated', [6,8,10,9,13,16,15,20,24,29], 142000, '1,900,000', 120000),
+    tk('Onyx Owl','ONYX', 7*D, 54000, 430, 'curve', [8,9,8,10,9,11,10,12,11,13], 8600, '300,000', 9900),
+    tk('Halo Coin','HALO', 9*D, 233000, 1520, 'graduated', [5,7,9,8,12,14,13,18,21,25], 71000, '1,150,000', 58000),
+  ];
+  /* The curated list above is the hand-written part of the preview data. This pads
+     the board out to a realistic size, so paging, sorting and filtering are
+     exercised the way they would be against a live feed rather than against a
+     dataset that fits on one screen. Seeded, so the board is stable on reload. */
+  (function padPreviewData() {
+    var HEAD = ['Neon','Turbo','Golden','Iron','Quartz','Vault','Comet','Solar','Lunar','Onyx',
+                'Ember','Frost','Cobalt','Halo','Nova','Prism','Vertex','Drift','Blaze','Nimbus',
+                'Karat','Flux','Orbit','Zephyr','Echo','Titan','Pixel','Rocket','Atlas','Helix',
+                'Jade','Lumen','Crimson','Delta','Mint','Basalt','Verdant','Argent','Cinder','Polar'];
+    var TAIL = ['Fox','Ape','Cat','Coin','Cash','Bull','Wolf','Rat','Owl','Bear',
+                'Node','Finance','Protocol','Labs','Chain','Punk','Panda','Empire','Rose','Net',
+                'Byte','Vibe','Fuel','Flare','Dragon','Tiger','Falcon','Whale','Yeti','Forge'];
+    var seed = 987654321;
+    function rr() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+
+    var used = {};
+    for (var u = 0; u < MOCK_TOKENS.length; u++) used[MOCK_TOKENS[u].symbol] = 1;
+
+    for (var i = 0; i < 96; i++) {
+      var a = HEAD[Math.floor(rr() * HEAD.length)];
+      var b = TAIL[Math.floor(rr() * TAIL.length)];
+      var name = a + ' ' + b;
+      var sym = (a.slice(0, 4) + b.slice(0, 2)).toUpperCase();
+      if (used[sym]) sym = sym + String(10 + Math.floor(rr() * 89));
+      if (used[sym]) continue;
+      used[sym] = 1;
+
+      // Long tail: most launches stay small, a few run away. Matches the real
+      // shape of a permissionless board far better than a uniform spread.
+      var mcap = Math.round(Math.pow(rr(), 2.4) * 880000) + 2500;
+      var graduated = mcap >= 250000;
+      var age = Math.round(rr() * 30 * D) + 6 * M;
+      var holders = Math.max(8, Math.round(mcap / (140 + rr() * 260)));
+
+      var v = 4 + rr() * 6, trend = [];
+      var bias = rr() * 2.6 - 1.0;
+      for (var k = 0; k < 10; k++) { v = Math.max(1, v + bias + (rr() * 2.4 - 1.2)); trend.push(Math.round(v)); }
+
+      var neverSold = Math.round(mcap * (0.03 + rr() * 0.42));
+      var actual = Math.round(neverSold * rr() * 1.4);
+      var bought = (Math.round(rr() * 900 + 20) * 1000).toLocaleString('en-US');
+
+      MOCK_TOKENS.push(tk(name, sym, age, mcap, holders, graduated ? 'graduated' : 'curve',
+                          trend, neverSold, bought, actual));
+    }
+  })();
+
+  /* Single integration point: swap this for the real API/websocket call to go live.
+     The short delay stands in for network latency so the loading state is a real
+     state rather than dead code -- it disappears with the real implementation. */
+  function fetchLedger() {
+    return new Promise(function (resolve) { setTimeout(function () { resolve(MOCK_TOKENS); }, 550); });
+  }
+
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  // FORMATTERS
+  function fmtUsd(n) { if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K'; return '$' + Math.round(n).toLocaleString('en-US'); }
+  function fmtUsdFull(n) { return '$' + Math.round(n).toLocaleString('en-US'); }
+  function monogram(name) { return name.trim().charAt(0).toUpperCase(); }
+  function pctChange(trend) { const f = trend[0], l = trend[trend.length-1]; return f ? Math.round(((l-f)/f)*100) : 0; }
+
+  /** Bonding-curve progress toward graduation. pons graduates a token once its
+   *  curve fills (~4.2 ETH per the spec); here that threshold is expressed in the
+   *  same mock market-cap units the preview dataset uses. */
+  const GRADUATION_MCAP = 250000;
+  function gradProgress(t) {
+    if (t.status === 'graduated') return 100;
+    return Math.max(1, Math.min(99, Math.round((t.mcap / GRADUATION_MCAP) * 100)));
+  }
+
+  function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
+
+  /** Deterministic cover art. Real launches carry a creator-supplied image; until
+   *  that field exists in the feed, each token gets a stable generated cover so
+   *  the grid reads like a real board instead of a wall of identical tiles. */
+  function coverArt(t, idSuffix) {
+    var seed = 0;
+    for (var i = 0; i < t.symbol.length; i++) seed = (seed * 31 + t.symbol.charCodeAt(i)) >>> 0;
+    var hue = seed % 360;
+    var hue2 = (hue + 40 + (seed % 60)) % 360;
+    var rot = seed % 180;
+    // The same art can be on screen twice (grid card + token page), and duplicate
+    // SVG gradient ids in one document collide -- so callers pass a suffix.
+    var id = 'cv' + t.id.replace(/[^a-z0-9]/gi, '') + (idSuffix || '');
+    return '<svg class="cardart" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true">' +
+      '<defs><linearGradient id="' + id + '" gradientTransform="rotate(' + rot + ' .5 .5)">' +
+        '<stop offset="0%" stop-color="hsl(' + hue + ' 42% 26%)"/>' +
+        '<stop offset="100%" stop-color="hsl(' + hue2 + ' 38% 9%)"/>' +
+      '</linearGradient></defs>' +
+      '<rect width="100" height="100" fill="url(#' + id + ')"/>' +
+      '<circle cx="' + (18 + (seed % 64)) + '" cy="' + (16 + (seed % 52)) + '" r="' + (16 + (seed % 22)) + '" fill="hsl(' + hue + ' 60% 62%)" opacity="0.16"/>' +
+      '<text x="50" y="50" text-anchor="middle" dominant-baseline="central" font-family="Fraunces, Georgia, serif" font-size="42" font-weight="600" fill="rgba(255,255,255,0.9)">' + monogram(t.name) + '</text>' +
+      '</svg>';
+  }
+  function fmtHolders(n) { return n >= 100000 ? (n/1000).toFixed(0) + 'K' : Math.round(n).toLocaleString('en-US'); }
+  function fmtAge(ts) {
+    const d = Date.now() - ts;
+    if (d < 10*1000) return 'just now';
+    if (d < 60*1000) return Math.floor(d/1000) + 's ago';
+    if (d < 60*60*1000) return Math.floor(d/60000) + 'm ago';
+    if (d < 24*60*60*1000) return Math.floor(d/3600000) + 'h ago';
+    return Math.floor(d/86400000) + 'd ago';
+  }
+
+  function sparklinePath(points, w, h, pad) {
+    pad = pad || 0;
+    const max = Math.max.apply(null, points), min = Math.min.apply(null, points);
+    const range = (max - min) || 1, innerH = h - pad*2, stepX = w / (points.length - 1);
+    return points.map(function(p, i) { const x = i*stepX; const y = pad + (innerH - ((p-min)/range)*innerH); return (i===0?'M':'L') + x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
+  }
+
+  // ============================================================
+  // TICKER (+ realtime price flicker)
+  // ============================================================
+  // A ticker is for glancing at, not for reading the whole board -- cap it at a
+  // handful of tokens. (It used to map the entire dataset, so growing the board
+  // silently lengthened the track and, at a fixed duration, sped the scroll up.)
+  const TICKER_COUNT = 18;
+  const tickerState = MOCK_TOKENS.slice(0, TICKER_COUNT).map(function(t){ return { symbol: t.symbol, chg: pctChange(t.trend) }; });
+  function tickerItemHtml(s) {
+    const cls = s.chg >= 0 ? 'up' : 'down', sign = s.chg >= 0 ? '+' : '';
+    return '<span class="ticker-item" data-sym="'+s.symbol+'"><span class="sym">$'+s.symbol+'</span> <span class="chg '+cls+'">'+sign+s.chg+'%</span> <span class="sep">/</span></span>';
+  }
+  (function buildTicker() {
+    const track = document.getElementById('ticker-track');
+    if (!track) return;
+    const once = tickerState.map(tickerItemHtml).join('');
+    track.innerHTML = once + once; // duplicated so the -50% loop is seamless
+
+    // Derive the duration from the actual track width so the ticker always moves
+    // at the same calm speed, whatever ends up in it. A fixed duration makes the
+    // scroll faster every time the content grows.
+    // Keep the scroll at a constant, readable speed no matter how many items are
+    // in the track -- a fixed duration means the ticker speeds up every time the
+    // content grows. Re-run once webfonts land, since the track measures 0 (or
+    // measures at fallback-font widths) before then.
+    const PX_PER_SECOND = 34;
+    function tuneSpeed() {
+      const half = track.scrollWidth / 2;
+      if (half > 0) track.style.animationDuration = Math.round(half / PX_PER_SECOND) + 's';
+    }
+    tuneSpeed();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(tuneSpeed).catch(function () {});
+    window.addEventListener('load', tuneSpeed);
+  })();
+
+  // ============================================================
+  // LEDGER — sortable/searchable table over a live-updating dataset.
+  // `tokens` is the working list. renderLedger(data) is the entry point
+  // called from fetchLedger() in INIT; swap that feed for a real API and
+  // drive newLaunch()/marketTick() from a websocket to go truly live.
+  // ============================================================
+  const ledgerBody = document.getElementById('ledger-body');
+  const ledgerCount = document.getElementById('ledger-count');
+  let tokens = [];
+  let ledgerState = { sort: 'newest', filter: 'all', query: '', page: 1 };
+  // Only this many cards are ever in the DOM at once. Rendering every launch
+  // would stall the browser once the board holds thousands of tokens.
+  const PAGE_SIZE = 24;
+  let firstLedgerRender = true;
+
+  /** Shimmer placeholders shown while the board's data is in flight. */
+  function renderSkeletons(n) {
+    var out = '';
+    for (var i = 0; i < n; i++) {
+      out += '<div class="skel" aria-hidden="true"><div class="skel-art"></div>' +
+             '<div class="skel-line m"></div><div class="skel-line s"></div><div class="skel-line l"></div></div>';
+    }
+    ledgerBody.innerHTML = out;
+    if (ledgerCount) ledgerCount.textContent = 'loading…';
+  }
+
+  function ledgerView() {
+    const q = ledgerState.query.trim().toLowerCase();
+    const arr = tokens.filter(function(t) {
+      const okF = ledgerState.filter === 'all' || t.status === ledgerState.filter;
+      const okQ = !q || t.name.toLowerCase().indexOf(q) >= 0 || t.symbol.toLowerCase().indexOf(q) >= 0;
+      return okF && okQ;
+    });
+    arr.sort(function(a, b) {
+      switch (ledgerState.sort) {
+        case 'oldest': return a.launchedAt - b.launchedAt;
+        case 'mcap': return b.mcap - a.mcap;
+        case 'gainers': return pctChange(b.trend) - pctChange(a.trend);
+        case 'holders': return b.holders - a.holders;
+        default: return b.launchedAt - a.launchedAt; // newest
+      }
+    });
+    return arr;
+  }
+
+  function rowHtml(t) {
+    const chg = pctChange(t.trend);
+    const prog = gradProgress(t);
+    const graduated = t.status === 'graduated';
+    return '<button class="tcard" data-id="' + t.id + '" data-launchedat="' + t.launchedAt + '">' +
+      '<span class="tcard-art">' + coverArt(t) +
+        '<span class="tcard-badge ' + t.status + '">' + (graduated ? 'graduated' : prog + '%') + '</span>' +
+      '</span>' +
+      '<span class="tcard-body">' +
+        '<span class="tcard-top">' +
+          '<span class="tcard-names"><span class="tcard-name">' + t.name + '</span>' +
+          '<span class="token-symbol">$' + t.symbol + '</span></span>' +
+          '<span class="tcard-chg ' + (chg >= 0 ? 'up' : 'down') + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>' +
+        '</span>' +
+        '<span class="tcard-mc"><b data-mcap>' + fmtUsd(t.mcap) + '</b> <i>MC</i></span>' +
+        '<span class="tcard-bar"><i style="width:' + prog + '%"></i></span>' +
+        '<span class="tcard-foot">' +
+          '<span class="tcard-addr">' + shortAddr(previewAddress(t.symbol)) + '</span>' +
+          '<span class="tcard-age" data-age>' + fmtAge(t.launchedAt) + '</span>' +
+        '</span>' +
+      '</span></button>';
+  }
+
+  function render() {
+    const all = ledgerView();
+    const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+    if (ledgerState.page > pages) ledgerState.page = pages; // filtering can shrink the list
+    const start = (ledgerState.page - 1) * PAGE_SIZE;
+    const rows = all.slice(start, start + PAGE_SIZE);
+
+    if (all.length === 0) {
+      ledgerBody.innerHTML = '<div class="ledger-empty"><p>Nothing matches</p><p>Try a different search or filter.</p></div>';
+    } else {
+      ledgerBody.innerHTML = rows.map(rowHtml).join('');
+    }
+
+    if (ledgerCount) {
+      ledgerCount.textContent = all.length === 0
+        ? 'no matches'
+        : (start + 1) + '–' + (start + rows.length) + ' of ' + all.length.toLocaleString('en-US');
+    }
+
+    const rowEls = document.querySelectorAll('.tcard');
+    rowEls.forEach(function(row) {
+      row.addEventListener('click', function() {
+        const t = tokens.filter(function(x){ return x.id === row.dataset.id; })[0];
+        if (t) goToToken(t.symbol, row.querySelector('.cardart'));
+      });
+    });
+    if (firstLedgerRender) { revealRowsOnScroll(); firstLedgerRender = false; }
+    else { rowEls.forEach(function(r){ r.classList.add('visible'); }); }
+
+    renderPager(pages);
+  }
+
+  /** Page list with ellipsis: ‹ 1 … 4 5 6 … 222 ›  */
+  function pageNumbers(current, total) {
+    if (total <= 7) {
+      var all = [];
+      for (var i = 1; i <= total; i++) all.push(i);
+      return all;
+    }
+    var out = [1];
+    var from = Math.max(2, current - 1), to = Math.min(total - 1, current + 1);
+    if (from > 2) out.push('gap');
+    for (var p = from; p <= to; p++) out.push(p);
+    if (to < total - 1) out.push('gap');
+    out.push(total);
+    return out;
+  }
+
+  function renderPager(pages) {
+    const pager = document.getElementById('pager');
+    if (!pager) return;
+    if (pages <= 1) { pager.innerHTML = ''; return; }
+    const cur = ledgerState.page;
+    let html = '<button data-page="' + (cur - 1) + '"' + (cur === 1 ? ' disabled' : '') + ' aria-label="Previous page">‹</button>';
+    pageNumbers(cur, pages).forEach(function (p) {
+      html += p === 'gap'
+        ? '<span class="gap">…</span>'
+        : '<button data-page="' + p + '"' + (p === cur ? ' aria-current="page"' : '') + '>' + p + '</button>';
+    });
+    html += '<button data-page="' + (cur + 1) + '"' + (cur === pages ? ' disabled' : '') + ' aria-label="Next page">›</button>';
+    pager.innerHTML = html;
+  }
+
+  function revealRowsOnScroll() {
+    const rows = document.querySelectorAll('.tcard');
+    if (!('IntersectionObserver' in window)) { rows.forEach(function(r){ r.classList.add('visible'); }); return; }
+    const observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry, i) {
+        if (entry.isIntersecting) { setTimeout(function(){ entry.target.classList.add('visible'); }, i*40); observer.unobserve(entry.target); }
+      });
+    }, { threshold: 0.08 });
+    rows.forEach(function(r){ observer.observe(r); });
+  }
+
+  function wireLedgerControls() {
+    // Changing sort/filter/search always returns to page 1 -- staying on page 7
+    // of a result set that just shrank to two pages is disorienting.
+    const sortWrap = document.getElementById('ledger-sort');
+    if (sortWrap) sortWrap.addEventListener('click', function(e) {
+      const b = e.target.closest ? e.target.closest('button') : null; if (!b) return;
+      ledgerState.sort = b.dataset.sort;
+      ledgerState.page = 1;
+      sortWrap.querySelectorAll('button').forEach(function(x){ x.classList.toggle('active', x === b); });
+      firstLedgerRender = false; render();
+    });
+    const filterWrap = document.getElementById('ledger-filter');
+    if (filterWrap) filterWrap.addEventListener('click', function(e) {
+      const b = e.target.closest ? e.target.closest('button') : null; if (!b) return;
+      ledgerState.filter = b.dataset.filter;
+      ledgerState.page = 1;
+      filterWrap.querySelectorAll('button').forEach(function(x){ x.classList.toggle('active', x === b); });
+      firstLedgerRender = false; render();
+    });
+    const search = document.getElementById('ledger-search');
+    if (search) search.addEventListener('input', function() {
+      ledgerState.query = search.value;
+      ledgerState.page = 1;
+      firstLedgerRender = false; render();
+    });
+    const pager = document.getElementById('pager');
+    if (pager) pager.addEventListener('click', function(e) {
+      const b = e.target.closest ? e.target.closest('button[data-page]') : null;
+      if (!b || b.disabled) return;
+      const p = parseInt(b.dataset.page, 10);
+      if (!p || p === ledgerState.page) return;
+      ledgerState.page = p;
+      firstLedgerRender = false;
+      render();
+      const grid = document.getElementById('ledger');
+      if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  // Entry point wired to fetchLedger() in INIT.
+  function renderLedger(data) {
+    tokens = data.slice();
+    render();
+    wireLedgerControls();
+    startLedgerRealtime();
+    // Resolve ?token=... only once the dataset exists, so a deep link opens the
+    // detail page directly instead of falling back to the board.
+    applyRoute();
+  }
+
+  // ============================================================
+  // SPOTLIGHT
+  // ============================================================
+  const spotlightToken = MOCK_TOKENS.reduce(function(b, t){ return t.whatIf.neverSold > b.whatIf.neverSold ? t : b; }, MOCK_TOKENS[0]);
+  let spotlightDrawn = false;
+
+  (function fillSpotlight() {
+    const t = spotlightToken;
+    document.getElementById('sp-name').textContent = t.name;
+    document.getElementById('sp-sym').textContent = '$' + t.symbol;
+    document.getElementById('sp-mcap').textContent = fmtUsd(t.mcap);
+    document.getElementById('sp-age').textContent = fmtAge(t.launchedAt);
+    const w = 520, h = 320, line = sparklinePath(t.trend, w, h, 26), area = line + ' L'+w+','+h+' L0,'+h+' Z';
+    document.getElementById('sp-chart').innerHTML =
+      '<defs><linearGradient id="spArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#46C88C" stop-opacity="0.34"/><stop offset="100%" stop-color="#46C88C" stop-opacity="0"/></linearGradient></defs>' +
+      '<path class="area" d="'+area+'" fill="url(#spArea)"/><path class="line" pathLength="1" d="'+line+'"/>';
+  })();
+
+  (function buildHorizon() {
+    var svg = document.getElementById('hero-chart'); if (!svg) return;
+    var W = 1440, H = 200;
+    var pts = [40,54,47,66,58,82,73,98,122,110,142,134,170,152,184];
+    var line = sparklinePath(pts, W, H, 22);
+    var area = line + ' L' + W + ',' + H + ' L0,' + H + ' Z';
+    svg.innerHTML = '<defs><linearGradient id="hArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#46C88C" stop-opacity="0.30"/><stop offset="100%" stop-color="#46C88C" stop-opacity="0"/></linearGradient></defs>' +
+      '<path class="harea" d="' + area + '" fill="url(#hArea)"/>' +
+      '<path class="hline" pathLength="1" d="' + line + '"/>';
+    var wrap = document.getElementById('hero-horizon'); if (!wrap) return;
+    if (reducedMotion) { wrap.classList.add('drawn'); return; }
+    setTimeout(function(){ wrap.classList.add('drawn'); }, 450);
+  })();
+
+  function triggerSpotlight() {
+    if (spotlightDrawn) return;
+    spotlightDrawn = true;
+    const card = document.getElementById('spotlight-card');
+    requestAnimationFrame(function(){ card.classList.add('drawn'); });
+    animateCountUp(document.getElementById('sp-val'), spotlightToken.whatIf.neverSold);
+  }
+
+  // ============================================================
+  // ROUTING + TOKEN DETAIL PAGE (Part 3 §6)
+  // Each token gets a real URL (?token=SYMBOL) so it can be linked from the
+  // bot's reply on X, refreshed, bookmarked and shared. On a static host this
+  // is the query-param form; behind a host rewrite it becomes /token/SYMBOL
+  // without any change to the code below.
+  // ============================================================
+  const homeView = document.getElementById('view-home');
+  const exploreView = document.getElementById('view-explore');
+  const tokenView = document.getElementById('view-token');
+  let currentToken = null;
+
+  function tokenBySymbol(sym) {
+    if (!sym) return null;
+    var s = String(sym).toLowerCase();
+    for (var i = 0; i < tokens.length; i++) {
+      if (tokens[i].symbol.toLowerCase() === s) return tokens[i];
+    }
+    return null;
+  }
+
+  /* Routes exist in two shapes:
+       query  ->  /?view=explore     /?token=SYMBOL     works on any static host
+       pretty ->  /explore           /token/SYMBOL      needs host rewrites
+     Reading accepts BOTH, so a link in either shape always resolves. Writing
+     follows PRETTY_URLS. Leave it false until the host actually rewrites those
+     paths to index.html -- otherwise the first refresh on /explore is a 404.
+     vercel.json / netlify.toml in the repo root carry the rewrite rules; flip
+     this in the same commit that deploys them. Pretty mode assumes the site is
+     served from the domain root. */
+  const PRETTY_URLS = false;
+
+  function safeDecode(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
+
+  function routeFromUrl() {
+    var seg = location.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if (seg[0] === 'explore') return { view: 'explore', token: null };
+    if (seg[0] === 'token' && seg[1]) return { view: null, token: safeDecode(seg[1]) };
+    var q = null;
+    try { q = new URLSearchParams(location.search); } catch (e) {}
+    return { view: q && q.get('view'), token: q && q.get('token') };
+  }
+
+  function urlForToken(sym) {
+    return PRETTY_URLS ? '/token/' + encodeURIComponent(sym) : '?token=' + encodeURIComponent(sym);
+  }
+  function urlForExplore() { return PRETTY_URLS ? '/explore' : '?view=explore'; }
+  function urlForHome() { return PRETTY_URLS ? '/' : location.pathname; }
+
+  function push(url) { try { history.pushState({}, '', url); } catch (e) {} }
+
+  /* A view-transition-name must be unique among rendered elements. Only one card
+     may wear the shared name at a time, so it is tracked explicitly and released
+     when the transition finishes -- a timer-based release raced with fast
+     navigation and left two cards tagged, which makes the browser reject the
+     transition outright ("duplicate view-transition-name") and cut instead. */
+  let taggedShared = null;
+  function tagShared(el) {
+    if (taggedShared && taggedShared !== el) taggedShared.style.viewTransitionName = '';
+    taggedShared = el || null;
+    if (taggedShared) taggedShared.style.viewTransitionName = 'token-hero';
+  }
+
+  /** Runs a route change inside a View Transition so the swap animates instead of
+   *  cutting. Browsers without the API (and anyone who asked for reduced motion)
+   *  just get the plain swap -- navigation never depends on this succeeding. */
+  /** How long the route transition takes, mirroring the CSS. Deferred work uses
+   *  this rather than waiting on `vt.finished`: a skipped or errored transition
+   *  resolves that promise in an order we can't rely on, which once left the
+   *  token chart permanently undrawn. */
+  const TRANSITION_MS = 620;
+
+  function withTransition(fn) {
+    if (reducedMotion || typeof document.startViewTransition !== 'function') {
+      fn(); tagShared(null); return;
+    }
+    var root = document.documentElement;
+    root.classList.add('vt-active');
+    var settle = function () { root.classList.remove('vt-active'); tagShared(null); };
+    let vt;
+    try { vt = document.startViewTransition(fn); } catch (e) { fn(); settle(); return; }
+    if (vt && vt.finished && typeof vt.finished.then === 'function') vt.finished.then(settle, settle);
+    else settle();
+    // Guarantee the class comes off even if the transition never reports back.
+    setTimeout(settle, TRANSITION_MS + 400);
+  }
+
+  function goToToken(sym, sharedEl) {
+    // Giving the card's art the same name the token page's monogram carries makes
+    // the browser morph one into the other, which is the shared element the
+    // Complex page-transition preset asks for.
+    tagShared(sharedEl || null);
+    withTransition(function () {
+      push(urlForToken(sym));
+      applyRoute();
+    });
+  }
+  /** Releases the token page's morph tag. Must run BEFORE startViewTransition:
+   *  the outgoing snapshot is captured at that call, so a tag still attached
+   *  there becomes a shared element with nothing to morph into on the new page,
+   *  and the browser leaves its snapshot stranded over the layout. */
+  function untagTokenArt() {
+    var art = document.getElementById('tp-art');
+    if (art) art.style.viewTransitionName = '';
+  }
+
+  function goToExplore() {
+    tagShared(null); untagTokenArt();
+    withTransition(function () { push(urlForExplore()); applyRoute(); });
+  }
+  function goToHome() {
+    tagShared(null); untagTokenArt();
+    withTransition(function () { push(urlForHome()); applyRoute(); });
+  }
+
+  /** Three routes off one static file:
+   *    ?token=SYMBOL  -> token detail
+   *    ?view=explore  -> the board
+   *    (neither)      -> landing page
+   *  Behind a host rewrite these become /token/SYMBOL and /explore unchanged. */
+  function applyRoute() {
+    var route = routeFromUrl();
+    var wanted = route.token;
+    var t = tokenBySymbol(wanted);
+    var explore = route.view === 'explore';
+
+    // A deep link to ?token=X arrives before the board's data does. Show the
+    // board (with its skeletons) rather than flashing the landing page for the
+    // length of the fetch and then swapping under the visitor.
+    var pendingToken = !!wanted && !t && tokens.length === 0;
+
+    // A token that genuinely does not exist shouldn't leave a stale ?token= in
+    // the address bar while the landing page is on screen.
+    if (wanted && !t && tokens.length > 0) {
+      try { history.replaceState({}, '', urlForExplore()); } catch (e) {}
+      explore = true;
+    }
+
+    var showExplore = (explore || pendingToken) && !t;
+    homeView.hidden = !!(t || showExplore);
+    exploreView.hidden = !showExplore;
+    tokenView.hidden = !t;
+
+    if (t) {
+      renderTokenPage(t);
+      document.title = t.name + ' ($' + t.symbol + ') — Ponsr';
+    } else {
+      currentToken = null;
+      document.title = showExplore
+        ? 'Explore launches — Ponsr'
+        : 'Ponsr — Every launch, on the record.';
+    }
+    window.scrollTo(0, 0);
+    moveFocusToView(t ? tokenView : (showExplore ? exploreView : homeView));
+  }
+
+  /** Route changes swap whole views, so focus has to follow -- otherwise it stays
+   *  on a control inside the view we just hid, which strands keyboard and screen
+   *  reader users. Only moved once the page has booted, so the initial load
+   *  doesn't yank focus away from the top of the document. */
+  let routeBooted = false;
+  function moveFocusToView(view) {
+    if (!routeBooted) { routeBooted = true; return; }
+    if (!view || view.hidden) return;
+    var target = view.querySelector('h1, h2');
+    if (!target) return;
+    // The tabindex has to stay: removing it right after focusing makes the
+    // heading unfocusable again and the browser drops focus back to <body>.
+    // -1 keeps it out of the tab order while still allowing programmatic focus.
+    target.setAttribute('tabindex', '-1');
+    try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
+  }
+  // The browser's own back/forward gets the same treatment as the in-page links,
+  // including the untagging -- otherwise hardware back cuts while the "← All
+  // launches" link animates, and only one of the two paths is orphan-safe.
+  window.addEventListener('popstate', function () {
+    tagShared(null);
+    untagTokenArt();
+    withTransition(applyRoute);
+  });
+
+  // Anything marked data-go="explore" (nav link, hero CTA, the board CTA) opens
+  // the explore view without a full page load.
+  document.querySelectorAll('[data-go="explore"]').forEach(function (el) {
+    el.addEventListener('click', function (e) { e.preventDefault(); goToExplore(); });
+  });
+
+  /** Deterministic placeholder contract address for the preview dataset.
+   *  Replace with the real `token_address` from the launches table once the
+   *  backend is wired up. */
+  const addrCache = {};
+  function previewAddress(sym) {
+    if (addrCache[sym]) return addrCache[sym]; // called once per card per render
+    var seed = 'ponsr:' + sym, h = 2166136261, hex = '';
+    for (var i = 0; i < 40; i++) {
+      h = (h ^ seed.charCodeAt(i % seed.length)) >>> 0;
+      h = (h * 16777619) >>> 0;
+      hex += '0123456789abcdef'.charAt((h >>> (i % 8)) & 15);
+    }
+    addrCache[sym] = '0x' + hex;
+    return addrCache[sym];
+  }
+
+  function renderTokenPage(t) {
+    currentToken = t;
+    var art = document.getElementById('tp-art');
+    art.style.viewTransitionName = 'token-hero'; // morph target for the card's art
+    art.innerHTML = coverArt(t, 'tp');
+    document.getElementById('tp-name').textContent = t.name;
+    document.getElementById('tp-symbol').textContent = '$' + t.symbol;
+
+    var graduated = t.status === 'graduated';
+    var st = document.getElementById('tp-status');
+    st.textContent = graduated ? 'graduated' : 'on curve';
+    st.className = 'tstatus ' + t.status;
+
+    document.getElementById('tp-age').textContent = 'launched ' + fmtAge(t.launchedAt);
+    document.getElementById('tp-mcap').textContent = fmtUsd(t.mcap);
+    document.getElementById('tp-holders').textContent = fmtHolders(t.holders);
+    document.getElementById('tp-status2').textContent = graduated ? 'Graduated' : 'On curve';
+    document.getElementById('tp-launched').textContent = fmtAge(t.launchedAt);
+    document.getElementById('tp-addr').textContent = previewAddress(t.symbol);
+
+    var chg = pctChange(t.trend);
+    var ce = document.getElementById('tp-change');
+    ce.textContent = (chg >= 0 ? '+' : '') + chg + '%';
+    ce.className = 'tp-change ' + (chg >= 0 ? 'up' : 'down');
+
+    var W = 900, H = 260;
+    var line = sparklinePath(t.trend, W, H, 26);
+    var area = line + ' L' + W + ',' + H + ' L0,' + H + ' Z';
+    var col = chg >= 0 ? '#46C88C' : '#DD8080';
+    var svg = document.getElementById('tp-chart');
+    svg.classList.remove('drawn');
+    svg.innerHTML =
+      '<defs><linearGradient id="tpArea" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0%" stop-color="' + col + '" stop-opacity="0.30"/>' +
+        '<stop offset="100%" stop-color="' + col + '" stop-opacity="0"/>' +
+      '</linearGradient></defs>' +
+      '<path class="tarea" d="' + area + '" fill="url(#tpArea)"/>' +
+      '<path class="tline" pathLength="1" d="' + line + '" stroke="' + col + '"/>';
+    // Draw the line only once any page transition has settled, so it is never
+    // captured mid-stroke by the transition snapshot.
+    if (reducedMotion) {
+      svg.classList.add('drawn');
+    } else if (document.documentElement.classList.contains('vt-active')) {
+      // A plain timer, not a promise callback: it fires whether the transition
+      // completes, is skipped, or throws, so the chart always ends up drawn.
+      setTimeout(function () { svg.classList.add('drawn'); }, TRANSITION_MS);
+    } else {
+      requestAnimationFrame(function () { svg.classList.add('drawn'); });
+    }
+
+    // The what-if figures re-lock for every token: they are per-wallet data and
+    // must not carry over from the previously viewed token.
+    document.getElementById('tp-locked').hidden = false;
+    document.getElementById('tp-figures').hidden = true;
+  }
+
+  document.getElementById('tp-back').addEventListener('click', function (e) { e.preventDefault(); goToExplore(); });
+
+  document.getElementById('tp-connect').addEventListener('click', function () {
+    var t = currentToken;
+    if (!t) return;
+    document.getElementById('tp-locked').hidden = true;
+    document.getElementById('tp-figures').hidden = false;
+    document.getElementById('tp-bought').textContent = t.whatIf.boughtTokens + ' ' + t.symbol;
+    document.getElementById('tp-actual').textContent = fmtUsdFull(t.whatIf.actual);
+    var delta = t.whatIf.neverSold - t.whatIf.actual;
+    var de = document.getElementById('tp-delta');
+    de.textContent = (delta >= 0 ? '+' : '−') + fmtUsdFull(Math.abs(delta));
+    de.className = 'value ' + (delta >= 0 ? 'gain' : 'loss');
+    animateCountUp(document.getElementById('tp-neversold'), t.whatIf.neverSold);
+  });
+
+  document.getElementById('tp-share').addEventListener('click', function () {
+    var t = currentToken;
+    if (!t) return;
+    var url = new URL(urlForToken(t.symbol), location.href).href;
+    var label = this.querySelector('span');
+    if (navigator.share) {
+      navigator.share({ title: t.name + ' ($' + t.symbol + ') on Ponsr', url: url }).catch(function () {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(url);
+      label.textContent = 'Link copied';
+      setTimeout(function () { label.textContent = 'Share'; }, 1500);
+    }
+  });
+
+  // ============================================================
+  // COUNT-UP
+  // ============================================================
+  function animateCountUp(el, target) {
+    if (reducedMotion) { el.textContent = fmtUsdFull(target); return; }
+    const duration = 1000, start = performance.now();
+    (function tick(now) { const p = Math.min((now-start)/duration, 1), e = 1 - Math.pow(1-p, 3); el.textContent = fmtUsdFull(Math.round(target*e)); if (p < 1) requestAnimationFrame(tick); })(start);
+  }
+  function animateStatStrip() {
+    document.querySelectorAll('[data-count-to]').forEach(function(el) {
+      const target = parseFloat(el.dataset.countTo), prefix = el.dataset.prefix || '';
+      if (reducedMotion) { el.textContent = prefix + target.toLocaleString('en-US'); return; }
+      const duration = 1300, start = performance.now();
+      (function tick(now) { const p = Math.min((now-start)/duration, 1), e = 1 - Math.pow(1-p, 3); el.textContent = prefix + Math.round(target*e).toLocaleString('en-US'); if (p < 1) requestAnimationFrame(tick); })(start);
+    });
+  }
+
+  // ============================================================
+  // GENERIC REVEAL (after spotlight defs so it can call triggerSpotlight)
+  // ============================================================
+  (function setupReveal() {
+    const els = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) { els.forEach(function(el){ el.classList.add('in'); if (el.id==='spotlight-card') triggerSpotlight(); if (el.id==='stat-strip') animateStatStrip(); }); return; }
+    const io = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          if (entry.target.id === 'spotlight-card') triggerSpotlight();
+          if (entry.target.id === 'stat-strip') animateStatStrip();
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.18 });
+    els.forEach(function(el){ io.observe(el); });
+  })();
+
+  // ============================================================
+  // HERO LOAD-IN
+  // ============================================================
+  /* Motion preset 9 (Stagger List / Complex) -- per-character headline reveal.
+     Only the first line is split: the second line carries the animated metallic
+     sheen, which is a single background-clip:text gradient and would break apart
+     into one gradient per character if it were split. So line 1 gets the
+     character wave and line 2 keeps its mask reveal + intact sheen. */
+  function splitHeadline() {
+    if (reducedMotion) return null;
+    var line = document.querySelectorAll('.hero h1 .reveal-line > span')[0];
+    if (!line) return null;
+    var text = line.textContent;
+    line.textContent = '';
+    var frag = document.createDocumentFragment();
+    // Group characters inside per-word wrappers: line breaking then happens only
+    // between words, so the headline still wraps sanely on narrow screens.
+    var words = text.split(' ');
+    for (var w = 0; w < words.length; w++) {
+      var wordEl = document.createElement('span');
+      wordEl.className = 'wd';
+      for (var i = 0; i < words[w].length; i++) {
+        var s = document.createElement('span');
+        s.className = 'ch';
+        s.textContent = words[w].charAt(i);
+        wordEl.appendChild(s);
+      }
+      frag.appendChild(wordEl);
+      if (w < words.length - 1) {
+        var gap = document.createElement('span');
+        gap.className = 'ch';
+        gap.innerHTML = '&nbsp;';
+        frag.appendChild(gap);
+      }
+    }
+    line.appendChild(frag);
+    // the per-character transforms handle the entrance now, so drop the line mask
+    line.style.opacity = '1';
+    line.style.transform = 'none';
+    if (line.parentElement) line.parentElement.style.overflow = 'visible';
+    return line.querySelectorAll('.ch');
+  }
+
+  function playHeroSequence() {
+    if (reducedMotion) return;
+
+    var chars = splitHeadline();
+    if (chars && chars.length) {
+      for (var c = 0; c < chars.length; c++) {
+        (function (el, idx) {
+          setTimeout(function () { el.classList.add('in'); }, 180 + idx * 15); // 15ms stagger, per preset
+        })(chars[c], c);
+      }
+    }
+
+    [ { el: document.querySelector('.hero-eyebrow'), delay: 60 },
+      { el: document.querySelector('.hero h1 .sheen'), delay: 300 },
+      { el: document.querySelector('.hero-sub'), delay: 470 },
+      { el: document.querySelector('.hero-cta'), delay: 580 },
+      { el: document.querySelector('.hero-livebar'), delay: 700 }
+    ].forEach(function(item) {
+      if (!item.el) return;
+      setTimeout(function(){ item.el.style.transition = 'opacity 0.8s ease, transform 0.8s cubic-bezier(0.2,0.8,0.2,1)'; item.el.style.opacity = '1'; item.el.style.transform = 'translateY(0)'; }, item.delay);
+    });
+  }
+
+  // ============================================================
+  // REALTIME (ticker flicker, creator-fees accrual, synced clock)
+  // ============================================================
+  function startRealtime() {
+    // Ticker price flicker
+    setInterval(function() {
+      const idx = Math.floor(Math.random() * tickerState.length);
+      tickerState[idx].chg += Math.round(rnd(-3, 4));
+      document.querySelectorAll('.ticker-item[data-sym="' + tickerState[idx].symbol + '"]').forEach(function(node) {
+        const s = tickerState[idx], cls = s.chg >= 0 ? 'up' : 'down', sign = s.chg >= 0 ? '+' : '';
+        node.innerHTML = '<span class="sym">$'+s.symbol+'</span> <span class="chg '+cls+'">'+sign+s.chg+'%</span> <span class="sep">/</span>';
+        node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash');
+      });
+    }, 4200);
+
+    // Creator fees slowly accruing
+    setInterval(function() {
+      const chip = document.querySelectorAll('[data-count-to]')[2];
+      if (chip) { const v = (parseInt(chip.textContent.replace(/\D/g,''),10)||0) + 1; chip.textContent = 'Ξ' + v.toLocaleString('en-US'); bumpChip(chip); }
+    }, 8000);
+
+    // Synced clock
+    let secs = 0;
+    setInterval(function() {
+      secs += 1;
+      const el = document.getElementById('synced-ago');
+      if (el) el.textContent = secs < 2 ? 'just now' : secs + 's ago';
+      if (secs >= 12) secs = 0;
+    }, 1000);
+  }
+
+  // ============================================================
+  // LEDGER REALTIME — simulates fresh launches + market movement over
+  // the mock dataset. With a real backend, drive these from your feed.
+  // ============================================================
+  const incomingNames = [
+    { name: 'Lunar Fox', symbol: 'LFOX' }, { name: 'Drift Coin', symbol: 'DRIFT' },
+    { name: 'Prism', symbol: 'PRSM' }, { name: 'Vertex', symbol: 'VRTX' },
+    { name: 'Echo Ape', symbol: 'ECHO' }, { name: 'Blaze', symbol: 'BLAZE' },
+    { name: 'Nimbus', symbol: 'NMBS' }, { name: 'Karat', symbol: 'KARAT' },
+    { name: 'Flux', symbol: 'FLUX' }, { name: 'Orbit', symbol: 'ORBIT' }
+  ];
+  let launchSeq = 0;
+
+  /** Symbols are the routing key (?token=SYMBOL), so they have to stay unique --
+   *  the name pool is small, and two tokens sharing a symbol would make one of
+   *  their cards open the other one's page. */
+  function uniqueSymbol(base) {
+    let sym = base, n = 2;
+    while (tokens.some(function (t) { return t.symbol === sym; })) { sym = base + n; n++; }
+    return sym;
+  }
+
+  function makeToken() {
+    const pick = incomingNames[Math.floor(Math.random() * incomingNames.length)];
+    launchSeq++;
+    const mcap = Math.round(rnd(4000, 68000));
+    let v = rnd(4, 9); const trend = [];
+    for (let i = 0; i < 10; i++) { v = Math.max(1, v + rnd(-1.6, 2.2)); trend.push(Math.round(v)); }
+    const neverSold = Math.round(mcap * rnd(0.05, 0.45));
+    const actual = Math.round(neverSold * rnd(0, 1.15));
+    const bought = (Math.round(rnd(20, 620)) * 1000).toLocaleString('en-US');
+    const symbol = uniqueSymbol(pick.symbol);
+    return { id: symbol.toLowerCase() + '-' + launchSeq, name: pick.name, symbol: symbol,
+      launchedAt: Date.now(), mcap: mcap, holders: Math.round(rnd(15, 380)), status: 'curve', trend: trend,
+      whatIf: { neverSold: neverSold, boughtTokens: bought, actual: actual } };
+  }
+
+  /** The board's DOM work is pointless while the explore view is hidden -- the
+   *  data still updates, only the rendering is skipped. */
+  function exploreVisible() { return exploreView && !exploreView.hidden; }
+
+  function startLedgerRealtime() {
+    // A fresh launch arrives at the top
+    setInterval(function() {
+      const t = makeToken();
+      tokens.unshift(t);
+      if (tokens.length > 400) tokens.pop();
+      // Only redraw the grid when the newest launch would actually be on screen.
+      // Re-rendering while the visitor is deeper in the pages would shuffle the
+      // cards out from under them every few seconds.
+      if (ledgerState.page === 1 && exploreVisible()) {
+        render();
+        const row = document.querySelector('.tcard[data-id="' + t.id + '"]');
+        if (row && !reducedMotion) { row.classList.add('fresh'); setTimeout(function(){ row.classList.remove('fresh'); }, 2500); }
+      } else {
+        renderPager(Math.max(1, Math.ceil(ledgerView().length / PAGE_SIZE)));
+      }
+      spawnToast(t.symbol);
+      incChip(document.querySelectorAll('[data-count-to]')[0]);
+      incChip(document.querySelectorAll('[data-count-to]')[1]);
+    }, 7000);
+
+    // Live age ticking, in place (no full re-render)
+    setInterval(function() {
+      if (!exploreVisible()) return;
+      document.querySelectorAll('.tcard').forEach(function(row) {
+        const el = row.querySelector('[data-age]');
+        if (el) el.textContent = fmtAge(parseInt(row.dataset.launchedat, 10));
+      });
+    }, 3000);
+
+    // Market movement on a random token
+    setInterval(function() {
+      if (!tokens.length) return;
+      const t = tokens[Math.floor(Math.random() * tokens.length)];
+      t.mcap = Math.max(2000, Math.round(t.mcap * rnd(0.97, 1.045)));
+      t.holders += Math.round(rnd(0, 3));
+      const row = exploreVisible() ? document.querySelector('.tcard[data-id="' + t.id + '"]') : null;
+      if (row) {
+        const mc = row.querySelector('[data-mcap]');
+        if (mc) { mc.textContent = fmtUsd(t.mcap); mc.classList.remove('bump'); void mc.offsetWidth; mc.classList.add('bump'); setTimeout(function(){ mc.classList.remove('bump'); }, 550); }
+        const bar = row.querySelector('.tcard-bar i'); if (bar) bar.style.width = gradProgress(t) + '%';
+      }
+      // keep an open token page in sync with the same tick
+      if (currentToken && currentToken.id === t.id) {
+        const mc = document.getElementById('tp-mcap');
+        if (mc) { mc.textContent = fmtUsd(t.mcap); mc.classList.remove('bump'); void mc.offsetWidth; mc.classList.add('bump'); setTimeout(function(){ mc.classList.remove('bump'); }, 550); }
+        const hd = document.getElementById('tp-holders'); if (hd) hd.textContent = fmtHolders(t.holders);
+      }
+    }, 3400);
+  }
+
+  function incChip(el) {
+    if (!el) return;
+    const v = (parseInt(el.textContent.replace(/\D/g,''),10)||0) + 1;
+    el.textContent = v.toLocaleString('en-US');
+    bumpChip(el);
+  }
+  function bumpChip(el) {
+    const v = el.closest ? el.closest('.v') : null;
+    if (!v) return;
+    v.classList.add('bump'); setTimeout(function(){ v.classList.remove('bump'); }, 550);
+  }
+
+  function spawnToast(sym) {
+    const wrap = document.getElementById('toast-wrap');
+    if (!wrap || reducedMotion) return;
+    const symbol = sym || incomingNames[Math.floor(Math.random()*incomingNames.length)].symbol;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.innerHTML = '<span class="tdot"></span><span>New launch <span class="tsym">$'+symbol+'</span></span><span class="tmeta">just now</span>';
+    wrap.appendChild(el);
+    requestAnimationFrame(function(){ el.classList.add('show'); });
+    setTimeout(function(){ el.classList.remove('show'); setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 500); }, 5000);
+    while (wrap.children.length > 3) wrap.removeChild(wrap.firstChild);
+  }
+
+  // ============================================================
+  // PARTICLE FIELD (guarded — no-op where canvas isn't available)
+  // ============================================================
+  function initParticles() {
+    if (reducedMotion) return;
+    const canvas = document.getElementById('particles');
+    if (!canvas) return;
+    let ctx;
+    try { ctx = canvas.getContext('2d'); } catch (e) { ctx = null; }
+    if (!ctx) return;
+    let w, h, parts;
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.clientWidth || window.innerWidth; h = canvas.clientHeight || window.innerHeight;
+      canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    function seed() {
+      const n = Math.max(28, Math.min(52, Math.round((w*h)/42000)));
+      parts = []; for (let i=0;i<n;i++) parts.push({ x: Math.random()*w, y: Math.random()*h, vx: rnd(-0.16,0.16), vy: rnd(-0.16,0.16), r: rnd(0.6,1.8) });
+    }
+    resize(); seed();
+    window.addEventListener('resize', function(){ resize(); seed(); }, { passive: true });
+    (function frame() {
+      ctx.clearRect(0,0,w,h);
+      for (let i=0;i<parts.length;i++) {
+        const p = parts[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = w; if (p.x > w) p.x = 0; if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fillStyle = 'rgba(200,214,235,0.5)'; ctx.fill();
+        for (let j=i+1;j<parts.length;j++) {
+          const q = parts[j], dx = p.x-q.x, dy = p.y-q.y, d = Math.sqrt(dx*dx+dy*dy);
+          if (d < 120) { ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.strokeStyle = 'rgba(160,185,220,'+(0.12*(1-d/120))+')'; ctx.lineWidth = 0.6; ctx.stroke(); }
+        }
+      }
+      requestAnimationFrame(frame);
+    })();
+  }
+
+  // ============================================================
+  // INTERACTION: cursor glow, card tilt, nav scroll, progress, parallax
+  // ============================================================
+  function initInteractions() {
+    const finePointer = window.matchMedia && window.matchMedia('(pointer: fine)').matches;
+    const glow = document.getElementById('cursor-glow');
+    if (finePointer && glow && !reducedMotion) {
+      window.addEventListener('mousemove', function(e) {
+        glow.style.opacity = '1';
+        glow.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)';
+        glow.style.transform = 'translate(-50%,-50%)';
+        glow.style.left = e.clientX + 'px'; glow.style.top = e.clientY + 'px';
+      }, { passive: true });
+    }
+    // Card tilt + spotlight glow position
+    if (finePointer && !reducedMotion) {
+      document.querySelectorAll('.step').forEach(function(card) {
+        card.addEventListener('mousemove', function(e) {
+          const r = card.getBoundingClientRect(), px = (e.clientX-r.left)/r.width, py = (e.clientY-r.top)/r.height;
+          card.style.setProperty('--mx', (px*100)+'%'); card.style.setProperty('--my', (py*100)+'%');
+          card.style.transform = 'perspective(800px) rotateX(' + ((0.5-py)*6).toFixed(2) + 'deg) rotateY(' + ((px-0.5)*6).toFixed(2) + 'deg) translateY(-6px)';
+        });
+        card.addEventListener('mouseleave', function(){ card.style.transform = ''; });
+      });
+      // Hero robot follows the cursor. A pure 3D rotation on flat art is almost
+      // invisible, so the readable part of this effect is the positional drift
+      // toward the pointer; the rotation only adds a little dimensionality.
+      var tilt = document.querySelector('.hero-bot-tilt');
+      var pool = document.querySelector('.hero-bot-shadow');
+      var avatar = document.querySelector('.hero-bot-avatar');
+      var eyeEls = document.querySelectorAll('.bot-eyes .eye');
+      if (tilt) {
+        var clamp = function(v, m) { return Math.max(-m, Math.min(m, v)); };
+        window.addEventListener('mousemove', function(e) {
+          var r = tilt.getBoundingClientRect();
+          if (r.bottom < -120 || r.top > window.innerHeight + 120) return; // off-screen: skip
+
+          // --- the gaze: each pupil points at the cursor, saturating with distance ---
+          if (eyeEls.length && avatar) {
+            var maxX = avatar.offsetWidth * 0.040;
+            var maxY = avatar.offsetWidth * 0.032;
+            for (var i = 0; i < eyeEls.length; i++) {
+              var er = eyeEls[i].getBoundingClientRect();
+              var ecx = er.left + er.width / 2, ecy = er.top + er.height / 2;
+              var vx = e.clientX - ecx, vy = e.clientY - ecy;
+              var dist = Math.sqrt(vx * vx + vy * vy);
+              if (dist < 0.5) continue;
+              var pull = Math.min(1, dist / 380); // fully "locked on" past ~380px away
+              var pupil = eyeEls[i].firstElementChild;
+              if (pupil) {
+                pupil.style.setProperty('--ex', (vx / dist * maxX * pull).toFixed(2) + 'px');
+                pupil.style.setProperty('--ey', (vy / dist * maxY * pull).toFixed(2) + 'px');
+              }
+            }
+          }
+
+          // --- and a subtle head-lean, so the whole body acknowledges the cursor ---
+          var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          var dx = (e.clientX - cx) / Math.max(1, window.innerWidth);
+          var dy = (e.clientY - cy) / Math.max(1, window.innerHeight);
+          var tx = clamp(dx * 30, 9), ty = clamp(dy * 30, 7);
+          var ry = clamp(dx * 34, 11), rx = clamp(-dy * 28, 9);
+          tilt.style.transform = 'perspective(700px) translate(' + tx.toFixed(1) + 'px,' + ty.toFixed(1) + 'px)' +
+            ' rotateY(' + ry.toFixed(1) + 'deg) rotateX(' + rx.toFixed(1) + 'deg)';
+          if (pool) pool.style.transform = 'translateX(calc(-50% + ' + (-tx * 0.35).toFixed(1) + 'px))';
+        }, { passive: true });
+      }
+    }
+  }
+
+  /* Motion preset 3 (Hover / Complex) -- magnetic pull on the primary CTA.
+     A damped follow reproduces gsap.quickTo's springy settle; the 0.3 factor is
+     the preset's own clamp so the button never travels outside its hit box. */
+  function initMagnetic() {
+    if (reducedMotion) return;
+    if (!(window.matchMedia && window.matchMedia('(pointer: fine)').matches)) return;
+    var btn = document.querySelector('.hero-cta .btn-primary');
+    if (!btn) return;
+    btn.classList.add('magnetic');
+    var tx = 0, ty = 0, cx = 0, cy = 0, raf = null, hovering = false;
+    function loop() {
+      cx += (tx - cx) * 0.16;
+      cy += (ty - cy) * 0.16;
+      if (!hovering && Math.abs(tx - cx) < 0.15 && Math.abs(ty - cy) < 0.15) {
+        btn.style.transform = ''; // hand control back to the :hover / :active rules
+        raf = null;
+        return;
+      }
+      btn.style.transform = 'translate(' + cx.toFixed(2) + 'px,' + cy.toFixed(2) + 'px)';
+      raf = requestAnimationFrame(loop);
+    }
+    btn.addEventListener('mousemove', function (e) {
+      var r = btn.getBoundingClientRect();
+      tx = (e.clientX - r.left - r.width / 2) * 0.3;
+      ty = (e.clientY - r.top - r.height / 2) * 0.3;
+      hovering = true;
+      if (!raf) raf = requestAnimationFrame(loop);
+    });
+    btn.addEventListener('mouseleave', function () {
+      tx = 0; ty = 0; hovering = false;
+      if (!raf) raf = requestAnimationFrame(loop);
+    });
+  }
+
+  /* Motion preset 8 (Stagger List / Standard) -- grid entrance for the step cards.
+     60ms stagger with a back.out overshoot; deliberately NOT used on the ledger,
+     which the preset flags as the wrong place for an overshoot easing. */
+  function initStepStagger() {
+    var cards = document.querySelectorAll('.steps .step');
+    if (!cards.length) return;
+    if (reducedMotion || !('IntersectionObserver' in window)) {
+      for (var i = 0; i < cards.length; i++) cards[i].classList.add('pop');
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var idx = Array.prototype.indexOf.call(cards, entry.target);
+        setTimeout(function () { entry.target.classList.add('pop'); }, Math.max(0, idx) * 60);
+        io.unobserve(entry.target);
+      });
+    }, { threshold: 0.18 });
+    for (var j = 0; j < cards.length; j++) io.observe(cards[j]);
+  }
+
+  const nav = document.getElementById('nav'), progress = document.getElementById('scroll-progress');
+  // cached once -- onScroll runs on every scroll event
+  const pxContent = document.querySelector('.hero-inner');
+  const pxHorizon = document.getElementById('hero-horizon');
+  function onScroll() {
+    const y = window.scrollY || window.pageYOffset || 0;
+    if (nav) nav.classList.toggle('scrolled', y > 12);
+    if (progress) { const dh = document.documentElement.scrollHeight - window.innerHeight; progress.style.width = (dh > 0 ? (y/dh)*100 : 0) + '%'; }
+    // Motion preset 14 (Parallax Scroll / Standard): two hero layers moving at
+    // different rates -- content slowest, foreground horizon fastest -- which is
+    // what sells the depth. The hero already has overflow:hidden so neither layer
+    // can spill out of its container, per the preset's own warning.
+    if (!reducedMotion) {
+      if (pxContent) pxContent.style.transform = 'translateY(' + (y * 0.06).toFixed(1) + 'px)';
+      if (pxHorizon) pxHorizon.style.transform = 'translateY(' + (y * 0.18).toFixed(1) + 'px)';
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  // Smooth-scroll in-page links WITHOUT leaving a "#anchor" in the URL bar.
+  function scrollToId(id) {
+    // In-page links point at board sections; if we're on a token page, return
+    // to the board first, then scroll once it's visible again.
+    if (homeView && homeView.hidden) {
+      goToHome();
+      setTimeout(function () { var e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth' }); }, 60);
+      return;
+    }
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  }
+  document.getElementById('how-it-works-btn').addEventListener('click', function(){ scrollToId('how'); });
+  document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+    a.addEventListener('click', function(e) {
+      const id = a.getAttribute('href').slice(1);
+      if (!id) return;
+      e.preventDefault();
+      scrollToId(id);
+    });
+  });
+  // Strip any hash that's already in the URL on load, so it stays clean.
+  if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  // Resolve the route immediately so a deep link lands on the right view, and
+  // fill the board with shimmer placeholders while its data is in flight.
+  applyRoute();
+  renderSkeletons(PAGE_SIZE);
+  fetchLedger().then(renderLedger);
+  playHeroSequence();
+  animateStatStrip();   // guarantee the stat numbers populate on load
+  onScroll();
+  initInteractions();
+  initMagnetic();
+  initStepStagger();
+  initParticles();
+  startRealtime();
+})();
+</script>
+</body>
+</html>
