@@ -77,23 +77,34 @@ All three suites were executed to produce those numbers — none of it is a clai
 faith. Re-run any of them with the commands above (`backend/` needs `npm install` first,
 since `node_modules` is not checked in).
 
-## Deploying the website
+## The website is live: https://ponsr.fun
 
-The site is static — `website/` is published as-is, no build step. `vercel.json` and
-`netlify.toml` are both in the repo root; use whichever host you pick, not both.
+Deployed 2026-08-04 on **Netlify**, from this repository. Pushing to `main` publishes
+automatically — there is no manual deploy step.
 
-Both configs rewrite `/explore` and `/token/:symbol` to `index.html`, which is what turns the
-routes into `ponsr.fun/explore` and `ponsr.fun/token/GCAT`. The app already *reads* a route
-from either the path or the query string, so those URLs resolve immediately. To also have it
-*write* the pretty form, set:
+| | |
+|---|---|
+| Production | `https://ponsr.fun` (`www` and plain `http` both 301 to it) |
+| Netlify project | `ponsr` · `ponsr.netlify.app` |
+| Publish directory | `website/` — no build command, the site is static |
+| Certificate | Let's Encrypt, covering the apex and `www` |
 
-```js
-const PRETTY_URLS = true;   // website/index.html
-```
+`netlify.toml` at the repo root carries everything host-specific: the rewrites for
+`/explore` and `/token/:symbol`, the security headers, and the cache policy (immutable
+for hashed art, `must-revalidate` for HTML so a deploy is visible immediately).
 
-Do that in the same commit that deploys the rewrites — turning it on without them means
-the first refresh on `/explore` is a 404. Left `false`, everything works on any static
-host with `?view=explore` / `?token=SYMBOL` URLs.
+`vercel.json` is the equivalent for Vercel and is kept only as a fallback. Use one host
+or the other, never both.
+
+**`PRETTY_URLS` is now `true`** in `website/index.html`, so the app writes `/explore` and
+`/token/SYMBOL` rather than query strings. That is only safe because `netlify.toml`'s
+rewrites ship from the same commit — turning it on without them makes the first refresh
+on `/explore` a 404. The router still *reads* both forms, so old query-string links keep
+working.
+
+One consequence worth knowing locally: `python -m http.server` does not apply rewrites,
+so a direct hit on `/explore` 404s there. Use `netlify dev`, which reads `netlify.toml`
+the way production does.
 
 ## Before the first push to GitHub
 
