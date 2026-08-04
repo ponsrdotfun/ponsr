@@ -1,10 +1,32 @@
-# Pons v2 — findings from the official docs
+# pons — findings from the official docs, then from the chain itself
 
 **Source:** `docs.ponsfamily.com/v2` (single page, hash anchors), read 2026-07-30.
-**Why this document exists:** the master spec's Pons facts were assembled from indirect
+**Why this document exists:** the master spec's pons facts were assembled from indirect
 research in July 2026, before these docs were found. Several of them are now known to be
 wrong for v2, and one of them breaks a contract we already wrote. Everything below is
 from the official docs, not inference — where the docs are silent, that is said explicitly.
+
+> ## ⛳ START HERE: §9 supersedes large parts of this document (2026-08-04)
+>
+> On 2026-08-04 the **verified source of both live v1 contracts was read directly**. That
+> settles, with certainty, the three questions this document lists as blocking — the v1
+> launch signature, whether a contract can hold the fee role, and whether the treasury needs
+> whitelisting. It also proves `FeeSplitter.sol` was broken in a way nobody had suspected.
+>
+> **The reason it went unanswered for weeks is worth recording, because it was our own
+> mistake, not a gap in pons's documentation.** Every checklist item pointed at
+> `api.blockscout.com/4663/...`, the Blockscout **Pro aggregator**, which requires an API
+> key — so the ABI pull sat behind an account signup nobody had done. But each chain also
+> runs its **own** Blockscout instance with an open API, and Robinhood Chain's is
+> `robinhoodchain.blockscout.com`. Both contracts are verified there with full source, and
+> no key is needed:
+>
+> ```bash
+> curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB"
+> ```
+>
+> Sections 1–8 are kept intact. They are what was believed before, and the gap between them
+> and §9 is the point.
 
 ---
 
@@ -433,3 +455,141 @@ on testnet, and treat the v2 interface as a known migration target rather than s
 write code against now. Structure the encoder so the factory interface is swappable — the
 project already injects every external dependency behind an interface, so this fits the
 existing convention rather than fighting it.
+
+---
+
+# 9. ✅ RESOLVED — the verified v1 source, read 2026-08-04
+
+Both live v1 contracts are verified on `robinhoodchain.blockscout.com`, with full source.
+The ABIs are checked in at `backend/src/abi/ponsLaunchFactory.json` and
+`ponsLaunchLocker.json`. Everything below is quoted from the deployed source, not inferred.
+
+| Contract | Address | Verified |
+|---|---|---|
+| `PonsLaunchFactory` | `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB` | ✅ 58 ABI entries |
+| `PonsLaunchLocker` | `0x736D76699C26D0d966744cAe304C000d471f7F35` | ✅ 49 ABI entries |
+
+## 9.1 The launch signature — published nowhere, but on-chain all along
+
+```solidity
+launchToken(
+  TokenParams {
+    string name; string symbol; string logo; string description;
+    Socials { twitter; telegram; discord; website; farcaster };
+    address feeWallet;
+  } params,
+  uint256 launchConfigId,
+  uint256 dexId,
+  bytes32 salt
+) payable returns (address token)
+```
+
+Against the placeholder we had been carrying, every parameter was wrong. Three differences
+change behaviour rather than just naming:
+
+- **No dev-buy parameter exists.** The encoder used to hardcode `devBuyAmount = 0`. The real
+  factory derives an initial buy from `msg.value` *above* `launchFee`, so **sending exactly
+  the fee** is now the whole control. Overpaying by any amount makes the treasury buy into a
+  user's token.
+- **One `feeWallet`, no separate creator wallet.** The old encoder passed both. There is only
+  one address field in the entire call, which is a stronger guarantee for the
+  prompt-injection case than the test previously asserted.
+- **A CREATE2 `salt`.** We derive it from the source tweet, so a retry predicts the same token
+  address and reverts on `PoolAlreadyExists` instead of silently deploying a second token for
+  one request.
+
+`chainClient` was also calling **`creationFee()`**, a name invented for the placeholder. The
+real function is **`launchFee()`**. No such function as `creationFee` exists, so every fee
+read — which gates every launch — would have reverted.
+
+## 9.2 Whitelisting is not required
+
+```solidity
+if (!launchEnabled && !whitelistedLaunchers[msg.sender]) revert NotWhitelisted();
+```
+
+The whitelist is a bypass for when launching is globally off, not an allowlist to join.
+`launchEnabled()` reads **`true`**, so the treasury can launch today. `NotWhitelisted` is
+real, but it only fires when pons has closed the door to everyone.
+
+## 9.3 Live factory state (read 2026-08-04)
+
+| Read | Value |
+|---|---|
+| `launchEnabled()` | **`true`** — v1 is open, unlike v2 |
+| `launchFee()` | 0.0005 ETH |
+| `launchConfigCount()` | 1 |
+| config `0` | enabled, pair `0x0Bd7…AD73` (WETH), graduation **4.2 ETH**, supply 1e27, maxWallet 5%, maxTx 5.5% |
+
+Every documented constant checks out. They remain settings, not constants: `setLaunchFee`,
+`setLaunchEnabled` and `updateLaunchConfig` are all owner-callable, which is why
+`getLaunchReadiness()` re-reads them before every launch (open question #23).
+
+## 9.4 ⚠️ The fee model — resolved, and `FeeSplitter.sol` was broken
+
+The factory transfers the launch's Uniswap v3 position to the locker and records the fee
+wallet:
+
+```solidity
+manager.safeTransferFrom(address(this), locker, positionId);
+IPonsLaunchLocker(locker).lockPosition(token);
+if (params.feeWallet != address(0)) {
+    IPonsLaunchLocker(locker).setFeeRedirect(token, params.feeWallet);
+}
+```
+
+Fees are then collected from the position by `PonsLaunchLocker.collectFees(address token)`:
+
+```solidity
+address recipient = feeRedirects[token];
+if (recipient == address(0)) recipient = launched.deployer;
+if (msg.sender != owner() && msg.sender != launched.deployer
+    && msg.sender != recipient && !feeCollectors[msg.sender]) revert NotAuthorized();
+...
+_transferIfPositive(token0, recipient, recipientAmount0);
+_transferIfPositive(token1, recipient, recipientAmount1);
+```
+
+**Answering the three questions this document had left open:**
+
+1. **Can a contract hold the fee role?** Yes. `feeRedirects[token]` is a plain address and
+   payouts are ERC20 transfers, which any contract can receive.
+2. **Push or pull?** **Push.** v2's escrow model does not apply to v1. Nothing needs claiming
+   from an escrow.
+3. **Who may trigger collection?** The owner, the **deployer** (our treasury), the recipient
+   itself, or a whitelisted collector. The treasury is always authorised — it is `msg.sender`
+   at launch.
+
+**But the sting is in the last two lines.** Fees arrive as **`token0` and `token1` ERC20
+transfers** — the launched token and the pair token. Native ETH is never involved.
+
+`FeeSplitter.sol` split **ETH only**, through `receive()`. It would have accepted those ERC20
+transfers happily — any address can hold ERC20 — and had **no function capable of moving them
+out again**. Every creator's fees would have accrued in it permanently.
+
+So the instinct to block deployment was right, and the reason was nearly right: the contract
+was indeed unusable, just not for the escrow reason assumed. Rewritten 2026-08-04 with
+`splitERC20`, a per-token claimable ledger, and a reentrancy guard — the guard added because
+a test proved a hostile token could re-enter `splitERC20` and skew the split to 99.75/0.25.
+
+## 9.5 Open questions this closes
+
+| # | Was | Now |
+|---|---|---|
+| #17 | Which version to target | **v1.** Open, verified, fee model understood. v2 is deployed but `launchEnabled` is false and no pair token is approved |
+| #18 | Does the fee model break the splitter? | **Yes, and it is fixed.** Not the escrow problem that was feared — an ERC20-vs-ETH problem |
+| #22 | `pairToken` as a first-class parameter | Not a launch parameter in v1. It lives in the launch config, so the bot selects it by `launchConfigId` |
+| #23 | Read launch guards live | **Implemented** — `getLaunchReadiness()`, enforced in `validator.ts` |
+
+## 9.6 Still genuinely open
+
+- **The 5% treasury share arrives as tokens, not ETH.** The treasury spends ETH on fees and is
+  paid in the launched token plus WETH. Converting, holding, or ignoring that is a product
+  decision nobody has made.
+- **`protocolFeeShare`** on the locker takes a cut before the recipient's split. It read as
+  applying per token (`tokenProtocolFeeShares`); the effective number for our launches has not
+  been measured, so "creator keeps 95%" is 95% *of what reaches the splitter*.
+- **v2 migration.** `MigrationFactory` is deployed. What migrating costs a token and its fee
+  wiring is unexamined.
+- The email to `contact@ponsfamily.com` no longer blocks anything, but a reply is still worth
+  having on the protocol fee share.
