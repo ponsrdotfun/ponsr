@@ -45,6 +45,9 @@ export interface LaunchReadiness {
   /** The configured launch config exists and is enabled. */
   launchConfigUsable: boolean;
   launchConfigCount: bigint;
+  /** The configured DEX config exists and is enabled. A separate factory guard
+   *  (`InvalidDexId` / `DexDisabled`) with the same consequence: a revert we pay gas for. */
+  dexConfigUsable: boolean;
   /** What the configured launch config pairs against -- WETH today, but per-config. */
   pairToken: string | null;
   reason?: string;
@@ -66,44 +69,63 @@ export interface LaunchReadiness {
 export async function getLaunchReadiness(
   provider: ethers.Provider,
   launcherAddress: string,
-  launchConfigId: bigint
+  launchConfigId: bigint,
+  dexId: bigint = config.PONS_DEX_ID
 ): Promise<LaunchReadiness> {
   const f = factory(provider);
-  const [enabled, whitelisted, count] = await Promise.all([
+  const [enabled, whitelisted, count, dexCount] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,
     f.launchConfigCount() as Promise<bigint>,
+    f.dexConfigCount() as Promise<bigint>,
   ]);
 
   const launchConfigCount = BigInt(count.toString());
+  const dexConfigCount = BigInt(dexCount.toString());
   const canLaunch = Boolean(enabled) || Boolean(whitelisted);
 
+  const base = {
+    launchEnabled: Boolean(enabled),
+    canLaunch,
+    whitelisted: Boolean(whitelisted),
+    launchConfigCount,
+  };
+
+  // Out-of-range ids revert with InvalidLaunchConfigId / InvalidDexId before any other check,
+  // so they are answered first -- and reading the config itself would throw here anyway.
   if (launchConfigId >= launchConfigCount) {
     return {
-      launchEnabled: Boolean(enabled),
-      canLaunch,
-      whitelisted: Boolean(whitelisted),
+      ...base,
       launchConfigUsable: false,
-      launchConfigCount,
+      dexConfigUsable: false,
       pairToken: null,
       reason: `launchConfigId ${launchConfigId} does not exist (factory has ${launchConfigCount})`,
     };
   }
+  if (dexId >= dexConfigCount) {
+    return {
+      ...base,
+      launchConfigUsable: false,
+      dexConfigUsable: false,
+      pairToken: null,
+      reason: `dexId ${dexId} does not exist (factory has ${dexConfigCount})`,
+    };
+  }
 
-  const cfg = await f.getLaunchConfig(launchConfigId);
-  const configEnabled = Boolean(cfg.enabled ?? cfg[8]);
-  const pairToken = (cfg.pairToken ?? cfg[0]) as string;
+  const [cfg, dex] = await Promise.all([f.getLaunchConfig(launchConfigId), f.getDexConfig(dexId)]);
+  const configEnabled = Boolean(cfg.enabled);
+  const dexEnabled = Boolean(dex.enabled);
+  const pairToken = cfg.pairToken as string;
 
   let reason: string | undefined;
   if (!canLaunch) reason = 'launchEnabled is false and this launcher is not whitelisted';
   else if (!configEnabled) reason = `launch config ${launchConfigId} is disabled`;
+  else if (!dexEnabled) reason = `dex config ${dexId} is disabled`;
 
   return {
-    launchEnabled: Boolean(enabled),
-    canLaunch,
-    whitelisted: Boolean(whitelisted),
+    ...base,
     launchConfigUsable: configEnabled,
-    launchConfigCount,
+    dexConfigUsable: dexEnabled,
     pairToken,
     reason,
   };

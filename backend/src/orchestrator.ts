@@ -36,7 +36,12 @@ export interface OrchestratorDeps {
    *  check in validator.ts that stops the bot spending money it does not have. */
   getTreasuryBalanceWei: () => Promise<bigint>;
   /** Whether pons's factory would accept a launch from us right now (open question #23). */
-  getLaunchReadiness: () => Promise<{ canLaunch: boolean; launchConfigUsable: boolean; reason?: string }>;
+  getLaunchReadiness: () => Promise<{
+    canLaunch: boolean;
+    launchConfigUsable: boolean;
+    dexConfigUsable?: boolean;
+    reason?: string;
+  }>;
   /** Part 5 mitigation #5. Optional so existing callers keep working, but a
    *  production deployment must pass one -- the guards below stop an attack
    *  silently otherwise, and nobody learns it happened. */

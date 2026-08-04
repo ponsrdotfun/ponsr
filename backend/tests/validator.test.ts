@@ -322,6 +322,37 @@ describe('validateLaunchRequest', () => {
     expect(result.reason).toBe('LAUNCHPAD_UNAVAILABLE');
   });
 
+  it('refuses when the DEX config has been disabled', async () => {
+    // A third factory guard (`DexDisabled` / `InvalidDexId`), separate from the launch config.
+    // Verified live on 2026-08-04: one dex config exists, id 0, "uniswap v3", enabled. pons
+    // can turn it off, and the consequence is the same revert we would pay gas for.
+    const result = await validateLaunchRequest(goodIntent(), 'user1', 'tweet1', {
+      db,
+      getAccountSignals: async () => OLD_ACCOUNT,
+      getLiveFeeWei,
+      getTreasuryBalanceWei,
+      getLaunchReadiness: async () => ({
+        canLaunch: true,
+        launchConfigUsable: true,
+        dexConfigUsable: false,
+        reason: 'dex config 0 is disabled',
+      }),
+    });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('LAUNCHPAD_UNAVAILABLE');
+  });
+
+  it('treats an absent dexConfigUsable as usable, so older callers still approve', async () => {
+    const result = await validateLaunchRequest(goodIntent(), 'user1', 'tweet1', {
+      db,
+      getAccountSignals: async () => OLD_ACCOUNT,
+      getLiveFeeWei,
+      getTreasuryBalanceWei,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+    });
+    expect(result.approved).toBe(true);
+  });
+
   it('does not reach the launchpad check when a cheaper guard already rejected', async () => {
     // Ordering matters: the readiness read costs an RPC round trip, so everything
     // deterministic must reject first. A brand-new account should never cause a network call.
