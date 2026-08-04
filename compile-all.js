@@ -11,6 +11,7 @@ const input = {
   sources: {
     'FeeSplitter.sol': { content: readSource('contracts/FeeSplitter.sol') },
     'test-helpers/Malicious.sol': { content: readSource('contracts/test-helpers/Malicious.sol') },
+    'test-helpers/MockERC20.sol': { content: readSource('contracts/test-helpers/MockERC20.sol') },
   },
   settings: {
     outputSelection: {

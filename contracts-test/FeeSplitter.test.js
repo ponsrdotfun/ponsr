@@ -174,4 +174,186 @@ describe('FeeSplitter', function () {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // ERC20 -- the path pons actually pays fees through.
+  //
+  // The pons v1 locker collects from the launch's Uniswap v3 position and pushes
+  // token0/token1 out as ERC20 (verified from its source, 2026-08-04). Native ETH
+  // never appears. Before the 2026-08-04 rewrite this contract had no way to move
+  // an ERC20 balance at all, so every creator's fees would have accrued here
+  // permanently -- these tests exist because that bug was found, not by routine.
+  // ---------------------------------------------------------------------------
+  describe('ERC20 fee splitting', function () {
+    const ONE = ethers.parseEther('1');
+    const creatorShareOf = (amount) => (amount * 9500n) / 10000n;
+
+    async function withToken(kind) {
+      const ctx = await deploySplitter();
+      const erc20 = await deployContract(kind || 'MockERC20', ctx.deployer, []);
+      return Object.assign({}, ctx, { erc20 });
+    }
+
+    it('splits an ERC20 balance 95/5 and pushes both shares out', async function () {
+      const { splitter, erc20, creator, treasury } = await withToken();
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await erc20.balanceOf(creator.address)).to.equal(creatorShareOf(ONE));
+      expect(await erc20.balanceOf(treasury.address)).to.equal(ONE - creatorShareOf(ONE));
+      expect(await erc20.balanceOf(await splitter.getAddress())).to.equal(0n);
+    });
+
+    it('CRITICAL: leaves nothing behind -- creator + treasury always equals the full balance', async function () {
+      // The stranded-funds check. Deliberately awkward amounts, including ones that do not
+      // divide evenly by 10000, since rounding dust left in the contract is exactly how a
+      // splitter quietly accumulates money nobody can retrieve.
+      for (const amount of [1n, 3n, 9999n, 10001n, 12345678901234567n, ONE, ONE * 7n + 13n]) {
+        const { splitter, erc20, creator, treasury } = await withToken();
+        await erc20.mint(await splitter.getAddress(), amount);
+
+        await splitter.splitERC20(await erc20.getAddress());
+
+        const paid = (await erc20.balanceOf(creator.address)) + (await erc20.balanceOf(treasury.address));
+        expect(paid).to.equal(amount);
+        expect(await erc20.balanceOf(await splitter.getAddress())).to.equal(0n);
+      }
+    });
+
+    it('is callable by anyone, so neither party can withhold the other share', async function () {
+      const { splitter, erc20, other, creator } = await withToken();
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.connect(other).splitERC20(await erc20.getAddress());
+
+      expect(await erc20.balanceOf(creator.address)).to.equal(creatorShareOf(ONE));
+    });
+
+    it('splits the pair token too, not only the launched token', async function () {
+      // Fees arrive as BOTH token0 and token1, so restricting this to `token` would strand
+      // half of every payout.
+      const { splitter, deployer, creator } = await withToken();
+      const pairToken = await deployContract('MockERC20', deployer, []);
+      await pairToken.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await pairToken.getAddress());
+
+      expect(await pairToken.balanceOf(creator.address)).to.equal(creatorShareOf(ONE));
+    });
+
+    it('reverts rather than emitting an empty split when there is nothing to split', async function () {
+      const { splitter, erc20 } = await withToken();
+      await expect(splitter.splitERC20(await erc20.getAddress())).to.be.reverted;
+    });
+
+    it('CRITICAL: a blocked creator cannot freeze the treasury share', async function () {
+      // Real tokens blacklist addresses. One recipient failing must never hold the other
+      // hostage, and must never strand the failed share either.
+      const { splitter, erc20, creator, treasury } = await withToken();
+      await erc20.setBlocked(creator.address, true);
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await erc20.balanceOf(treasury.address)).to.equal(ONE - creatorShareOf(ONE));
+      expect(await splitter.claimableERC20(await erc20.getAddress(), creator.address)).to.equal(creatorShareOf(ONE));
+    });
+
+    it('lets a queued share be pulled once the block is lifted', async function () {
+      const { splitter, erc20, creator } = await withToken();
+      await erc20.setBlocked(creator.address, true);
+      await erc20.mint(await splitter.getAddress(), ONE);
+      await splitter.splitERC20(await erc20.getAddress());
+
+      await erc20.setBlocked(creator.address, false);
+      await splitter.withdrawERC20(await erc20.getAddress(), creator.address);
+
+      expect(await erc20.balanceOf(creator.address)).to.equal(creatorShareOf(ONE));
+      expect(await splitter.claimableERC20(await erc20.getAddress(), creator.address)).to.equal(0n);
+    });
+
+    it('CRITICAL: never re-splits a balance already owed to someone', async function () {
+      // A queued share stays in the contract, so a naive balance-based split would count it
+      // as new revenue and pay it out again -- out of the other party's money.
+      const { splitter, erc20, creator, treasury } = await withToken();
+      await erc20.setBlocked(creator.address, true);
+      await erc20.mint(await splitter.getAddress(), ONE);
+      await splitter.splitERC20(await erc20.getAddress());
+
+      const treasuryAfterFirst = await erc20.balanceOf(treasury.address);
+      await expect(splitter.splitERC20(await erc20.getAddress())).to.be.reverted;
+      expect(await erc20.balanceOf(treasury.address)).to.equal(treasuryAfterFirst);
+    });
+
+    it('splits only genuinely new funds when a queued share is still outstanding', async function () {
+      const { splitter, erc20, creator, treasury } = await withToken();
+      await erc20.setBlocked(creator.address, true);
+      await erc20.mint(await splitter.getAddress(), ONE);
+      await splitter.splitERC20(await erc20.getAddress());
+      const treasuryAfterFirst = await erc20.balanceOf(treasury.address);
+
+      await erc20.mint(await splitter.getAddress(), ONE); // a second round of fees arrives
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect((await erc20.balanceOf(treasury.address)) - treasuryAfterFirst).to.equal(ONE - creatorShareOf(ONE));
+    });
+
+    it('handles a token whose transfer returns no data (USDT-style)', async function () {
+      const { splitter, deployer, creator } = await deploySplitter();
+      const erc20 = await deployContract('NoReturnERC20', deployer, []);
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await erc20.balanceOf(creator.address)).to.equal(creatorShareOf(ONE));
+    });
+
+    it('CRITICAL: treats a false return as a failure rather than as payment', async function () {
+      // A token that reports failure by returning false instead of reverting. Ignoring the
+      // return value would mark these as paid and lose them silently.
+      const { splitter, deployer, creator, treasury } = await deploySplitter();
+      const erc20 = await deployContract('FalseReturnERC20', deployer, []);
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await splitter.claimableERC20(await erc20.getAddress(), creator.address)).to.equal(creatorShareOf(ONE));
+      expect(await splitter.claimableERC20(await erc20.getAddress(), treasury.address)).to.equal(ONE - creatorShareOf(ONE));
+      expect(await erc20.balanceOf(creator.address)).to.equal(0n);
+    });
+
+    it('CRITICAL: reentering splitERC20 mid-transfer cannot pay the same balance twice', async function () {
+      const { splitter, deployer, creator, treasury } = await deploySplitter();
+      const erc20 = await deployContract('ReentrantERC20', deployer, []);
+      await erc20.setSplitter(await splitter.getAddress());
+      await erc20.mint(await splitter.getAddress(), ONE);
+
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await erc20.reentryReverted()).to.equal(true);
+      const paid = (await erc20.balanceOf(creator.address)) + (await erc20.balanceOf(treasury.address));
+      expect(paid).to.equal(ONE);
+    });
+
+    it('rejects the zero address rather than silently doing nothing', async function () {
+      const { splitter } = await deploySplitter();
+      await expect(splitter.splitERC20(ethers.ZeroAddress)).to.be.reverted;
+    });
+
+    it('reverts a withdrawal when nothing is owed', async function () {
+      const { splitter, erc20, creator } = await withToken();
+      await expect(splitter.withdrawERC20(await erc20.getAddress(), creator.address)).to.be.reverted;
+    });
+
+    it('tracks the running ERC20 total for off-chain bookkeeping', async function () {
+      const { splitter, erc20 } = await withToken();
+      await erc20.mint(await splitter.getAddress(), ONE);
+      await splitter.splitERC20(await erc20.getAddress());
+      await erc20.mint(await splitter.getAddress(), ONE);
+      await splitter.splitERC20(await erc20.getAddress());
+
+      expect(await splitter.totalReceivedERC20(await erc20.getAddress())).to.equal(ONE * 2n);
+    });
+  });
 });
