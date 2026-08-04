@@ -628,3 +628,45 @@ Two properties of that shape matter:
   costs nothing belonging to a user, and the next launch can use a corrected deployment.
 - The token is **real and permanent**, on a public launchpad, under this brand. That is the
   actual price of this step, and it is not refundable.
+
+---
+
+## 9.8 ✅ FeeSplitter validated on a real chain (2026-08-04)
+
+The rehearsal from §9.7 was run on Robinhood Chain testnet. This is the first time this
+contract's bytecode has executed anywhere except a Hardhat network.
+
+| | |
+|---|---|
+| Chain | Robinhood Chain testnet (46630) |
+| FeeSplitter | `0x3599f4eA6776787E8557b97cA3C66D67690C83E1` |
+| Mock ERC20 | `0x7F0565A2E8faB4912D4dfA272964b6E5c77854AF` |
+| Split tx | `0x5c26c5b3f52a185782771732223010b7cb261b6af30f361e701e3bb26b74b31b` |
+
+Result on 1000 MOCK:
+
+```
+creator got        950.0 MOCK   (95%)
+treasury got        50.0 MOCK   (5%)
+left in splitter     0.0 MOCK   <- nothing stranded
+immutables         match
+```
+
+**Gas, which is the number Phase B needs to budget against:**
+
+- `splitERC20`: **118,955 gas**
+- Whole run (3 deployments + 1 split): **0.0000149 ETH** at a 0.01 gwei base fee
+
+Gas on this chain is cheap enough that it does not meaningfully change the Phase B budget --
+the 0.0005 ETH launch fee dominates by two orders of magnitude. The `TREASURY_GAS_RESERVE_WEI`
+default of 0.002 ETH is therefore very conservative, which is the right direction for a
+reserve, but worth knowing when reading a `TREASURY_EXHAUSTED` rejection: the wallet is being
+held back by a deliberately cautious floor, not by real gas costs.
+
+**What this does and does not prove.** It proves the deployed bytecode splits correctly with
+real gas metering, and that nothing is left behind — the failure that would strand user fees in
+an immutable contract. It does not exercise the queued-claim path or a hostile token; those are
+covered by the 28 unit tests, and reproducing them on-chain would require deploying the
+adversarial helpers, which proves nothing the tests do not.
+
+**FeeSplitter is cleared for Phase B.**
