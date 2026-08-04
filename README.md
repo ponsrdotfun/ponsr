@@ -1,4 +1,4 @@
-# Ponsr — Twitter Launch Bot for Pons on Robinhood Chain
+# Ponsr — Twitter launch bot for pons on Robinhood Chain
 
 > The project was originally called **Holdfast**; the brand is now **Ponsr**.
 
@@ -11,41 +11,47 @@ below).
 
 ```
 contracts/              FeeSplitter.sol -- the 95/5 fee-splitting contract (Part 8)
-contracts-test/          13 passing tests, including a live reentrancy attack simulation
+contracts-test/          28 passing tests, including two live reentrancy attacks
 backend/                 The bot service: listener -> parser -> validator -> launch -> reply
   src/                    Source code (TypeScript)
-  tests/                  108 passing tests (unit + full pipeline integration, all mocked)
+  tests/                  122 passing tests (unit + full pipeline integration, all mocked)
   scripts/run-eval.ts      Runs the 28-case parser eval set against the real Claude API
   docs/                   SETUP.md and SECURITY-BOUNDARIES.md -- read these before deploying
 website/                 Static site, one self-contained file, three routes:
                            /               landing page
-                           ?view=explore   the board -- card grid, search, sort, pagination
-                           ?token=SYMBOL   token detail + "what if I held" panel
+                           /explore        the board -- card grid, search, sort, pagination
+                           /token/SYMBOL   token detail + "what if I held" panel
 docs/                    Every research/spec document from the planning phase, for reference
 ```
 
-## Read this first: `docs/pons-v2-findings.md`, then `BUILD-STATUS.md`
+## Read this first: `docs/pons-v2-findings.md` §9, then `BUILD-STATUS.md`
 
-The official pons documentation was located on 2026-07-30 and it changed several things this
-repo was built on. The short version:
+The verified source of both live pons v1 contracts was read on 2026-08-04, which settled every
+on-chain question this project had been carrying. The short version:
 
-- **pons v2 is deployed but closed.** Verified on-chain: the launch factory exists
-  (`0x7E1EAbd…84dB8`), but `launchEnabled()` is `false` and no pair token is approved, so no
-  one can launch on v2 yet. Still unaudited. Its published ABI *is* confirmed to match the
-  deployed bytecode.
-- **v1 is live and every constant we assumed for it is correct** (chain 4663, factory
-  `0xA5aAb…1feB`, 0.0005 ETH launch fee, 4.2 ETH graduation, 70% creator share). But its launch
-  signature is published nowhere, so the ABI pull is still the blocker.
-- **`FeeSplitter.sol` may not work as a fee recipient on either version** — v2 requires the
-  recipient to actively claim from an escrow, and the contract can only receive passively. This
-  must be settled before it is deployed anywhere.
+- **Target v1.** `launchEnabled()` is `true` and no whitelisting is needed — that guard only
+  applies when launching is globally off. v2's factory is deployed but closed and unaudited.
+- **The real launch interface is checked in** at `backend/src/abi/`. The placeholder it
+  replaced was wrong in every parameter, and the code was calling `creationFee()`, which does
+  not exist on the deployed contract — the real name is `launchFee()`.
+- **`FeeSplitter.sol` was broken, and is fixed.** Fees are pushed, not escrowed, and a contract
+  may be the recipient — but they arrive as **ERC20**, and the contract handled only native
+  ETH. It would have received them with no way to move them out.
 - **No IPFS is needed** — token logo and description travel as calldata strings.
+
+The ABI pull looked blocked on an API key for weeks because every note pointed at
+`api.blockscout.com` (the Pro aggregator, which needs one). Each chain also runs its own
+Blockscout with an open API:
+
+```bash
+curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB"
+```
 
 ## Then: `BUILD-STATUS.md`
 
 Before anything else, read `BUILD-STATUS.md`. It states plainly what's real, working, and
 tested versus what's a clearly-marked stub waiting on your own account credentials
-(Turnkey, Privy, twitterapi.io, the real Pons ABI). This isn't hedging — it's the difference
+(Turnkey, Privy, twitterapi.io). This isn't hedging — it's the difference
 between "ready to run" and "ready to wire up," and conflating the two with money on the line
 is exactly the kind of mistake the project's own Part 5 audit exists to prevent.
 
@@ -68,10 +74,10 @@ on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
 
 ## Test results
 
-- **Contract:** 13/13 passing (`contracts-test/`) — **run**
-- **Website:** 45/45 passing (`website/smoke-test.js`) — **run**
-- **Backend:** 108/108 passing (`backend/tests/`) — **run**
-- **Total: 166 automated checks, all run and passing.**
+- **Contract:** 28/28 passing (`contracts-test/`) — **run**
+- **Website:** 50/50 passing (`website/smoke-test.js`) — **run**
+- **Backend:** 122/122 passing (`backend/tests/`) — **run**
+- **Total: 200 automated checks, all run and passing.**
 
 All three suites were executed to produce those numbers — none of it is a claim taken on
 faith. Re-run any of them with the commands above (`backend/` needs `npm install` first,
@@ -125,6 +131,6 @@ keeps deleted files, so removing the file later does not un-publish a leaked key
 
 This is not a substitute for the testnet validation phase (Phase 1-3) laid out in
 Part 11 of `docs/MASTER-twitter-launch-bot.md`. Automated tests against mocks prove the *logic* is correct;
-they cannot prove a live third-party integration (Turnkey, Privy, the real Pons contract)
+they cannot prove a live third-party integration (Turnkey, Privy, the real pons contract)
 behaves the way its documentation says it will. That gap is exactly what testnet is for, and
 skipping it is not a shortcut this build enables or recommends.

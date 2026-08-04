@@ -28,8 +28,8 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 
 | Component | Status | Notes |
 |---|---|---|
-| `FeeSplitter.sol` | ✅ (as code) / 🔴 (as a design) | 95/5 split, immutable, no admin function. 13/13 tests passing, including a live reentrancy attack and a rounding-invariant check across 7 different amounts — the contract does exactly what it was specified to do. **But the specification may be wrong:** it can only receive value passively, and pons v2 requires the fee recipient to actively pull from an escrow (`claim()`). v1's mechanism is undocumented. Routed fees could be stranded. Do not deploy as a fee recipient until open question #18 is answered. |
-| Deployment to testnet | 🔴 | Never deployed anywhere yet. **Now blocked on the fee-claim question above, not just on having a testnet wallet** — deploying a splitter that cannot claim its own fees would strand user money, which is the exact failure Part 8 §3 was written to prevent. |
+| `FeeSplitter.sol` | ✅ | 95/5 split, immutable, no admin function. **Rewritten 2026-08-04 for ERC20**, which is how pons actually pays creator fees — the locker pushes `token0`/`token1` from the launch's Uniswap v3 position and native ETH never appears. The previous ETH-only version would have accepted those transfers and had no function able to move them out again, stranding every creator's fees permanently. 28/28 tests, covering four token shapes (normal, no-return/USDT-style, false-return, reentrant), a blacklisted recipient, and a rounding invariant across seven awkward amounts. A reentrancy guard was added because a test proved a hostile token could re-enter `splitERC20` and skew the split to 99.75/0.25. |
+| Deployment to testnet | 🔴 | Never deployed anywhere yet. **No longer blocked on the fee-claim question** — that is answered (fees are pushed as ERC20, a contract may be the recipient, and the treasury is always authorised to call `collectFees`). What remains is having a funded testnet wallet and running the end-to-end validation: launch, generate fees, collect, split, confirm 95/5 delivery. |
 | Professional audit | 🔴 | Not performed. Carefully written and thoroughly tested, but per `backend/docs/SECURITY-BOUNDARIES.md` item 7, that is not the same guarantee as a professional audit. The project's own roadmap requires end-to-end testnet validation before mainnet use — this was true before this build session and remains true now. |
 
 ## Backend
@@ -45,11 +45,11 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 | Wallet resolver (`walletResolver.ts`) | 🟡 | `MockWalletResolver` is fully functional for tests/local dev. `PrivyWalletResolver` is a stub — needs a real Privy account (Phase 0 action item). |
 | Treasury signer (`treasurySigner.ts`) | 🟡 | `RawKeyTreasurySigner` works for testnet-only use and is explicitly blocked from running when `NODE_ENV=production`. `TurnkeyTreasurySigner` is a stub — needs a real Turnkey account (Phase 0 action item). |
 | X client (`xClient.ts`) | 🟡 | `MockXClient` is fully functional for tests. `RealXClient` is a stub — needs a real twitterapi.io account (Phase 0 action item). |
-| pons factory ABI (`ponsEncoder.ts`) | 🔴 | **Still the most important gap, and now known to be worse than "unverified".** The placeholder is *wrong in every parameter*: v2's real interface takes a `TokenParams` struct plus `launchConfigId` and `pairToken`, has no `feeWallet`, no `metadataURI`, and no dev-buy field at all (v1 calls it `initialBuyAmount`). The emitted event differs too. The v1 launch signature is published **nowhere**, so Blockscout remains the only route — or ask pons directly (`contact@ponsfamily.com`). Every existing test checks the *encoder's own* correctness against the placeholder; none can validate it against an interface we don't have. See `docs/pons-v2-findings.md` §2 and §6b. |
+| pons factory ABI (`ponsEncoder.ts`) | ✅ | **Resolved 2026-08-04 — this was the project's longest-standing gap.** The verified ABI is checked in at `src/abi/ponsLaunchFactory.json`, pulled from `robinhoodchain.blockscout.com`, whose API needs no key. (Every checklist item pointed at `api.blockscout.com`, the Pro aggregator, which does — one wrong URL is why this read as blocked on an account signup.) The placeholder was wrong in every parameter. Tests now round-trip through the real ABI, so a wrong struct shape fails the suite instead of passing against a fiction. See `docs/pons-v2-findings.md` §9. |
 | Orchestrator (`orchestrator.ts`) | ✅ | Full pipeline tested end-to-end with mocks for every external dependency, including the specific prompt-injection scenario from Part 9 and an on-chain-revert failure path. |
 | Reply composer (`replyComposer.ts`) | ✅ | Covered by orchestrator integration tests. |
 
-**Backend test suite: 108/108 passing.** Run `cd backend && npm test` to verify yourself.
+**Backend test suite: 122/122 passing.** Run `cd backend && npm test` to verify yourself.
 
 ## Website
 
@@ -72,7 +72,7 @@ Three client-side routes, each with a real URL so they can be linked, refreshed 
 ## What "no mistake, no bugs, no error" actually means here
 
 Every piece of logic in this build that *can* be tested without a live third-party account
-has been tested — 166 automated checks across contract, backend, and website, all passing,
+has been tested — 200 automated checks across contract, backend, and website, all passing,
 all re-runnable by you right now. Several real bugs were caught and fixed during this build
 process specifically because of that testing (a fake-address format bug in a test fixture, a
 foreign-key ordering issue in a test) — which is the point of testing: it's not a formality,

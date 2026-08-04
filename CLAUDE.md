@@ -43,39 +43,46 @@ survives in historical notes.
   in `config.ts` now defaults to it — it is what the bot matches mentions against, not
   decoration.
 
-### Unsettled — these WERE settled, and the pons docs reopened them
+### Settled 2026-08-04 by reading the verified contracts
 
-- **The fee model is at risk.** The 95/5 split via a per-launch `FeeSplitter` assumed the
-  splitter can receive fees passively. pons v2 credits fees to an escrow the *recipient* must
-  pull from (`claim()`), and `FeeSplitter.sol` cannot call anything. v1's claim mechanism is
-  undocumented, so it may be broken there too. **Do not treat the fee model as decided.**
-  See `docs/pons-v2-findings.md` §3 and open question #18.
-- **Which pons version to target.** Verified on-chain 2026-07-30: **v2 IS deployed** (factory
-  `0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8`, 22.7 KB of bytecode) — the docs' "no launch
-  factory" line is stale. But `launchEnabled()` reads **false** and **no pair token is
-  approved**, so the launchpad is deployed-and-closed; nobody can launch on it yet. v2 is also
-  still unaudited. v1 remains open but its launch signature is unpublished. Open question #17.
-  See `docs/pons-v2-findings.md` §7b for the live reads.
-- **The launch fee is not a constant.** 0.0005 ETH is the documented v1 figure; v2 publishes
-  no number and requires reading `launchFee()`. Read it live, never hardcode.
+The v1 factory and locker are **verified with full source** on
+`robinhoodchain.blockscout.com`, whose API needs no key. (Every checklist item had pointed at
+`api.blockscout.com`, the Pro aggregator, which does — that one wrong URL is why this looked
+blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi/`.
+
+- **Target v1.** `launchEnabled()` is `true`, one launch config is live (WETH pair, 4.2 ETH
+  graduation), and no whitelisting is needed — the whitelist only applies when launching is
+  globally off. v2 is deployed but closed. Open question #17 closed.
+- **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
+  feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
+  But they arrive as **ERC20** (the launched token + WETH), and the old splitter handled only
+  native ETH — it could have received them and never moved them out. Rewritten with
+  `splitERC20`, a per-token claimable ledger, and a reentrancy guard.
+- **The launch fee is not a constant** — read `launchFee()` live. Note the function is
+  `launchFee()`; the code called `creationFee()`, which does not exist and would have
+  reverted every read.
+- **Guards are read live before every launch** (`getLaunchReadiness()`), because
+  `launchEnabled`, the whitelist, and the launch config are all owner-settable on pons's side.
+
+Still open: the treasury's 5% arrives as **tokens, not ETH** — no decision has been made about
+converting or holding it. And the locker's `protocolFeeShare` takes a cut first, so "creator
+keeps 95%" means 95% of what reaches the splitter. See `docs/pons-v2-findings.md` §9.6.
 
 ## Immediate next actions
 
 Blocked on the owner — check before assuming any are done:
 
-1. **Email `contact@ponsfamily.com`.** The docs offer hands-on integrator support, and this is
-   the most direct route to the three things blocking all on-chain work: the v1 `launchToken`
-   signature (published nowhere), whether a *contract* can hold the creator-fee role and claim
-   its own rewards, and whether the treasury address needs whitelisting (`NotWhitelisted` is a
-   real error).
-2. **Pull the real factory ABI** via Blockscout and replace the placeholder in
-   `backend/src/ponsEncoder.ts`. Note the placeholder is now known wrong in every parameter —
-   see the header comment in that file.
-3. Wire up real Privy calls in `backend/src/walletResolver.ts` (stub throws with a TODO).
-4. Wire up real Turnkey calls in `backend/src/treasurySigner.ts` (stub throws with a TODO).
-5. Wire up real twitterapi.io calls in `backend/src/xClient.ts` (stub throws with a TODO).
-6. **Do not deploy `FeeSplitter.sol` to testnet yet.** Settle #1's fee-claim question first —
-   deploying a splitter that cannot claim its own fees would strand user money.
+1. Wire up real Privy calls in `backend/src/walletResolver.ts` (stub throws with a TODO).
+2. Wire up real Turnkey calls in `backend/src/treasurySigner.ts` (stub throws with a TODO).
+3. Wire up real twitterapi.io calls in `backend/src/xClient.ts` (stub throws with a TODO).
+4. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
+5. Get testnet ETH, then run the Phase 1 end-to-end validation: deploy a splitter, launch,
+   generate trading fees, `collectFees`, `splitERC20`, and confirm 95/5 delivery to both
+   addresses. **`FeeSplitter.sol` is now unblocked for testnet** — the fee-claim question that
+   held it back is answered — but it has still never been deployed anywhere.
+
+The email to `contact@ponsfamily.com` no longer blocks anything. A reply is still worth having
+on the locker's `protocolFeeShare`, which takes a cut before our split.
 
 ### Buildable right now, with no accounts needed — nothing left
 
