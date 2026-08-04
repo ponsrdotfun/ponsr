@@ -26,13 +26,28 @@ changes how that gets characterised.
 > Tag me with a name and a ticker — your token goes live on Robinhood Chain via the pons factory (ponsfamily.com). Free to launch. Neutral tool, unaffiliated.
 
 **B — brand-led, echoes the site's tagline** · 158 chars
-> Every launch, on the record. Tag @ponsrdotfun with a name and ticker — your token deploys on Robinhood Chain. Creators keep 95% of fees. Neutral tool.
+> Every launch, on the record. Tag @ponsrdotfun with a name and ticker — your token deploys on Robinhood Chain via the pons factory. Free to launch. Neutral tool.
 
 **C — shortest** · 138 chars
-> Turn a tweet into a token on Robinhood Chain. Launching is free; creators keep 95% of trading fees. A neutral tool, not investment advice.
+> Turn a tweet into a token on Robinhood Chain. Launching is free; creators keep 95% of their creator fees. A neutral tool, not investment advice.
 
 **D — leads with the public-record angle** · 145 chars
 > Tag me, get a token on Robinhood Chain. Free to launch, 95% of creator fees are yours, and every launch stays on the public record. Neutral tool.
+
+> ### ⚠️ Never write "95% of trading fees" — measured 2026-08-04
+>
+> The pons locker's `protocolFeeShare` reads **30%**, taken from trading fees *before*
+> anything reaches our splitter. So the real chain is:
+>
+> ```
+> trading fees ──30%──> pons protocol
+>              └─70%──> FeeSplitter ──95%──> creator   (= 66.5% of trading fees)
+>                                    └──5%──> treasury (=  3.5% of trading fees)
+> ```
+>
+> "95% of creator fees" is true. **"95% of trading fees" overstates a creator's take by
+> roughly 1.4×**, and it is the kind of number people check. Two options above said exactly
+> that and have been corrected. Ponsr neither sets the 30% nor receives any of it.
 
 ## Other profile fields
 

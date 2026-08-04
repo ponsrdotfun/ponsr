@@ -670,3 +670,62 @@ covered by the 28 unit tests, and reproducing them on-chain would require deploy
 adversarial helpers, which proves nothing the tests do not.
 
 **FeeSplitter is cleared for Phase B.**
+
+---
+
+## 9.9 ✅ PHASE B EXECUTED — first real launch on mainnet (2026-08-04)
+
+`scripts/phase-b-launch.ts --execute`, self-dealt: `creator == treasury == the operator`.
+
+| | |
+|---|---|
+| Token | `0xc615D10B97cBC2802162BF7C1b8dFc28163A299D` (`PONSRHOOD`) |
+| Pool | `0xb5aBBf856Bc24FA6df2D82EF7FCE821ee4E5F790` |
+| FeeSplitter | `0x3599f4eA6776787E8557b97cA3C66D67690C83E1` |
+| Launch tx | `0x26cb2bad3a0a58ebe62fe2269eef4e709b7e270a94faddc79ad235ac8b48d27e` |
+| Position | 586429 |
+| `initialBuyAmount` | **0** — the treasury did not buy into its own launch |
+
+**The encoder is proven.** Everything in §9.1 was read from source and believed; this is the
+first time the calldata was accepted by the real factory. It worked on the first attempt.
+
+**Fee wiring confirmed on the locker:**
+
+```
+feeRedirects[0xc615…299D] = 0x3599f4eA…83E1   ← the splitter, exactly as intended
+deployer                  = the treasury      ← so collectFees() is always callable by us
+```
+
+### ⚠️ 9.9.1 `protocolFeeShare` measured: **30%** — and it changes what we may claim
+
+The open item from §9.6 now has a number. `PonsLaunchLocker.protocolFeeShare()` and
+`tokenProtocolFeeShares(token)` both read **30**, applied *before* the recipient's share:
+
+```
+trading fees ──30%──> pons protocol fee recipient
+             └─70%──> FeeSplitter ──95%──> creator    = 66.5% of trading fees
+                                   └──5%──> treasury  =  3.5% of trading fees
+```
+
+This is consistent with the "70% creator share" the v1 docs advertise — pons keeps 30%, and
+our 95/5 divides the 70% that arrives. Nothing is wrong; what was wrong was some of our copy.
+
+**"Creators keep 95% of creator fees" is true. "Creators keep 95% of trading fees" is not** —
+it overstates a creator's take by about 1.4×, and it is precisely the kind of number a
+prospective user can verify on-chain in a minute.
+
+Corrected on discovery:
+- `website/index.html` FAQ already said "creator trading fees", which was accurate but easy to
+  misread. It now states the 30% explicitly, and that Ponsr neither sets it nor receives it.
+- `brand/X-PROFILE.md` bio options B and C claimed "95% of fees" and "95% of trading fees".
+  Both rewritten. The live X bio never carried the claim, so nothing published was wrong.
+
+**The treasury's real take is 3.5% of trading fees, not 5%.** Any revenue modelling built on
+5% is overstated by the same 1.4×.
+
+### 9.9.2 Still unproven
+
+The fee *path* is wired but has never carried value: no swaps have happened, so
+`collectFees` has nothing to collect and `splitERC20` has nothing to split. Until a real
+trade generates fees and both are run, the end-to-end model is verified by reading, not by
+observation.
