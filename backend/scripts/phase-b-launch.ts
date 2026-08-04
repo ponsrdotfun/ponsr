@@ -133,6 +133,27 @@ async function main() {
   const { splitterAddress, deployTxHash } = await deploySplitter(signer, treasury, treasury, ethers.ZeroAddress);
   line('splitter', splitterAddress);
   line('tx', deployTxHash);
+
+  // Verify the DEPLOYED CODE, not the artifact we deployed from.
+  //
+  // On 2026-08-04 this launched with the pre-rewrite ETH-only splitter, because the backend's
+  // artifact was a stale hand-made copy. The fees it later received are stranded in it
+  // permanently. Everything upstream had passed: the contract tests, the testnet rehearsal --
+  // all reading a different, fresh copy of the artifact.
+  //
+  // Reading the selector back out of the chain is the one check that cannot be fooled by a
+  // stale build, because it asks the deployed bytecode what it can actually do. It is two
+  // lines and it is the difference between a launch and a permanent loss.
+  const deployedCode = await provider.getCode(splitterAddress);
+  const splitSelector = ethers.id('splitERC20(address)').slice(2, 10);
+  if (!deployedCode.includes(splitSelector)) {
+    console.error('\nABORTING: the deployed splitter has no splitERC20(address).');
+    console.error('That is the ETH-only version. It can receive pons fees and never pay them out.');
+    console.error('Run `node ../compile-all.js` from the repo root and try again.');
+    console.error(`(The splitter at ${splitterAddress} is already deployed but will not be used.)`);
+    process.exit(1);
+  }
+  line('splitERC20 in code', 'present ✅');
   console.log();
 
   console.log('2/2  Launching...');
