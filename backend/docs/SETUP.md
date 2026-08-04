@@ -95,6 +95,46 @@ no data, and ones reporting failure by returning `false`. See `contracts-test/RE
 why `--no-compile` is used here and how to compile normally with Hardhat's own solc
 downloader once you have unrestricted network access.
 
+## 6b. Going on-chain for the first time, in order
+
+pons is **not deployed on Robinhood Chain testnet** (verified 2026-08-04), so the launch path
+cannot be rehearsed there. What can be rehearsed is the contract that matters most.
+
+**Step 1 — create the wallet.** Writes the key to `.env` and prints only the address:
+
+```bash
+npx ts-node scripts/new-treasury-wallet.ts
+```
+
+This is a Phase B wallet, not the production treasury -- see item 5 above. Fund it small on
+both chains: testnet from the faucet, and ~0.01 ETH on mainnet.
+
+**Step 2 — validate FeeSplitter on testnet. Free, and do not skip it.**
+
+```bash
+npx ts-node scripts/validate-splitter.ts            # dry run
+npx ts-node scripts/validate-splitter.ts --execute
+```
+
+Deploys the splitter and a mock ERC20, splits, and asserts 95/5 landed and **nothing was left
+behind**. The 28 unit tests prove the logic; this proves the same bytecode on a real chain with
+real gas, which has never been checked. The contract is immutable, so a defect found after
+users' fees are routed to it cannot be fixed -- only abandoned.
+
+**Step 3 — Phase B: one self-dealt mainnet launch.**
+
+```bash
+RPC_URL=https://rpc.mainnet.chain.robinhood.com CHAIN_ID=4663   npx ts-node scripts/phase-b-launch.ts             # dry run, sends nothing
+```
+
+`creator == treasury == your own address`, so the only fees at stake are yours. Add
+`--execute` once the dry run reads correctly. It preflights every guard the factory applies
+before spending anything. The token it creates is real and permanent.
+
+**Step 4 — prove the fee path.** Swap against the pool to generate fees, call
+`locker.collectFees(token)` (the treasury is authorised as deployer), then `splitERC20` for
+both the launched token and the pair token. Only after 95/5 lands is the model proven.
+
 ## 7. Build for production
 
 ```bash
