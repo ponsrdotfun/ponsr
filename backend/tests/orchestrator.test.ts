@@ -7,7 +7,7 @@ import { MockXClient } from '../src/xClient';
 import { TreasurySigner } from '../src/treasurySigner';
 import { handleMention } from '../src/orchestrator';
 import { InboundMention, ParsedIntent } from '../src/types';
-import { PONS_FACTORY_ABI_FRAGMENT } from '../src/ponsEncoder';
+import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 import { config } from '../src/config';
 
 const TEST_DB_PATH = './data/test-orchestrator.sqlite';
@@ -51,7 +51,7 @@ class FakeTreasurySigner implements TreasurySigner {
     }
 
     // launchToken() call -- decode the calldata to build a realistic TokenLaunched event.
-    const iface = new ethers.Interface(PONS_FACTORY_ABI_FRAGMENT);
+    const iface = new ethers.Interface(PONS_FACTORY_ABI);
     const decoded = iface.decodeFunctionData('launchToken', tx.data);
 
     if (this.shouldRevertLaunch) {
@@ -60,12 +60,21 @@ class FakeTreasurySigner implements TreasurySigner {
 
     const tokenAddress = fakeAddress(`fake-token-${this.nonce}`);
     const poolAddress = fakeAddress(`fake-pool-${this.nonce}`);
+    // The real event, in the real order: token, deployer, dexFactory, pairToken, pool,
+    // dexId, launchConfigId, positionId, restrictionsEndBlock, initialBuyAmount.
+    // initialBuyAmount is asserted as 0 below -- the treasury must never buy into a
+    // launch it created, and with this ABI that is enforced by sending exactly the fee.
     const log = iface.encodeEventLog('TokenLaunched', [
       tokenAddress,
+      this.treasuryAddress,
+      fakeAddress('fake-dex-factory'),
+      fakeAddress('fake-pair-token'),
       poolAddress,
-      decoded[3], // creatorWallet
-      decoded[0], // name
-      decoded[1], // symbol
+      decoded[2], // dexId
+      decoded[1], // launchConfigId
+      42n, // positionId
+      0n, // restrictionsEndBlock
+      0n, // initialBuyAmount
     ]);
 
     return {
@@ -131,6 +140,7 @@ describe('handleMention -- full pipeline integration', () => {
       provider: {} as any,
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => FUNDED_TREASURY,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
     });
 
     expect(outcome.kind).toBe('launched');
@@ -156,8 +166,8 @@ describe('handleMention -- full pipeline integration', () => {
     ]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention1, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
-    await handleMention(mention2, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
+    await handleMention(mention1, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention2, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const user = db.getUser('user_1');
     expect(user).not.toBeNull();
@@ -174,7 +184,7 @@ describe('handleMention -- full pipeline integration', () => {
       },
     };
     const walletResolver = new MockWalletResolver(db);
-    const deps = { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY };
+    const deps = { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
 
     const first = await handleMention(mention, deps);
     const second = await handleMention(mention, deps);
@@ -192,7 +202,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(0); // silent, per composeRejectionReply
@@ -206,7 +216,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -224,12 +234,14 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
+    await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const launchTx = treasurySigner.sentTransactions.find((t) => t.to === config.PONS_FACTORY_ADDRESS);
-    const iface = new ethers.Interface(PONS_FACTORY_ABI_FRAGMENT);
+    const iface = new ethers.Interface(PONS_FACTORY_ABI);
     const decoded = iface.decodeFunctionData('launchToken', launchTx!.data);
-    const actualFeeWallet = decoded[4] as string;
+    // decoded[0] is the TokenParams struct; feeWallet is its last member. The real ABI has
+    // exactly one wallet field, so there is nowhere else a wallet could have been smuggled in.
+    const actualFeeWallet = decoded[0].feeWallet as string;
 
     expect(actualFeeWallet.toLowerCase()).not.toContain('attacker');
     // The fee wallet used is the splitter deployed for THIS user, not anything from the tweet.
@@ -242,7 +254,7 @@ describe('handleMention -- full pipeline integration', () => {
     const parser = new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('onchain_failure');
     expect(xClient.sentReplies).toHaveLength(1);

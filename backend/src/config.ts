@@ -26,9 +26,19 @@ const ConfigSchema = z.object({
   RPC_URL: z.string().default('https://rpc.testnet.chain.robinhood.com'),
   CHAIN_ID: z.coerce.number().default(46630), // testnet by default; 4663 for mainnet
 
-  // -- Pons factory (Part 2/7: pull the real ABI via Blockscout before Phase 1 goes live) --
+  // -- pons factory. The real, verified ABI is checked in at src/abi/ponsLaunchFactory.json --
   PONS_FACTORY_ADDRESS: z.string().default('0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB'),
   PONS_LOCKER_ADDRESS: z.string().default('0x736D76699C26D0d966744cAe304C000d471f7F35'),
+  /**
+   * Which launch config and DEX config `launchToken` is called with.
+   *
+   * A launch config carries the pair token, graduation threshold, supply and wallet/tx limits.
+   * The factory had exactly one (id 0, enabled, paired against WETH, 4.2 ETH graduation) when
+   * this was read on 2026-08-04 -- but pons can add and disable configs at will, so these are
+   * settings, and `getLaunchReadiness()` verifies the chosen one is live before every launch.
+   */
+  PONS_LAUNCH_CONFIG_ID: z.coerce.bigint().default(0n),
+  PONS_DEX_ID: z.coerce.bigint().default(0n),
 
   // -- Treasury signer (Part 5/10: Turnkey, scoped to launchToken() only) --
   TREASURY_SIGNER_PRIVATE_KEY: z.string().optional(), // testnet-only raw key; Turnkey in prod

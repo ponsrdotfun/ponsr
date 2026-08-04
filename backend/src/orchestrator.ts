@@ -7,7 +7,7 @@ import { WalletResolver } from './walletResolver';
 import { XClient } from './xClient';
 import { TreasurySigner } from './treasurySigner';
 import { deploySplitter } from './splitterDeployer';
-import { buildLaunchCalldata, extractLaunchedTokenAddress } from './ponsEncoder';
+import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { composeSuccessReply, composeRejectionReply, composeOnChainFailureReply } from './replyComposer';
 import { TreasuryMonitor } from './monitor';
 import { config } from './config';
@@ -35,6 +35,8 @@ export interface OrchestratorDeps {
   /** Hot treasury balance, read live (Part 5 mitigation #7). Backs the admission
    *  check in validator.ts that stops the bot spending money it does not have. */
   getTreasuryBalanceWei: () => Promise<bigint>;
+  /** Whether pons's factory would accept a launch from us right now (open question #23). */
+  getLaunchReadiness: () => Promise<{ canLaunch: boolean; launchConfigUsable: boolean; reason?: string }>;
   /** Part 5 mitigation #5. Optional so existing callers keep working, but a
    *  production deployment must pass one -- the guards below stop an attack
    *  silently otherwise, and nobody learns it happened. */
@@ -73,6 +75,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     getAccountSignals: (id) => deps.xClient.getAccountSignals(id),
     getLiveFeeWei: deps.getLiveFeeWei,
     getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
+    getLaunchReadiness: deps.getLaunchReadiness,
   });
 
   if (!validation.approved) {
@@ -132,13 +135,23 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       return { kind: 'rejected', reason: 'FEE_EXCEEDS_CEILING' };
     }
 
+    // `value` is exactly the live fee. The factory treats anything above it as an initial
+    // buy, so overpaying would make the treasury buy into the user's own token.
     const { data, value } = buildLaunchCalldata(
       {
         tokenName,
         tokenSymbol,
-        metadataURI: description ?? '',
-        creatorWallet: splitterAddress,
+        logo: '',
+        description: description ?? '',
+        socials: EMPTY_SOCIALS,
+        // One wallet, not two: the factory writes this to the locker as the fee redirect for
+        // this token, and the locker pays trading fees to it.
         feeWallet: splitterAddress,
+        launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
+        dexId: config.PONS_DEX_ID,
+        // Derived from the tweet, so a retry predicts the same token address and reverts
+        // rather than quietly deploying a second token for one request.
+        salt: saltForTweet(mention.tweetId),
       },
       liveFee
     );

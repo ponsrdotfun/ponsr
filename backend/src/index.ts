@@ -6,7 +6,7 @@ import { ClaudeParser } from './parser';
 import { PrivyWalletResolver } from './walletResolver';
 import { RealXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
-import { createProvider, getLiveFeeWei, getBalanceWei } from './chainClient';
+import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from './chainClient';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, ConsoleNotifier } from './monitor';
 import { startReconciliation } from './reconciler';
@@ -40,6 +40,8 @@ const deps = {
   provider,
   getLiveFeeWei: () => getLiveFeeWei(provider),
   getTreasuryBalanceWei: async () => getBalanceWei(provider, await treasurySigner.address()),
+  getLaunchReadiness: async () =>
+    getLaunchReadiness(provider, await treasurySigner.address(), config.PONS_LAUNCH_CONFIG_ID),
   // Part 5 mitigation #5. ConsoleNotifier is a starting point only -- Part 5 asks
   // for alerting "wired to something you'll see, not just logs no one reads", so
   // swap in a real transport (Telegram/email/pager) before mainnet. The Notifier

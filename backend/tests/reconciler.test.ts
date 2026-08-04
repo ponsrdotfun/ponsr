@@ -8,7 +8,7 @@ import { TreasurySigner } from '../src/treasurySigner';
 import { handleMention, OrchestratorDeps } from '../src/orchestrator';
 import { reconcileOnce, startReconciliation, DEFAULT_RECONCILER_OPTIONS } from '../src/reconciler';
 import { InboundMention, ParsedIntent } from '../src/types';
-import { PONS_FACTORY_ABI_FRAGMENT } from '../src/ponsEncoder';
+import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 
 const TEST_DB_PATH = './data/test-reconciler.sqlite';
 const LIVE_FEE = 500_000_000_000_000n;
@@ -30,10 +30,21 @@ class FakeTreasurySigner implements TreasurySigner {
     if (tx.to === '') {
       return { hash, wait: async () => ({ status: 1, contractAddress: fakeAddress('splitter' + this.nonce), logs: [] } as any) };
     }
-    const iface = new ethers.Interface(PONS_FACTORY_ABI_FRAGMENT);
+    const iface = new ethers.Interface(PONS_FACTORY_ABI);
     const decoded = iface.decodeFunctionData('launchToken', tx.data);
+    // Real TokenLaunched: token, deployer, dexFactory, pairToken, pool, dexId,
+    // launchConfigId, positionId, restrictionsEndBlock, initialBuyAmount.
     const log = iface.encodeEventLog('TokenLaunched', [
-      fakeAddress('token' + this.nonce), fakeAddress('pool' + this.nonce), decoded[3], decoded[0], decoded[1],
+      fakeAddress('token' + this.nonce),
+      fakeAddress('fake-treasury'),
+      fakeAddress('dexFactory'),
+      fakeAddress('pairToken'),
+      fakeAddress('pool' + this.nonce),
+      decoded[2], // dexId
+      decoded[1], // launchConfigId
+      1n,
+      0n,
+      0n,
     ]);
     return { hash, wait: async () => ({ status: 1, logs: [{ topics: log.topics, data: log.data }] } as any) };
   }
@@ -81,6 +92,7 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       provider: {} as any,
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n, // funded; not what these test
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
     };
   });
   afterEach(() => db.close());
