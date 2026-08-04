@@ -729,3 +729,70 @@ The fee *path* is wired but has never carried value: no swaps have happened, so
 `collectFees` has nothing to collect and `splitERC20` has nothing to split. Until a real
 trade generates fees and both are run, the end-to-end model is verified by reading, not by
 observation.
+
+---
+
+## 9.10 🔴 INCIDENT — Phase B deployed the wrong FeeSplitter, and the fees are stranded
+
+`collectFees` worked. `splitERC20` reverted with no data, which is what a call to a function
+that does not exist looks like. It did not exist: the contract deployed at
+`0x3599f4eA6776787E8557b97cA3C66D67690C83E1` is the **pre-rewrite, ETH-only FeeSplitter**.
+
+```
+splitERC20(address)              -- absent
+withdrawERC20(address,address)   -- absent
+claimableERC20(address,address)  -- absent
+withdraw()                       -- present   <- the old interface
+```
+
+**Stranded permanently, in an immutable contract with no admin:**
+
+| | |
+|---|---|
+| `PONSRHOOD` | 269,280.16 |
+| `WETH` | 0.000445466 |
+
+### Cause
+
+Nothing was wrong with any contract. There were **two copies of one compiled artifact**:
+
+- `contracts-test/artifacts.json` — written by `compile-all.js`
+- `backend/src/feeSplitterArtifact.json` — a **hand-made copy**, and the only thing
+  `splitterDeployer.ts` reads
+
+FeeSplitter was rewritten for ERC20 and recompiled. The first was refreshed. The second was
+not, because nothing refreshed it. Then:
+
+- all 28 contract tests passed — they read the fresh artifact
+- the testnet rehearsal (§9.8) passed — it also read the fresh artifact
+- the mainnet deploy used the stale one
+
+**The rehearsal validated the contract and not the path that deploys it.** That is the actual
+lesson, and it is more general than this bug: a rehearsal that does not use the production
+code path can pass while production is broken.
+
+### Why it cost almost nothing
+
+Phase B was designed self-dealt — `creator == treasury == the operator`. So the only money
+stranded is the operator's own, and it is roughly **$2**. Had this been the shape originally
+proposed (launch straight to real users), the stranded fees would have belonged to a stranger,
+in a contract nobody can fix, with no recourse.
+
+**That design decision paid for itself on the first run.** Not by preventing the bug — by
+making it cheap to find.
+
+### Fixed
+
+1. **`compile-all.js` now writes both artifacts from the same compile.** Two copies of one
+   thing only stay in step if nobody has to remember.
+2. **`backend/tests/splitterDeployer.test.ts`** asserts the backend's artifact exposes the
+   ERC20 interface *and* that the `splitERC20` selector is present in the compiled bytecode —
+   an ABI and a bytecode from different compiles being exactly the shape of this failure.
+   Verified by reinstating the stale artifact: two CRITICAL tests fail, as intended.
+
+### Still to do
+
+The stranded funds are unrecoverable; the token and its splitter stay as they are. A second
+Phase B run with a correctly-deployed splitter is needed before the fee path can be called
+proven. `collectFees` is already demonstrated to work — it is only the split that has not run
+against real fees.

@@ -62,5 +62,19 @@ fs.writeFileSync(
   JSON.stringify(artifacts, null, 2)
 );
 
+// The backend deploys the splitter from its own copy of the artifact. That copy used to be
+// maintained by hand, and on 2026-08-04 that cost real money: FeeSplitter was rewritten for
+// ERC20 and recompiled, the tests all passed against the fresh artifact above, and the deploy
+// path kept using the stale hand-copied one. A mainnet launch went out with the old ETH-only
+// contract as its fee recipient, and the ERC20 fees it received are stranded in it forever.
+//
+// So this is written here, from the same compile, every time. Two copies of one artifact only
+// stay in step if nobody has to remember to make them.
+fs.writeFileSync(
+  path.join(__dirname, 'backend', 'src', 'feeSplitterArtifact.json'),
+  JSON.stringify({ FeeSplitter: artifacts.FeeSplitter }, null, 2)
+);
+
 console.log('✅ Compiled contracts:', Object.keys(artifacts).join(', '));
 console.log('   Written to contracts-test/artifacts.json');
+console.log('   Written to backend/src/feeSplitterArtifact.json (used by splitterDeployer.ts)');
