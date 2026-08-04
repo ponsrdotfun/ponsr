@@ -124,7 +124,7 @@ users' fees are routed to it cannot be fixed -- only abandoned.
 **Step 3 — Phase B: one self-dealt mainnet launch.**
 
 ```bash
-RPC_URL=https://rpc.mainnet.chain.robinhood.com CHAIN_ID=4663   npx ts-node scripts/phase-b-launch.ts             # dry run, sends nothing
+RPC_URL=https://rpc.mainnet.chain.robinhood.com CHAIN_ID=4663 npx ts-node scripts/phase-b-launch.ts
 ```
 
 `creator == treasury == your own address`, so the only fees at stake are yours. Add
@@ -149,5 +149,10 @@ Read `docs/SECURITY-BOUNDARIES.md` in full, and complete every item still marked
 - `src/treasurySigner.ts` (real Turnkey integration)
 - `src/xClient.ts` (real twitterapi.io integration)
 
-Then follow the implementation roadmap's Phase 1 -> Phase 4 sequence in the master project
-doc -- testnet first, always.
+Then follow the implementation roadmap's Phase 1 -> Phase 4 sequence in Part 11 of the master
+doc.
+
+One correction to that roadmap, from 2026-08-04: **"testnet first" is not available for the
+launch path**, because pons is not deployed on Robinhood Chain testnet. Section 6b above is the
+order that replaces it -- the free testnet rehearsal still covers `FeeSplitter`, which is the
+part that holds users' money and cannot be changed after deployment.
