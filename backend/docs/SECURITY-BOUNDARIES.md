@@ -40,25 +40,32 @@ duplicate webhook deliveries (which happen under real-world network conditions) 
 cause the same tweet to be processed twice, even under concurrent execution. See
 `tests/db.test.ts`'s concurrent-claim simulation.
 
-## 4. The dev-buy amount is hardcoded to zero, not defaulted
+## 4. The bot never buys into a token it launches, and the control is now `msg.value`
 
-`src/ponsEncoder.ts`'s `buildLaunchCalldata` sets this as a literal `0n` in the function
-body, not a config default that could be silently overridden. If dev-buy support is ever
-deliberately added, it should be a separate, explicitly-named code path -- never something
-reachable by accident from the default launch flow.
+**Rewritten 2026-08-04 against the verified ABI.** There is no dev-buy *parameter* to zero
+out — the encoder used to set a literal `devBuyAmount = 0n`, and no such field exists.
 
-> **Correction (2026-07-30):** the field is not called `devBuyAmount` in either real pons
-> interface. In **v1** it appears as **`initialBuyAmount`** (confirmed in the `TokenLaunched`
-> event). In **v2** there is no such parameter at all. The *rule* stands and still matters for
-> v1 — a bot that silently spends treasury ETH buying the token it just launched is exactly
-> the failure this guards against — but the field name in the code is a placeholder and must
-> be corrected when the real ABI is pulled. See `docs/pons-v2-findings.md` §2 and §6b.
+The real factory derives an initial buy from `msg.value` **above** `launchFee`:
+
+```solidity
+address initialBuyRecipient = params.feeWallet == address(0) ? msg.sender : params.feeWallet;
+...
+if (initialBuyAmount != 0) { ... }
+```
+
+So the rule survives, but what enforces it has moved: `buildLaunchCalldata` returns
+`value` equal to **exactly** the live fee. Overpaying by any amount makes the treasury buy
+into a user's token with treasury funds.
+
+**Anything that changes how `value` is computed is changing this security property**, even if
+it looks like arithmetic. A test asserts the returned value equals the fee exactly, and the
+orchestrator test asserts the emitted `initialBuyAmount` is zero.
 
 ## 5. The treasury signer is never a bare key in production
 
 `src/treasurySigner.ts` throws if `RawKeyTreasurySigner` is instantiated with
 `NODE_ENV=production`. The production path (`TurnkeyTreasurySigner`) is currently a stub that
-must be completed with real Turnkey policy-scoped signing (destination = Pons factory only,
+must be completed with real Turnkey policy-scoped signing (destination = pons factory only,
 function = `launchToken` only) before this bot ever touches real funds. See Part 10 of the
 master doc for why Turnkey specifically was chosen for this role.
 
@@ -95,23 +102,24 @@ the bot's own operator. This is a deliberate trust decision (see `contracts/FeeS
 NatSpec and Part 8 of the master doc) -- changing the ratio requires deploying a new contract
 version and using it for future launches, not flipping a setting on an existing one.
 
-> **⚠️ Blocking issue (2026-07-30): the splitter may not be usable as a fee recipient at all.**
-> pons v2 credits creator fees to an escrow that the *recipient* must pull from (`claim()` /
-> `claimToken()`), and this contract can only receive value passively -- it cannot call
-> anything, so fees routed to it would be stranded permanently. The v1 claim mechanism is
-> undocumented ("the creator can claim them at any time", no function named), so the same risk
-> is unresolved there. **Do not deploy this as a fee recipient on any network until that
-> question is answered** -- see `docs/pons-v2-findings.md` §3 and open question #18.
+> **✅ Resolved 2026-08-04 — and the contract was broken, though not for the reason feared.**
+> The verified v1 locker **pushes** fees to `feeRedirects[token]` as ERC20 transfers; there is
+> no escrow to claim from, and any contract may be the recipient. The treasury is always
+> authorised to call `collectFees(token)` because it is `launched.deployer`.
 >
-> Two further assumptions in this section are now known to be wrong: the fee recipient is
-> **not** permanent (both versions expose a redirect, and a v2 community takeover can move it
-> after a 3-day delay), and the creator share is **not** fixed at 70% (it is per-factory and
-> already changed once, from 90% on the legacy factory).
+> The problem was different and worse: fees arrive as **`token0` and `token1` ERC20**, and this
+> contract split **native ETH only**. It would have accepted the transfers — any address can
+> hold ERC20 — and had no function able to move them out again, stranding every creator's fees
+> permanently. Rewritten with `splitERC20`, a per-token claimable ledger, and a reentrancy
+> guard. **The rule that follows: any future change must keep an exit path for every asset
+> this contract can receive.** A contract that can be paid in something it cannot pay out is
+> the failure mode here, and it is invisible until real money is in it.
 
 ## 7. This has been tested carefully, not formally audited
 
-Every module above has automated tests (67 total across contracts + backend at the time of
-writing) covering the happy path, edge cases, and adversarial scenarios described above. That
+Every module above has automated tests (150 across contracts + backend at the time of
+writing, 200 including the website) covering the happy path, edge cases, and adversarial
+scenarios described above. That
 is meaningfully more scrutiny than shipping untested code, but it is not the same thing as a
 professional smart-contract audit. Per the project's own implementation roadmap (Part 11),
 `FeeSplitter.sol` and the treasury signer flow MUST be exercised end-to-end on Robinhood Chain
