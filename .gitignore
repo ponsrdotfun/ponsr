@@ -77,3 +77,9 @@ desktop.ini
 # ---------------------------------------------------------------------------
 .claude/settings.local.json
 .claude/skills/
+
+# ---------------------------------------------------------------------------
+# NETLIFY — .netlify holds the machine's link to the deployed site (site id and
+# local state). Added by `netlify sites:create`; it is per-machine, not source.
+# ---------------------------------------------------------------------------
+.netlify
