@@ -593,3 +593,38 @@ a test proved a hostile token could re-enter `splitERC20` and skew the split to 
   wiring is unexamined.
 - The email to `contact@ponsfamily.com` no longer blocks anything, but a reply is still worth
   having on the protocol fee share.
+
+---
+
+## 9.7 ⚠️ pons is NOT deployed on Robinhood Chain testnet (verified 2026-08-04)
+
+The roadmap's Phase 1 says "prove the loop on testnet first". For anything involving pons,
+**that is not possible**, and nobody had checked before building the plan around it.
+
+```
+POST https://rpc.testnet.chain.robinhood.com  eth_chainId  -> 0xb626 (46630)  ✅ chain is alive
+POST …                                        eth_getCode(0xA5aAb…1feB) -> 0x  ❌ no contract
+```
+
+The testnet chain runs. The pons factory is simply not on it.
+
+**What this changes:**
+
+- **`FeeSplitter.sol` can still be fully validated on testnet**, because it does not depend on
+  pons at all: deploy it, deploy a mock ERC20, transfer some in, call `splitERC20`, confirm
+  95/5. That covers the only contract that will ever hold user money, at zero cost.
+- **The launch path cannot.** `launchToken` only exists on mainnet.
+
+**The resulting plan (agreed 2026-08-04) — Phase B:** one controlled mainnet launch with
+`creator == treasury == the operator's own address`, so the only fees at stake belong to the
+operator. `backend/scripts/phase-b-launch.ts` performs it: dry run by default, `--execute` to
+send, and it preflights every guard the factory applies (`launchEnabled`, whitelist, launch
+config, dex config, live fee against the ceiling, balance against fee + gas reserve) before
+spending anything.
+
+Two properties of that shape matter:
+
+- `FeeSplitter` is **immutable**. If it is wrong, a self-dealt launch is the run where that
+  costs nothing belonging to a user, and the next launch can use a corrected deployment.
+- The token is **real and permanent**, on a public launchpad, under this brand. That is the
+  actual price of this step, and it is not refundable.
