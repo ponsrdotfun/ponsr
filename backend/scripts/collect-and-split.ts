@@ -127,6 +127,18 @@ async function main() {
   console.log();
 
   console.log('2  splitter.splitERC20() for each token...');
+  // The split ratio is read from the contract's own event, not from balance deltas.
+  //
+  // Balance deltas are wrong whenever creator == treasury, which is exactly the Phase B
+  // shape: the same address is credited twice, and the arithmetic reports a 50/50 split of a
+  // correct 95/5 one. That is a measuring error that looks precisely like a contract bug, and
+  // it produced a false alarm on the first real run. The event carries both amounts
+  // separately and is what the contract actually did.
+  const splitEvents: Record<string, { total: bigint; creator: bigint; treasury: bigint }> = {};
+  const splitterIface = new ethers.Interface([
+    'event ERC20FeesSplit(address indexed erc20, uint256 totalAmount, uint256 creatorAmount, uint256 treasuryAmount)',
+  ]);
+
   for (const t of tracked) {
     const sym = await new ethers.Contract(t, ERC20_ABI, provider).symbol();
     if (afterCollect[t] === 0n) {
@@ -137,6 +149,20 @@ async function main() {
       const tx = await split.splitERC20(t);
       const receipt = await tx.wait();
       line(sym, `split in ${receipt.hash}`);
+      for (const log of receipt.logs) {
+        try {
+          const parsed = splitterIface.parseLog({ topics: log.topics, data: log.data });
+          if (parsed?.name === 'ERC20FeesSplit') {
+            splitEvents[t] = {
+              total: parsed.args.totalAmount,
+              creator: parsed.args.creatorAmount,
+              treasury: parsed.args.treasuryAmount,
+            };
+          }
+        } catch {
+          /* a log from the token contract, not ours */
+        }
+      }
     } catch (err: any) {
       line(sym, `failed: ${err?.shortMessage ?? err?.message}`);
     }
@@ -150,23 +176,39 @@ async function main() {
     treasury: await balances(provider, tracked, treasury),
   };
 
+  const selfDealt = creator.toLowerCase() === treasury.toLowerCase();
+  if (selfDealt) {
+    console.log('  (creator and treasury are the same address -- a Phase B validation launch.');
+    console.log('   Ratios below come from the split event, since balance deltas cannot');
+    console.log('   distinguish two credits to one wallet.)');
+    console.log();
+  }
+
   let allGood = true;
   for (const t of tracked) {
     const sym = await new ethers.Contract(t, ERC20_ABI, provider).symbol();
-    const toCreator = after.creator[t] - before.creator[t];
-    const toTreasury = after.treasury[t] - before.treasury[t];
+    const ev = splitEvents[t];
     const left = after.splitter[t];
-    const total = toCreator + toTreasury;
-    if (total === 0n && left === 0n) continue;
+    const received = after.creator[t] - before.creator[t];
+    if (!ev && left === 0n && received === 0n) continue;
 
     console.log(`  ${sym}`);
-    line('  -> creator', `${ethers.formatUnits(toCreator, 18)}`);
-    line('  -> treasury', `${ethers.formatUnits(toTreasury, 18)}`);
+    if (ev) {
+      line('  total split', ethers.formatUnits(ev.total, 18));
+      line('  -> creator', ethers.formatUnits(ev.creator, 18));
+      line('  -> treasury', ethers.formatUnits(ev.treasury, 18));
+    }
     line('  left in splitter', `${ethers.formatUnits(left, 18)}`);
-    if (total > 0n) {
-      const creatorPct = Number((toCreator * 10000n) / total) / 100;
+    if (ev && ev.total > 0n) {
+      const creatorPct = Number((ev.creator * 10000n) / ev.total) / 100;
       line('  creator share', `${creatorPct}%   (expected 95%)`);
       if (creatorPct < 94.9 || creatorPct > 95.1) allGood = false;
+      // The rounding invariant: the two shares must reconstitute the whole exactly, or the
+      // difference is dust left in an immutable contract.
+      if (ev.creator + ev.treasury !== ev.total) {
+        line('  ⚠️ shares do not sum', 'to the total');
+        allGood = false;
+      }
     }
     // Anything left behind in an immutable contract is stranded, unless it is a queued claim.
     if (left > 0n) {

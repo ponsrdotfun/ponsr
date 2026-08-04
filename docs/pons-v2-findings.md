@@ -796,3 +796,50 @@ The stranded funds are unrecoverable; the token and its splitter stay as they ar
 Phase B run with a correctly-deployed splitter is needed before the fee path can be called
 proven. `collectFees` is already demonstrated to work — it is only the split that has not run
 against real fees.
+
+---
+
+## 9.11 ✅ THE FEE PATH IS PROVEN — real money, end to end (2026-08-04)
+
+Second Phase B run, with a correctly-deployed splitter this time. The bytecode guard added
+after §9.10 confirmed it before launching: `splitERC20 in code: present ✅`.
+
+| | |
+|---|---|
+| Token | `0x8aE999C51b0b001A8A2bD2D7884323AEB744216f` (`PONSRHOOD2`) |
+| Pool | `0x3fDEA27e33211E7Ace831Db80D28e300f68eDD49` |
+| FeeSplitter | `0xd80580634Bd5Eb3484C52eCEcE6a497C68a5eC87` |
+| `collectFees` tx | `0xc2477ee28e859f3e091f74a24d56781e7d7b70733fa3990552a4190f3caafdac` |
+| `splitERC20` tx | `0xe37b6e302f67bb14457560657a8a86b73a5b6967db130b63c454f504f611e380` |
+
+A real buy generated real fees. From the contract's own `ERC20FeesSplit` event:
+
+```
+total     0.00003465    WETH
+creator   0.0000329175  WETH   = 95%
+treasury  0.0000017325  WETH   =  5%
+sum == total, nothing left in the splitter
+```
+
+**Every link in the chain is now demonstrated rather than inferred:**
+
+1. `launchToken` accepted by the real factory — §9.9
+2. `feeRedirects[token]` set to our splitter by the factory — §9.9
+3. Trading fees accrue to the locked Uniswap v3 position
+4. `collectFees` authorises the treasury as `deployer` and **pushes ERC20 out** — §9.10, §9.11
+5. `splitERC20` divides it **95/5 exactly, with no remainder** — §9.11
+
+Only `PONSRHOOD2`'s WETH side had fees: the trade was a buy, so the fee was taken in the input
+token. A sell would produce fees on the token side. Both paths use the same code.
+
+### A false alarm worth recording
+
+The verification script first reported a **50/50 split**. The contract was correct; the script
+was not. Phase B sets `creator == treasury`, so measuring by balance delta credits the same
+wallet twice and halves the apparent ratio — an arithmetic error that looks exactly like a
+contract bug, on the one run where a contract bug was most plausible.
+
+It now reads the ratio from the `ERC20FeesSplit` event, which carries both amounts separately
+and reports what the contract actually did. **A verification tool that cannot distinguish
+"wrong" from "measured wrong" is not a verification tool**, and this one nearly caused a
+correct result to be thrown away.
