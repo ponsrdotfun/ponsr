@@ -31,27 +31,35 @@ minutes. If you see `[treasury/error]`, the hot/cold split is not actually prote
 is running out; it carries the amount and both addresses, and bridging takes ~10 minutes, so it
 is not an alert to sit on.
 
-## 3. Pull the real pons factory ABI before trusting any launch
+## 3. The pons factory ABI is already pulled and verified
 
-> **Read `docs/pons-v2-findings.md` first.** The placeholder in `src/ponsEncoder.ts` is not
-> merely unverified — it is now known to be wrong in every parameter. The official docs publish
-> v2's interface in full, and verification on 2026-07-30 confirmed v2's factory **is** deployed
-> and its published ABI matches the deployed bytecode — but `launchEnabled()` reads `false` and
-> no pair token is approved, so nothing can launch there yet. v1 is open but its launch
-> signature is published nowhere. Decide which version you are targeting (open question #17) before
-> spending time on the encoder, and consider emailing `contact@ponsfamily.com` — they offer
-> integrator support and that is the shortest path to the signature.
+**Resolved 2026-08-04.** The verified ABIs for both live v1 contracts are checked in at
+`src/abi/ponsLaunchFactory.json` and `src/abi/ponsLaunchLocker.json`, and `ponsEncoder.ts`
+encodes against them. There is nothing to do here before Phase 1.
 
-The ABI in `src/ponsEncoder.ts` is a documented placeholder. Before Phase 1 testnet runs are
-meaningful, pull the real one:
+They came from the chain's own Blockscout instance, whose API needs **no key**:
 
 ```bash
-curl "https://api.blockscout.com/4663/api/v2/smart-contracts/0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB?apikey=$BLOCKSCOUT_API_KEY" | jq '.abi' > pons-factory-abi.json
+curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB"
 ```
 
-Compare the real `launchToken` (or whatever it's actually named) signature against
-`PONS_FACTORY_ABI_FRAGMENT` in `src/ponsEncoder.ts` and update it to match exactly --
-parameter order, types, and the function name itself.
+Earlier notes sent everyone to `api.blockscout.com/4663/...` — the Pro aggregator, which does
+need a key — so this read as blocked on an account signup for weeks. If you ever need to
+re-pull (say pons deploys a new factory), use the URL above, not the aggregator.
+
+To re-check that the deployed contract still matches what is checked in, the probe script
+reads the factory's live state — fee, `launchEnabled`, and the launch configs:
+
+```bash
+node ../scripts/probe-pons-v1.js    # the live factory the bot targets
+node ../scripts/probe-pons-v2.js    # v2, for when it eventually opens
+```
+
+Run the v1 probe before any testnet session. If `launchEnabled()` has gone `false`, or the
+launch config's `pairToken` or `graduationThreshold` has moved, the bot's assumptions have
+changed underneath it — `validator.ts` will refuse launches rather than burn gas, but you
+want to know why.
+
 
 ## 4. Run the test suite
 
@@ -59,7 +67,7 @@ parameter order, types, and the function name itself.
 npm test
 ```
 
-All 54 backend tests should pass. This runs entirely against mocks -- no real API keys,
+All 122 backend tests should pass. This runs entirely against mocks -- no real API keys,
 no real chain, no real money, per the design in `tests/orchestrator.test.ts`.
 
 ## 5. Run the parser eval set against the real model (requires ANTHROPIC_API_KEY)
@@ -76,15 +84,16 @@ Phase 1, and again any time the system prompt in `src/parser.ts` changes.
 ## 6. Compile the contract and run its test suite
 
 ```bash
-cd ../contracts-workspace  # or wherever contracts/ + contracts-test/ ended up relative to you
+cd ..                 # repo root
 node compile-all.js
-npx hardhat test --no-compile
+cd contracts-test && npx hardhat test --no-compile
 ```
 
-All 13 contract tests should pass, including the reentrancy-attack and forward-failure
-scenarios. See `contracts/README.md` for why `--no-compile` is required in sandboxed network
-environments and how to compile normally (with Hardhat's own solc downloader) once you have
-unrestricted network access.
+All 28 contract tests should pass, covering both fee paths (ERC20 and ETH), two reentrancy
+attacks, a blacklisted recipient, and the tokens that break naive splitters -- ones returning
+no data, and ones reporting failure by returning `false`. See `contracts-test/README.md` for
+why `--no-compile` is used here and how to compile normally with Hardhat's own solc
+downloader once you have unrestricted network access.
 
 ## 7. Build for production
 
