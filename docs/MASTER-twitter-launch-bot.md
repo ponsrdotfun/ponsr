@@ -1049,7 +1049,7 @@ These don't depend on each other much and can happen in parallel, but nothing in
 
 | # | Action | Why it blocks everything else |
 |---|---|---|
-| **0.0** | **Decide which pons version the bot targets — v1 or v2** (open question #17) | v1 is live but its launch signature is unpublished; v2's interface is fully documented but the factory **is not deployed** and it is **unaudited**. Every line of encoder work depends on this answer, and neither option is obviously right |
+| ~~**0.0**~~ | ~~Decide which pons version the bot targets~~ | **✅ Decided 2026-08-04: v1.** Its verified source was read directly — open, fee model understood, no whitelisting needed. v2 is deployed but `launchEnabled` is false and it is unaudited. The encoder is built against v1's real ABI |
 | **0.1** | **Email `contact@ponsfamily.com`** — the docs offer hands-on integrator support. Ask three things: the v1 `launchToken` signature, whether a *contract* can hold the creator-fee role and pull its own rewards, and whether the treasury address needs whitelisting | This is now the shortest path to the project's single biggest blocker. The signature is published nowhere, and the fee-claim answer decides whether `FeeSplitter.sol` is usable at all |
 | 0.2 | Get a Blockscout Pro API key (`dev.blockscout.com`) and pull the factory ABI (v1 active factory: `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB`) | Still required — the docs confirm the addresses but publish no launch signature. Note the placeholder in `ponsEncoder.ts` is now known wrong in every parameter |
 | 0.3 | Sign up for twitterapi.io, claim the $1 free trial credit | Needed to build and test the listener before spending real money |
@@ -1115,7 +1115,7 @@ a cold wallet there is no split, and the boot check refuses to call the setup he
 
 **Build, in this order:**
 1. Set up the treasury signer on Turnkey, scoped via policy to only call `launchToken()` on the Pons factory address — nothing else
-2. ⚠️ **Resolve open question #18 before touching the splitter at all.** `FeeSplitter.sol` is written and its 13 tests pass, but it can only *receive* value passively. If pons requires the fee recipient to actively pull (v2 definitely does, v1 is undocumented), the splitter as written would strand every user's fees. It needs a claim path first — or the fee model needs a different shape entirely
+2. ✅ **Open question #18 is closed and the splitter is rewritten.** Fees are pushed as ERC20, not escrowed, and a contract may be the recipient — but the ETH-only splitter would have stranded every user's fees anyway. `splitERC20` (28 tests) is the fix. It has still never been deployed anywhere, so the testnet validation below is the next real step
 3. Only then: deploy and test the splitter on testnet end-to-end — launch a token with the splitter as the creator-fee recipient → generate test trading activity → **claim by whatever mechanism the ABI actually exposes** → confirm the 95/5 split lands correctly in both wallets. Do not assume `collectFees()`; that name came from our own research, not from pons
 4. Implement every Part 5 mitigation as first-class code, not an afterthought:
    - Anti-Sybil checks (X account age, follower count thresholds)
@@ -1201,9 +1201,9 @@ The full implementation described throughout this spec has been built: the FeeSp
 contract, the backend bot service, and the launch-board website (branded **Ponsr**; the
 project was originally called Holdfast).
 
-**166/166 automated checks passing**: 13 contract tests (including a live
-reentrancy attack simulation), 108 backend tests (unit + full pipeline integration, every
-external dependency mocked), 45 website smoke-test checks.
+**200/200 automated checks passing**: 28 contract tests (including two live
+reentrancy attacks), 122 backend tests (unit + full pipeline integration, every
+external dependency mocked), 50 website smoke-test checks.
 
 **What's real and tested vs. what's a stub waiting on your credentials** is documented in
 full, honestly, in `BUILD-STATUS.md` inside the delivered package -- short version: all logic
@@ -1263,7 +1263,12 @@ session.
 
 ## D. Raised by the official Pons v2 docs (2026-07-30) — see `docs/pons-v2-findings.md`
 
-17. **Target Pons version — decide before any further encoder work.**
+17. ~~**Target pons version — decide before any further encoder work.**~~
+    **✅ CLOSED 2026-08-04: target v1.** The verified v1 source was read directly and it is
+    open — `launchEnabled()` is `true`, one launch config is live (WETH pair, 4.2 ETH
+    graduation), and whitelisting is not required. v2 remains deployed-and-closed and
+    unaudited. See `docs/pons-v2-findings.md` §9. Historical reasoning kept below.
+
     **Updated 2026-07-30 after checking the chain, not the docs:** v2 **is deployed** —
     factory `0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8` carries 22.7 KB of bytecode, and its
     published ABI was confirmed against it by successfully reading `launchFee()` (0.0005 ETH,
@@ -1276,7 +1281,14 @@ session.
     migrate, or wait for pons to open v2" — with the encouraging detail that v2's interface is
     real and verifiable rather than hypothetical.
 
-22. **Design `pairToken` as a first-class parameter, not a hardcoded zero.** v2 supports
+22. ~~**Design `pairToken` as a first-class parameter, not a hardcoded zero.**~~
+    **✅ CLOSED 2026-08-04 for v1: it is not a launch parameter at all.** In v1 the pair token
+    lives inside the launch config, so the bot selects it by `launchConfigId` — config 0 pairs
+    against WETH. The stock-pairing idea below remains a v2 design-ahead note, and the warning
+    that the creator (and so our 5%) is paid in the pairing asset turns out to apply to v1
+    too: fees arrive as the launched token plus the pair token, never as ETH. Historical:
+
+    v2 supports
     launching against an approved ERC-20 instead of ETH — the docs' own example is a
     **tokenised stock**, which on Robinhood Chain is a genuinely distinctive thing to offer
     from a tweet (Part 2 found hoodr differentiating on stock *rewards*; this would be stock
@@ -1286,11 +1298,24 @@ session.
     a launch must raise. Nothing is approved for pairing yet, so this is design-ahead, not
     build-now.
 
-23. **Read `launchEnabled()` and `approvedPairTokens()` live before every launch.** Both are
-    owner-controlled switches that are currently off. Attempting a launch while disabled
-    reverts and the treasury still pays gas, so these belong in `validator.ts` next to the
-    existing live `launchFee()` read — not discovered at transaction time.
-18. **`FeeSplitter.sol` cannot be trusted as a fee recipient on either version yet.** v2
+23. ~~**Read `launchEnabled()` and `approvedPairTokens()` live before every launch.**~~
+    **✅ CLOSED 2026-08-04 — implemented.** `chainClient.getLaunchReadiness()` reads
+    `launchEnabled()`, `whitelistedLaunchers(treasury)` and the chosen launch config's
+    `enabled` flag, and `validator.ts` rejects with `LAUNCHPAD_UNAVAILABLE` before anything is
+    spent. Checked last of all the guards, since it is the only one that needs the network —
+    a test asserts a too-new account never triggers the call.
+18. ~~**`FeeSplitter.sol` cannot be trusted as a fee recipient on either version yet.**~~
+    **✅ CLOSED 2026-08-04 — the contract was broken, though not for this reason.** The
+    verified v1 locker **pushes** fees to `feeRedirects[token]`; there is no escrow to pull
+    from on v1, and any contract may be the recipient. The treasury is always authorised to
+    call `collectFees(token)` because it is `launched.deployer`.
+
+    The real defect was that fees arrive as **`token0`/`token1` ERC20** and the splitter
+    handled **native ETH only** — it could have received them and never moved them out.
+    Rewritten with `splitERC20`, a per-token claimable ledger and a reentrancy guard (28
+    tests). The v2 escrow concern below still stands *for v2*. Historical text kept:
+
+    v2
     credits fees to an escrow the *recipient* must pull from (`claim()` / `claimToken()`), and
     the splitter has no way to call anything — fees routed to it would be stranded. For v1 the
     docs say only that "the creator can claim them at any time", naming no function and no
