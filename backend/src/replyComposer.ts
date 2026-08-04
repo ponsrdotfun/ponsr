@@ -51,6 +51,10 @@ export function composeRejectionReply(reason: RejectionReason, detail?: string):
       // (The balance is readable on-chain by anyone, so this is not a secret; it is just not
       // something to hand an attacker a live readout of, one rejected tweet at a time.)
       return "Launches are paused while the treasury is topped up -- nothing was charged to you. Try again shortly and it'll go through.";
+    case 'LAUNCHPAD_UNAVAILABLE':
+      // The cause is on pons's side, so promising a specific timeframe would be a promise we
+      // cannot keep. Say what is true: not your request, not chargeable, try later.
+      return "The launchpad isn't accepting new launches right now. Nothing was charged to you -- this is upstream of us, so try again later.";
     case 'DUPLICATE_TWEET':
       return ''; // Silent -- this is a retry/duplicate delivery, not a new user-facing event.
     default:

@@ -91,6 +91,9 @@ describe('validateLaunchRequest', () => {
   // A comfortably funded hot wallet, so the Part 5 #7 admission check is not what
   // any of the other cases below are actually testing.
   const getTreasuryBalanceWei = async () => 50_000_000_000_000_000n; // 0.05 ETH
+  // pons's factory is open and the configured launch config is live -- the normal case,
+  // so it is not what any of the other cases below are testing.
+  const getLaunchReadiness = async () => ({ canLaunch: true, launchConfigUsable: true });
 
   beforeEach(() => {
     db = freshDb();
@@ -105,6 +108,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(true);
     expect(result.sanitized).toEqual({ tokenName: 'Moon Coin', tokenSymbol: 'MOON', description: 'a fun community token' });
@@ -115,7 +119,7 @@ describe('validateLaunchRequest', () => {
       goodIntent({ isLaunchIntent: false }),
       'user1',
       'tweet1',
-      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei }
+      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }
     );
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('NOT_LAUNCH_INTENT');
@@ -126,7 +130,7 @@ describe('validateLaunchRequest', () => {
       goodIntent({ confidence: 'low', tokenSymbol: null }),
       'user1',
       'tweet1',
-      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei }
+      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }
     );
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('LOW_CONFIDENCE');
@@ -137,7 +141,7 @@ describe('validateLaunchRequest', () => {
       goodIntent({ tokenName: null }),
       'user1',
       'tweet1',
-      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei }
+      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }
     );
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('MISSING_REQUIRED_FIELD');
@@ -148,7 +152,7 @@ describe('validateLaunchRequest', () => {
       goodIntent({ tokenSymbol: null }),
       'user1',
       'tweet1',
-      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei }
+      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }
     );
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('MISSING_REQUIRED_FIELD');
@@ -160,6 +164,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => NEW_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('ACCOUNT_TOO_NEW');
@@ -171,6 +176,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => LOW_FOLLOWER_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('INSUFFICIENT_FOLLOWERS');
@@ -200,6 +206,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('RATE_LIMIT_USER');
@@ -211,6 +218,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei: async () => 999_000_000_000_000_000n, // absurdly high fee
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('FEE_EXCEEDS_CEILING');
@@ -224,6 +232,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('DAILY_SPEND_CAP_REACHED');
@@ -238,6 +247,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei: async () => 0n,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('TREASURY_EXHAUSTED');
@@ -253,6 +263,7 @@ describe('validateLaunchRequest', () => {
       getAccountSignals: async () => OLD_ACCOUNT,
       getLiveFeeWei,
       getTreasuryBalanceWei, // wallet is full; only the policy cap is hit
+      getLaunchReadiness,
     });
     expect(capped.reason).toBe('DAILY_SPEND_CAP_REACHED');
   });
@@ -266,8 +277,67 @@ describe('validateLaunchRequest', () => {
       getLiveFeeWei,
       // gas reserve (0.002) + 2 launch fees
       getTreasuryBalanceWei: async () => 2_000_000_000_000_000n + 1_000_000_000_000_000n,
+      getLaunchReadiness,
     });
     expect(result.approved).toBe(true);
+  });
+
+  it('CRITICAL: refuses when pons has launching switched off -- open question #23', async () => {
+    // The factory's own guard is `if (!launchEnabled && !whitelistedLaunchers[msg.sender])
+    // revert NotWhitelisted()`. Both sides are pons-controlled and can flip without notice.
+    // Without reading them first, the bot finds out by sending a transaction that must
+    // revert: the user gets a meaningless failure and the treasury still pays the gas.
+    const result = await validateLaunchRequest(goodIntent(), 'user1', 'tweet1', {
+      db,
+      getAccountSignals: async () => OLD_ACCOUNT,
+      getLiveFeeWei,
+      getTreasuryBalanceWei,
+      getLaunchReadiness: async () => ({
+        canLaunch: false,
+        launchConfigUsable: true,
+        reason: 'launchEnabled is false and this launcher is not whitelisted',
+      }),
+    });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('LAUNCHPAD_UNAVAILABLE');
+    expect(result.detail).toMatch(/whitelist/i);
+  });
+
+  it('refuses when the configured launch config has been disabled', async () => {
+    // A separate factory guard (`LaunchConfigDisabled`), and a separate failure: launching
+    // is open, but the specific config carrying the pair token and graduation threshold is
+    // off. Same outcome for the user, different thing for the operator to go and fix.
+    const result = await validateLaunchRequest(goodIntent(), 'user1', 'tweet1', {
+      db,
+      getAccountSignals: async () => OLD_ACCOUNT,
+      getLiveFeeWei,
+      getTreasuryBalanceWei,
+      getLaunchReadiness: async () => ({
+        canLaunch: true,
+        launchConfigUsable: false,
+        reason: 'launch config 0 is disabled',
+      }),
+    });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toBe('LAUNCHPAD_UNAVAILABLE');
+  });
+
+  it('does not reach the launchpad check when a cheaper guard already rejected', async () => {
+    // Ordering matters: the readiness read costs an RPC round trip, so everything
+    // deterministic must reject first. A brand-new account should never cause a network call.
+    let asked = false;
+    const result = await validateLaunchRequest(goodIntent(), 'user2', 'tweet1', {
+      db,
+      getAccountSignals: async () => NEW_ACCOUNT,
+      getLiveFeeWei,
+      getTreasuryBalanceWei,
+      getLaunchReadiness: async () => {
+        asked = true;
+        return { canLaunch: true, launchConfigUsable: true };
+      },
+    });
+    expect(result.reason).toBe('ACCOUNT_TOO_NEW');
+    expect(asked).toBe(false);
   });
 
   it('rejects and sanitizes-away unsafe characters rather than passing them through', async () => {
@@ -275,7 +345,7 @@ describe('validateLaunchRequest', () => {
       goodIntent({ tokenName: 'Evil<img src=x>Coin' }),
       'user1',
       'tweet1',
-      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei }
+      { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }
     );
     expect(result.approved).toBe(false);
     expect(result.reason).toBe('FAILED_SANITIZATION');

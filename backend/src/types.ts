@@ -33,6 +33,10 @@ export type RejectionReason =
    *  DAILY_SPEND_CAP_REACHED: that one is a policy pause with funds still available,
    *  this one is the wallet actually being out of money. */
   | 'TREASURY_EXHAUSTED'
+  /** pons's own factory would refuse the launch: `launchEnabled` is off and we are not a
+   *  whitelisted launcher, or the configured launch config is disabled. Nothing to do with
+   *  us -- but sending anyway costs gas on a transaction that must revert. */
+  | 'LAUNCHPAD_UNAVAILABLE'
   | 'DUPLICATE_TWEET';
 
 export interface ValidationResult {

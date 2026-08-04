@@ -58,6 +58,15 @@ export interface ValidatorDeps {
    * making it required means the compiler asks the question instead.
    */
   getTreasuryBalanceWei: () => Promise<bigint>;
+  /**
+   * Asks pons's factory whether it would accept a launch from us right now.
+   *
+   * Its guards (`launchEnabled`, the whitelist, and whether the configured launch config is
+   * enabled) are all owner-controlled on pons's side and can flip without warning. Reading
+   * them costs one call and no gas; finding out by sending a transaction costs gas on a
+   * revert and hands the user a meaningless failure.
+   */
+  getLaunchReadiness: () => Promise<{ canLaunch: boolean; launchConfigUsable: boolean; reason?: string }>;
   /** Defaults to the config-derived policy; injectable so tests can exercise the
    *  thresholds without rewriting the environment. */
   treasuryPolicy?: TreasuryPolicy;
@@ -129,6 +138,18 @@ export async function validateLaunchRequest(
   const admission = canAdmitLaunch(assessment);
   if (!admission.ok) {
     return { approved: false, reason: 'TREASURY_EXHAUSTED', detail: admission.detail };
+  }
+
+  // -- Would pons accept this launch at all? (master doc open question #23) --
+  // Last, because it is the one guard whose answer belongs to somebody else. Everything above
+  // is a decision this project makes; this is pons's factory telling us its door is shut.
+  const readiness = await deps.getLaunchReadiness();
+  if (!readiness.canLaunch || !readiness.launchConfigUsable) {
+    return {
+      approved: false,
+      reason: 'LAUNCHPAD_UNAVAILABLE',
+      detail: readiness.reason ?? 'the pons factory would refuse this launch',
+    };
   }
 
   return {
