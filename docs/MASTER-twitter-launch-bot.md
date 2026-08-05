@@ -1115,7 +1115,7 @@ a cold wallet there is no split, and the boot check refuses to call the setup he
 
 **Build, in this order:**
 1. Set up the treasury signer on Turnkey, scoped via policy to only call `launchToken()` on the Pons factory address — nothing else
-2. ✅ **Open question #18 is closed and the splitter is rewritten.** Fees are pushed as ERC20, not escrowed, and a contract may be the recipient — but the ETH-only splitter would have stranded every user's fees anyway. `splitERC20` (28 tests) is the fix. It has still never been deployed anywhere, so the testnet validation below is the next real step
+2. ✅ **Open question #18 is closed, the splitter is rewritten, and the fee path is proven on mainnet.** Fees are pushed as ERC20, not escrowed, and a contract may be the recipient — but the ETH-only splitter would have stranded every user's fees anyway. `splitERC20` (28 tests) is the fix, and on 2026-08-04 it collected real trading fees from a real launch and split them **95/5 exactly**. Note the roadmap's testnet-first sequencing does not work for the launch path: pons has no testnet deployment. See `docs/pons-v2-findings.md` §9.7–9.11
 3. Only then: deploy and test the splitter on testnet end-to-end — launch a token with the splitter as the creator-fee recipient → generate test trading activity → **claim by whatever mechanism the ABI actually exposes** → confirm the 95/5 split lands correctly in both wallets. Do not assume `collectFees()`; that name came from our own research, not from pons
 4. Implement every Part 5 mitigation as first-class code, not an afterthought:
    - Anti-Sybil checks (X account age, follower count thresholds)
@@ -1201,8 +1201,8 @@ The full implementation described throughout this spec has been built: the FeeSp
 contract, the backend bot service, and the launch-board website (branded **Ponsr**; the
 project was originally called Holdfast).
 
-**200/200 automated checks passing**: 28 contract tests (including two live
-reentrancy attacks), 122 backend tests (unit + full pipeline integration, every
+**209/209 automated checks passing**: 28 contract tests (including two live
+reentrancy attacks), 131 backend tests (unit + full pipeline integration, every
 external dependency mocked), 50 website smoke-test checks.
 
 **What's real and tested vs. what's a stub waiting on your credentials** is documented in

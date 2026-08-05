@@ -9,9 +9,10 @@ survives in historical notes.
 
 ## Read these first, in this order
 
-1. **`docs/pons-v2-findings.md`** — the official pons docs were located on 2026-07-30 and they
-   invalidate several assumptions the rest of this repo was written against. Read this before
-   trusting anything below about the on-chain interface, the fee model, or the launch fee.
+1. **`docs/pons-v2-findings.md` — start at §9.** Sections 1–8 are what was believed from
+   documentation; §9 onward is what the verified contracts and two real mainnet launches
+   actually showed. Where they disagree, §9 wins. §9.10 is an incident report worth reading
+   before touching the deploy path.
 2. `BUILD-STATUS.md` — what's real/tested vs. a clearly-marked stub right now.
 3. `docs/action-checklist.md` — everything that requires the owner's direct action (account
    signups, API keys, emails). Nothing here should be "completed" past a stub without the
@@ -64,30 +65,45 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
 - **Guards are read live before every launch** (`getLaunchReadiness()`), because
   `launchEnabled`, the whitelist, and the launch config are all owner-settable on pons's side.
 
-Still open: the treasury's 5% arrives as **tokens, not ETH** — no decision has been made about
-converting or holding it. And the locker's `protocolFeeShare` takes a cut first, so "creator
-keeps 95%" means 95% of what reaches the splitter. See `docs/pons-v2-findings.md` §9.6.
+### The on-chain path is finished and proven (2026-08-04)
+
+Two self-dealt mainnet launches were run. The second collected real trading fees and split
+them **95/5 exactly, nothing left behind** — verified from the contract's own
+`ERC20FeesSplit` event. Every link is now demonstrated: `launchToken` accepted, `feeRedirects`
+wired, `collectFees` authorised for the treasury as `deployer`, `splitERC20` correct.
+
+Two hard-won guards came out of it, and both must stay:
+
+- **`compile-all.js` writes `backend/src/feeSplitterArtifact.json`.** It used to be a hand-made
+  copy, went stale through the ERC20 rewrite, and the first mainnet launch deployed the
+  **old ETH-only splitter**. Its fees are stranded forever. Every test had passed — they read
+  the *other* copy. A rehearsal that skips the production deploy path proves less than it looks.
+- **`phase-b-launch.ts` reads `splitERC20`'s selector back out of the deployed bytecode** and
+  aborts if absent. It is the only check a stale build cannot fool.
+
+Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key),
+`validate-splitter.ts` (testnet rehearsal), `phase-b-launch.ts`, `collect-and-split.ts`.
 
 ## Immediate next actions
 
-Blocked on the owner — check before assuming any are done:
+Blocked on the owner. Nothing here is code:
 
 1. Wire up real Privy calls in `backend/src/walletResolver.ts` (stub throws with a TODO).
 2. Wire up real Turnkey calls in `backend/src/treasurySigner.ts` (stub throws with a TODO).
 3. Wire up real twitterapi.io calls in `backend/src/xClient.ts` (stub throws with a TODO).
 4. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
-5. Get testnet ETH, then run the Phase 1 end-to-end validation: deploy a splitter, launch,
-   generate trading fees, `collectFees`, `splitERC20`, and confirm 95/5 delivery to both
-   addresses. **`FeeSplitter.sol` is now unblocked for testnet** — the fee-claim question that
-   held it back is answered — but it has still never been deployed anywhere.
+5. Run the parser eval (`scripts/run-eval.ts`, 28 cases) once `ANTHROPIC_API_KEY` exists.
 
-The email to `contact@ponsfamily.com` no longer blocks anything. A reply is still worth having
-on the locker's `protocolFeeShare`, which takes a cut before our split.
+The email to `contact@ponsfamily.com` no longer blocks anything.
+
+**Undecided, and it is a product call:** the treasury's 5% arrives as **tokens and WETH, not
+ETH** — and the locker takes **30%** first, so the treasury's real take is **3.5% of trading
+fees, not 5%**. Any revenue model built on 5% is overstated by ~1.4×.
 
 ### Buildable right now, with no accounts needed — nothing left
 
-Every Part 5 / Part 7 requirement that was pure code is now built (see below). What remains
-is blocked on the owner's accounts or on pons's reply, not on writing more code.
+Every Part 5 / Part 7 requirement that was pure code is now built (see below), and the
+on-chain path is proven end to end. What remains is three account signups and a cold wallet.
 
 Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented.**
 

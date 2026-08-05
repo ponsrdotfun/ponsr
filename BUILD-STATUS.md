@@ -1,13 +1,17 @@
 # Build Status
 
-> **Read `docs/pons-v2-findings.md` first (added 2026-07-30).** The official pons docs were
-> located and then verified against the chain, and together they invalidate several assumptions
-> this file was written against — most seriously, `FeeSplitter.sol` cannot claim its own fees
-> under v2's pull-based escrow, and the placeholder launch ABI is wrong in every parameter.
-> v2's contracts **are** deployed (the docs' "no launch factory" line is stale), but
-> `launchEnabled()` reads `false` and no pair token is approved, so nothing can launch there
-> yet. The statuses below are accurate about *what was built and tested*; they are not
-> accurate about *what will work against pons*.
+> **The on-chain half of this project is finished and proven** (2026-08-04). Read
+> `docs/pons-v2-findings.md` §9 for the full record. Short version:
+>
+> - The verified v1 source was read directly, settling the launch signature, the fee model,
+>   and whitelisting — none of which needed the reply from pons everyone was waiting on.
+> - Two real mainnet launches were performed, self-dealt. The second collected real trading
+>   fees and **split them 95/5 exactly, with nothing left behind**.
+> - `FeeSplitter.sol` was broken — not for the escrow reason feared, but because pons pays in
+>   **ERC20** and it handled only native ETH. Rewritten and now proven on-chain.
+>
+> What remains is not on-chain work. It is three account signups (Privy, Turnkey,
+> twitterapi.io) and a cold wallet.
 
 Read this before anything else. Every component below is marked exactly as it stands — real
 and tested, or a clearly-marked stub. Nothing here is overstated.
@@ -29,8 +33,8 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 | Component | Status | Notes |
 |---|---|---|
 | `FeeSplitter.sol` | ✅ | 95/5 split, immutable, no admin function. **Rewritten 2026-08-04 for ERC20**, which is how pons actually pays creator fees — the locker pushes `token0`/`token1` from the launch's Uniswap v3 position and native ETH never appears. The previous ETH-only version would have accepted those transfers and had no function able to move them out again, stranding every creator's fees permanently. 28/28 tests, covering four token shapes (normal, no-return/USDT-style, false-return, reentrant), a blacklisted recipient, and a rounding invariant across seven awkward amounts. A reentrancy guard was added because a test proved a hostile token could re-enter `splitERC20` and skew the split to 99.75/0.25. |
-| Deployment to testnet | ✅ | **Deployed and exercised on Robinhood Chain testnet 2026-08-04** (`0x3599f4eA…83E1`). 1000 mock tokens split 950/50 to two distinct addresses with a zero balance left behind — the stranding failure, checked on a real chain rather than a Hardhat network. `splitERC20` costs 118,955 gas. This is the first time this bytecode has run anywhere but a test harness. The launch path could not be rehearsed alongside it because pons has no testnet deployment; see `docs/pons-v2-findings.md` §9.7–9.8. |
-| Professional audit | 🔴 | Not performed. Carefully written and thoroughly tested, but per `backend/docs/SECURITY-BOUNDARIES.md` item 7, that is not the same guarantee as a professional audit. The project's own roadmap requires end-to-end testnet validation before mainnet use — this was true before this build session and remains true now. |
+| Deployed & proven on-chain | ✅ | **Testnet 2026-08-04:** 1000 mock tokens split 950/50 with a zero balance left behind — the stranding failure, checked on a real chain rather than a Hardhat network. `splitERC20` costs 118,955 gas.<br><br>**Mainnet 2026-08-04:** two self-dealt Phase B launches. The second (`0xd80580…eC87`) received real trading fees from a real buy, and `splitERC20` divided **0.00003465 WETH into 95% / 5% exactly, summing to the total**. Read from the contract's own `ERC20FeesSplit` event, not from balance deltas — see the false alarm in §9.11.<br><br>The first mainnet launch deployed the **wrong version** of the splitter and its fees are stranded forever; that incident, its cause, and the two guards added because of it are in §9.10. It cost about $2 because Phase B is self-dealt by design. |
+| Professional audit | 🔴 | Not performed. Carefully written, thoroughly tested, and now exercised on mainnet with real fees — but per `backend/docs/SECURITY-BOUNDARIES.md` item 7 none of that is a professional audit. Worth weighing against what the on-chain runs actually found: the ERC20 defect was caught by reading pons's source, the reentrancy hole by writing a test, and the wrong-version deploy by an on-chain check. An audit is for the class of defect none of those would surface. |
 
 ## Backend
 
@@ -49,7 +53,7 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 | Orchestrator (`orchestrator.ts`) | ✅ | Full pipeline tested end-to-end with mocks for every external dependency, including the specific prompt-injection scenario from Part 9 and an on-chain-revert failure path. |
 | Reply composer (`replyComposer.ts`) | ✅ | Covered by orchestrator integration tests. |
 
-**Backend test suite: 122/122 passing.** Run `cd backend && npm test` to verify yourself.
+**Backend test suite: 131/131 passing.** Run `cd backend && npm test` to verify yourself.
 
 ## Website
 
@@ -72,7 +76,7 @@ Three client-side routes, each with a real URL so they can be linked, refreshed 
 ## What "no mistake, no bugs, no error" actually means here
 
 Every piece of logic in this build that *can* be tested without a live third-party account
-has been tested — 200 automated checks across contract, backend, and website, all passing,
+has been tested — 209 automated checks across contract, backend, and website, all passing,
 all re-runnable by you right now. Several real bugs were caught and fixed during this build
 process specifically because of that testing (a fake-address format bug in a test fixture, a
 foreign-key ordering issue in a test) — which is the point of testing: it's not a formality,

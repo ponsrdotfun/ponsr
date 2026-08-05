@@ -67,7 +67,7 @@ want to know why.
 npm test
 ```
 
-All 122 backend tests should pass. This runs entirely against mocks -- no real API keys,
+All 131 backend tests should pass. This runs entirely against mocks -- no real API keys,
 no real chain, no real money, per the design in `tests/orchestrator.test.ts`.
 
 ## 5. Run the parser eval set against the real model (requires ANTHROPIC_API_KEY)
