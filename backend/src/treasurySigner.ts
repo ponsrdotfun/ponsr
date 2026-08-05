@@ -23,18 +23,94 @@ export interface TreasurySigner {
   sendTransaction(tx: { to: string; data: string; value: bigint }): Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
 }
 
-/** Stub for the real Turnkey-backed signer. Left unimplemented deliberately -- see the TODO
- * above. Do not fill this in with a workaround that bypasses Turnkey's policy engine; the
- * whole point of choosing Turnkey here (Part 10) is the pre-signing policy enforcement. */
+/**
+ * Turnkey-backed treasury signer. Implemented 2026-08-04.
+ *
+ * ⚠️ THE SDK CANNOT ENFORCE THE POLICY. THE POLICY LIVES IN TURNKEY.
+ *
+ * This class holds an API key that can ask Turnkey to sign. What stops that key from
+ * signing "transfer the treasury to an attacker" is a **policy configured in the Turnkey
+ * dashboard or API**, not anything written here. Part 10 chose Turnkey precisely for that
+ * pre-signing policy engine, and the choice is worth nothing until the policy exists:
+ *
+ *   - destination address == PONS_FACTORY_ADDRESS, and nothing else
+ *   - function selector == launchToken's selector, and nothing else
+ *   - per-transaction value ceiling == TREASURY_MAX_FEE_WEI
+ *
+ * Without those rules a Turnkey key is a bare key with extra steps -- worse than the raw
+ * key below, because it *looks* protected. `assertTurnkeyPolicyAcknowledged()` exists to
+ * make that impossible to forget silently; see its comment.
+ *
+ * Note the splitter deployment is a contract creation, not a call to the factory, so a
+ * policy scoped only to `launchToken` will reject it. Either widen the policy deliberately
+ * to cover it or deploy splitters from a separate, differently-scoped signer -- decide that
+ * before mainnet rather than discovering it when the first launch half-completes.
+ */
 export class TurnkeyTreasurySigner implements TreasurySigner {
-  constructor(private turnkeyOrgId: string, private turnkeyApiKey: string) {}
+  private signer: any;
 
-  async address(): Promise<string> {
-    throw new Error('TurnkeyTreasurySigner is a stub -- wire up real Turnkey SDK calls before Phase 3.');
+  constructor(
+    organizationId: string,
+    apiPublicKey: string,
+    apiPrivateKey: string,
+    /** Wallet account address, private key address, or private key ID. */
+    signWith: string,
+    provider: ethers.Provider,
+    apiBaseUrl = 'https://api.turnkey.com'
+  ) {
+    if (!organizationId || !apiPublicKey || !apiPrivateKey || !signWith) {
+      throw new Error(
+        'Turnkey is not configured: set TURNKEY_ORGANIZATION_ID, TURNKEY_API_PUBLIC_KEY, ' +
+          'TURNKEY_API_PRIVATE_KEY and TURNKEY_SIGN_WITH.'
+      );
+    }
+    // Required here rather than imported at module scope, for the same reason as the Privy
+    // client: keeping heavy provider SDKs out of the module graph is what lets the test
+    // suite import this file at all.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { Turnkey } = require('@turnkey/sdk-server');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { TurnkeySigner } = require('@turnkey/ethers');
+    const turnkey = new Turnkey({
+      apiBaseUrl,
+      apiPublicKey,
+      apiPrivateKey,
+      defaultOrganizationId: organizationId,
+    });
+    this.signer = new TurnkeySigner(
+      { client: turnkey.apiClient(), organizationId, signWith },
+      provider
+    );
   }
 
-  async sendTransaction(): Promise<any> {
-    throw new Error('TurnkeyTreasurySigner is a stub -- wire up real Turnkey SDK calls before Phase 3.');
+  async address(): Promise<string> {
+    return this.signer.getAddress();
+  }
+
+  async sendTransaction(tx: { to: string; data: string; value: bigint }) {
+    return this.signer.sendTransaction(tx);
+  }
+}
+
+/**
+ * Refuses to start in production unless the operator has explicitly recorded that the
+ * Turnkey policy exists.
+ *
+ * This is a checkbox, and a checkbox cannot verify a policy -- Turnkey's API would have to
+ * be queried for that, and the shape of a "correct" policy is a judgement call. What it can
+ * do is make the omission loud. The failure being guarded against is silent: a Turnkey
+ * signer with no policy behaves identically to one with a perfect policy, right up until
+ * the key is stolen and the thief discovers it can sign anything.
+ */
+export function assertTurnkeyPolicyAcknowledged(): void {
+  if (config.NODE_ENV !== 'production') return;
+  if (config.TURNKEY_POLICY_CONFIRMED !== true) {
+    throw new Error(
+      'TURNKEY_POLICY_CONFIRMED is not set. Before running in production, configure a Turnkey ' +
+        'policy restricting this key to the pons factory address, the launchToken selector, and ' +
+        'a value ceiling -- then set TURNKEY_POLICY_CONFIRMED=true to acknowledge it. An ' +
+        'unpolicied Turnkey key can sign anything, and looks protected while doing it.'
+    );
   }
 }
 
@@ -69,9 +145,24 @@ export class RawKeyTreasurySigner implements TreasurySigner {
 
 export function createTreasurySigner(provider: ethers.Provider): TreasurySigner {
   if (config.NODE_ENV === 'production') {
-    // Real integration point -- see class-level TODO.
-    throw new Error(
-      'Production treasury signer not yet wired up. Complete the Turnkey integration TODO in treasurySigner.ts before deploying to production.'
+    assertTurnkeyPolicyAcknowledged();
+    return new TurnkeyTreasurySigner(
+      requireConfig('TURNKEY_ORGANIZATION_ID'),
+      requireConfig('TURNKEY_API_PUBLIC_KEY'),
+      requireConfig('TURNKEY_API_PRIVATE_KEY'),
+      requireConfig('TURNKEY_SIGN_WITH'),
+      provider
+    );
+  }
+  // Outside production, prefer Turnkey when it is configured -- testing the real signer on
+  // testnet is the only way to find out it works before it matters.
+  if (config.TURNKEY_ORGANIZATION_ID && config.TURNKEY_SIGN_WITH) {
+    return new TurnkeyTreasurySigner(
+      config.TURNKEY_ORGANIZATION_ID,
+      requireConfig('TURNKEY_API_PUBLIC_KEY'),
+      requireConfig('TURNKEY_API_PRIVATE_KEY'),
+      config.TURNKEY_SIGN_WITH,
+      provider
     );
   }
   const key = requireConfig('TREASURY_SIGNER_PRIVATE_KEY');

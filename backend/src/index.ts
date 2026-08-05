@@ -34,7 +34,7 @@ const monitor = new TreasuryMonitor(db, new ConsoleNotifier(), undefined, 30, {
 const deps = {
   db,
   parser: new ClaudeParser(requireConfig('ANTHROPIC_API_KEY')),
-  walletResolver: new PrivyWalletResolver(db, '', ''), // TODO: real Privy app ID/secret
+  walletResolver: new PrivyWalletResolver(db, config.PRIVY_APP_ID ?? '', config.PRIVY_APP_SECRET ?? ''),
   xClient: new RealXClient(requireConfig('TWITTERAPI_IO_KEY')),
   treasurySigner,
   provider,

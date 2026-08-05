@@ -40,6 +40,23 @@ const ConfigSchema = z.object({
   PONS_LAUNCH_CONFIG_ID: z.coerce.bigint().default(0n),
   PONS_DEX_ID: z.coerce.bigint().default(0n),
 
+  // -- Wallet-per-user (Privy). @privy-io/node -- server-auth is deprecated. --
+  PRIVY_APP_ID: z.string().optional(),
+  PRIVY_APP_SECRET: z.string().optional(),
+
+  // -- Treasury signer: Turnkey (Part 10) --
+  // The API key below only asks Turnkey to sign. What restricts WHAT it will sign is a
+  // policy configured in Turnkey, not anything in this codebase -- see treasurySigner.ts.
+  TURNKEY_ORGANIZATION_ID: z.string().optional(),
+  TURNKEY_API_PUBLIC_KEY: z.string().optional(),
+  TURNKEY_API_PRIVATE_KEY: z.string().optional(),
+  /** Wallet account address, private key address, or private key ID to sign with. */
+  TURNKEY_SIGN_WITH: z.string().optional(),
+  /** Operator's acknowledgement that the signing policy exists. Production refuses to
+   *  start without it, because an unpolicied Turnkey key is indistinguishable from a
+   *  correctly-policied one until it is abused. */
+  TURNKEY_POLICY_CONFIRMED: z.coerce.boolean().default(false),
+
   // -- Treasury signer (Part 5/10: Turnkey, scoped to launchToken() only) --
   TREASURY_SIGNER_PRIVATE_KEY: z.string().optional(), // testnet-only raw key; Turnkey in prod
   TREASURY_MAX_FEE_WEI: z.coerce.bigint().default(2_000_000_000_000_000n), // 0.002 ETH ceiling
