@@ -38,6 +38,33 @@ async function run() {
         unobserve() {}
       };
       window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+
+      // The board reads the chain now, and jsdom has no network. This fixture is
+      // the seam fetchLedger() checks first, so the UI logic below -- sorting,
+      // search, pagination, routing -- is still exercised against enough rows to
+      // be meaningful. The real board has two.
+      //
+      // Shapes match what the chain layer produces exactly, including the nulls:
+      // `trend` and `whatIf` are null because no indexer exists, and several
+      // checks assert the UI hides those rather than inventing a value.
+      window.__PONSR_FIXTURE__ = Array.from({ length: 30 }, (_, i) => {
+        const sym = 'FIX' + String(i).padStart(2, '0');
+        const liq = 0.002 + (i % 7) * 0.9;
+        return {
+          id: sym.toLowerCase(),
+          name: 'Fixture ' + i,
+          symbol: sym,
+          address: '0x' + String(i).padStart(2, '0').repeat(20),
+          pool: '0x' + String(i).padStart(2, '0').repeat(20),
+          launchedAt: Date.now() - (i + 1) * 3600 * 1000,
+          liquidityEth: liq,
+          progress: Math.min(1, liq / 4.2),
+          holders: 3 + i,
+          status: liq >= 4.2 ? 'graduated' : 'curve',
+          trend: null,
+          whatIf: null,
+        };
+      });
     },
   });
 
@@ -55,7 +82,12 @@ async function run() {
   checks.push(['no window.onerror thrown errors', errors.length === 0, errors.join('; ')]);
   checks.push(['title is set', doc.title.length > 0, doc.title]);
   checks.push(['explore grid rendered a full set of cards', doc.querySelectorAll('.tcard').length >= 12, String(doc.querySelectorAll('.tcard').length)]);
-  checks.push(['stat strip count-up populated a value', doc.querySelector('[data-count-to]').textContent !== '0', doc.querySelector('[data-count-to]').textContent]);
+  // The strip used to count up to hardcoded totals. It now reports what the
+  // ledger actually returned, so the check is that it reflects the data.
+  checks.push(['stat strip reports the real launch count',
+    doc.getElementById('stat-total').textContent === '30', doc.getElementById('stat-total').textContent]);
+  checks.push(['stat strip reports liquidity in ETH, not invented dollars',
+    /ETH$/.test(doc.getElementById('stat-liq').textContent), doc.getElementById('stat-liq').textContent]);
   // Three separate views: the landing page is the pitch, explore is the tool.
   checks.push(['landing page is the default view',
     !doc.getElementById('view-home').hidden && doc.getElementById('view-explore').hidden && doc.getElementById('view-token').hidden, '']);
@@ -89,7 +121,14 @@ async function run() {
   checks.push(['token page shows the right token', doc.getElementById('tp-name').textContent === firstRowName, doc.getElementById('tp-name').textContent + ' vs ' + firstRowName]);
   checks.push([`token page has its own URL (${URL_MODE})`,
     PRETTY_URLS ? /\/token\/[^/]+$/.test(route()) : /\?token=/.test(route()), route()]);
-  checks.push(['token page renders a chart', doc.querySelectorAll('#tp-chart path').length === 2, String(doc.querySelectorAll('#tp-chart path').length)]);
+  // CRITICAL: no price history means no chart. A flat line drawn from nothing is
+  // a picture of a claim -- that the price held steady -- which nobody knows. The
+  // old check asserted a chart was always drawn, which was only ever satisfiable
+  // because the data was generated.
+  checks.push(['token page draws NO chart when there is no price history',
+    doc.querySelectorAll('#tp-chart path').length === 0, String(doc.querySelectorAll('#tp-chart path').length)]);
+  checks.push(['token page hides the 24h change when it cannot be computed',
+    doc.getElementById('tp-change').hidden === true, String(doc.getElementById('tp-change').hidden)]);
   checks.push(['token page shows a contract address', /^0x[0-9a-f]{40}$/.test(doc.getElementById('tp-addr').textContent), doc.getElementById('tp-addr').textContent]);
 
   // Motion preset 12: while the token page is open its art carries the shared
@@ -106,8 +145,15 @@ async function run() {
   checks.push(['what-if is gated until a wallet is connected', !doc.getElementById('tp-locked').hidden && doc.getElementById('tp-figures').hidden, '']);
   doc.getElementById('tp-connect').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 60));
-  checks.push(['connecting reveals the what-if figures', doc.getElementById('tp-locked').hidden && !doc.getElementById('tp-figures').hidden, '']);
-  checks.push(['what-if figure populated (non-$0)', doc.getElementById('tp-neversold').textContent !== '$0', doc.getElementById('tp-neversold').textContent]);
+  // CRITICAL: connecting must NOT reveal figures. It used to unlock a full
+  // statement -- "value today, had you held everything" -- computed from numbers
+  // generated for the preview dataset, for a wallet that was never connected.
+  // The indexer that would make it real is not built.
+  checks.push(['connecting does NOT reveal invented what-if figures',
+    doc.getElementById('tp-figures').hidden === true, String(doc.getElementById('tp-figures').hidden)]);
+  checks.push(['connecting says plainly that the feature is not built',
+    /not (available|built)/i.test(doc.querySelector('.tp-demo-note').textContent),
+    doc.querySelector('.tp-demo-note').textContent]);
 
   // Back returns to the explore board (where you came from), not the landing page.
   doc.getElementById('tp-back').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -127,10 +173,15 @@ async function run() {
   if (mcapBtn) {
     mcapBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 40));
-    const vals = Array.from(doc.querySelectorAll('.tcard [data-mcap]')).map((e) => parseMcap(e.textContent));
+    // Liquidity in ETH, not a dollar market cap: this chain has no price oracle a
+    // static page can read, so a USD figure would be a guess presented as a fact.
+    const vals = Array.from(doc.querySelectorAll('.tcard [data-mcap]')).map((e) => parseFloat(e.textContent));
     const descending = vals.every((v, i) => i === 0 || (!isNaN(v) && vals[i - 1] >= v));
-    checks.push(['sort by market cap orders cards high to low', vals.length > 1 && descending,
-      vals.slice(0, 3).map((v) => '$' + v).join(' ≥ ')]);
+    checks.push(['sort by liquidity orders cards high to low', vals.length > 1 && descending,
+      vals.slice(0, 3).map((v) => v + ' ETH').join(' ≥ ')]);
+    checks.push(['liquidity is denominated in ETH, never invented dollars',
+      Array.from(doc.querySelectorAll('.tcard [data-mcap]')).every((e) => /ETH$/.test(e.textContent)),
+      doc.querySelector('.tcard [data-mcap]').textContent]);
   } else {
     checks.push(['sort control renders', false, 'missing #ledger-sort']);
   }
@@ -138,7 +189,7 @@ async function run() {
   // Search: filter to a symbol and confirm the table narrows.
   const search = doc.getElementById('ledger-search');
   if (search) {
-    search.value = 'moon';
+    search.value = 'fixture 1';
     search.dispatchEvent(new window.Event('input', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 40));
     const filtered = doc.querySelectorAll('.tcard').length;
@@ -244,9 +295,13 @@ async function run() {
   // The chart's draw-on is deferred past the page transition; it must still end up
   // drawn even when that transition is skipped or never reports completion.
   await new Promise((resolve) => setTimeout(resolve, 750));
-  checks.push(['token chart always finishes drawing',
-    doc.getElementById('tp-chart').classList.contains('drawn'),
-    doc.getElementById('tp-chart').className]);
+  // With history the chart must always finish drawing (the deferred draw-on used
+  // to be able to hang). With none it must stay empty. Assert whichever applies.
+  const tpChart = doc.getElementById('tp-chart');
+  const hasHistory = tpChart.querySelectorAll('path').length > 0;
+  checks.push(['token chart either finishes drawing or is absent, never half-drawn',
+    hasHistory ? tpChart.classList.contains('drawn') : tpChart.innerHTML.trim() === '',
+    hasHistory ? String(tpChart.className) : '(no history, empty)']);
   checks.push(['page-transition class is always cleaned up',
     !doc.documentElement.classList.contains('vt-active'),
     doc.documentElement.className || '(clean)']);
