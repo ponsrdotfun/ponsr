@@ -4,7 +4,7 @@ import { config, requireConfig } from './config';
 import { Db } from './db';
 import { ClaudeParser } from './parser';
 import { PrivyWalletResolver } from './walletResolver';
-import { RealXClient } from './xClient';
+import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from './chainClient';
 import { handleMention } from './orchestrator';
@@ -35,7 +35,7 @@ const deps = {
   db,
   parser: new ClaudeParser(requireConfig('ANTHROPIC_API_KEY')),
   walletResolver: new PrivyWalletResolver(db, config.PRIVY_APP_ID ?? '', config.PRIVY_APP_SECRET ?? ''),
-  xClient: new RealXClient(requireConfig('TWITTERAPI_IO_KEY')),
+  xClient: createXClient(),
   treasurySigner,
   provider,
   getLiveFeeWei: () => getLiveFeeWei(provider),

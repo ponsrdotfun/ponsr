@@ -14,7 +14,7 @@ contracts/              FeeSplitter.sol -- the 95/5 fee-splitting contract (Part
 contracts-test/          28 passing tests, including two live reentrancy attacks
 backend/                 The bot service: listener -> parser -> validator -> launch -> reply
   src/                    Source code (TypeScript)
-  tests/                  131 passing tests (unit + full pipeline integration, all mocked)
+  tests/                  151 passing tests (unit + full pipeline integration, all mocked)
   scripts/run-eval.ts      Runs the 28-case parser eval set against the real Claude API
   docs/                   SETUP.md and SECURITY-BOUNDARIES.md -- read these before deploying
 website/                 Static site, one self-contained file, three routes:
@@ -76,8 +76,8 @@ on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
 
 - **Contract:** 28/28 passing (`contracts-test/`) — **run**
 - **Website:** 53/53 passing (`website/smoke-test.js`) — **run**
-- **Backend:** 131/131 passing (`backend/tests/`) — **run**
-- **Total: 212 automated checks, all run and passing.**
+- **Backend:** 151/151 passing (`backend/tests/`) — **run**
+- **Total: 232 automated checks, all run and passing.**
 
 All three suites were executed to produce those numbers — none of it is a claim taken on
 faith. Re-run any of them with the commands above (`backend/` needs `npm install` first,

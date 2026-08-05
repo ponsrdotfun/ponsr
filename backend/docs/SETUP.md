@@ -17,7 +17,13 @@ Fill in `.env` per `action-checklist.md` in the project root. At minimum, to run
 suite you need nothing filled in (tests use mocks throughout). To run the server for real
 against testnet, you need:
 - `ANTHROPIC_API_KEY` (Claude Haiku 4.5 access)
-- `TWITTERAPI_IO_KEY` (mention listening + reply posting)
+- `TWITTERAPI_IO_KEY` (reading mentions and account signals)
+- `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (posting replies --
+  X's own API, because posting is account activity and a suspended account cannot be
+  re-minted; reads stay on twitterapi.io, which is 33x cheaper on the high-volume side)
+- `PRIVY_APP_ID`, `PRIVY_APP_SECRET` (a wallet per X user)
+- `TURNKEY_*` (the production treasury signer -- and `TURNKEY_POLICY_CONFIRMED`, which
+  production refuses to start without)
 - `TREASURY_SIGNER_PRIVATE_KEY` (a **testnet-only** key, funded with testnet ETH from the
   Robinhood Chain faucet -- never a key holding real funds; see `docs/SECURITY-BOUNDARIES.md`
   item 5). This is the **hot** wallet: the bot spends from it and only from it.
@@ -67,7 +73,7 @@ want to know why.
 npm test
 ```
 
-All 131 backend tests should pass. This runs entirely against mocks -- no real API keys,
+All 151 backend tests should pass. This runs entirely against mocks -- no real API keys,
 no real chain, no real money, per the design in `tests/orchestrator.test.ts`.
 
 ## 5. Run the parser eval set against the real model (requires ANTHROPIC_API_KEY)
@@ -144,10 +150,18 @@ npm start
 
 ## 8. Before going anywhere near mainnet
 
-Read `docs/SECURITY-BOUNDARIES.md` in full, and complete every item still marked TODO in:
-- `src/walletResolver.ts` (real Privy integration)
-- `src/treasurySigner.ts` (real Turnkey integration)
-- `src/xClient.ts` (real twitterapi.io integration)
+Read `docs/SECURITY-BOUNDARIES.md` in full. The three integrations that used to be stubs --
+Privy, Turnkey and the X client -- are implemented as of 2026-08-04, so what remains is
+credentials and one verification:
+
+```bash
+npx ts-node scripts/check-providers.ts        # Privy + Turnkey actually work
+npx ts-node scripts/turnkey-verify-policy.ts  # the treasury key is genuinely restricted
+```
+
+The second matters more than it looks. A Turnkey key with no effective policy behaves
+identically to a correctly-scoped one until it is stolen, so this is measured rather than
+assumed -- see `turnkey-policy-probe.ts` for how that was established the hard way.
 
 Then follow the implementation roadmap's Phase 1 -> Phase 4 sequence in Part 11 of the master
 doc.

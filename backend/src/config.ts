@@ -18,8 +18,29 @@ const ConfigSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   PARSER_MODEL: z.string().default('claude-haiku-4-5'),
 
-  // -- X data provider (Part 10: twitterapi.io, confirmed to support both read + write) --
+  // -- X: reads and writes go to different providers. See xClient.ts for why. --
+  // READ (mentions, account signals) -- twitterapi.io, ~$0.00015/tweet vs X's $0.005.
   TWITTERAPI_IO_KEY: z.string().optional(),
+  // WRITE (replies) -- X's own API, OAuth 1.0a, because posting is account activity and a
+  // suspended @ponsrdotfun cannot be re-minted. ~$0.015 per reply.
+  X_API_KEY: z.string().optional(),
+  X_API_SECRET: z.string().optional(),
+  X_ACCESS_TOKEN: z.string().optional(),
+  X_ACCESS_TOKEN_SECRET: z.string().optional(),
+  /**
+   * Whether the success reply links to the token's page on ponsr.fun.
+   *
+   * This is a pricing decision, not a formatting one: X charges **$0.200 for a post
+   * containing a URL against $0.015 without** -- thirteen times more. At a hundred launches a
+   * month that is $20 versus $1.50.
+   *
+   * Defaults to off so the cost is opted into rather than discovered. Turning it on is
+   * perfectly reasonable -- driving traffic to the board may well be worth $18.50 a month --
+   * but it should be a decision someone made.
+   */
+  REPLY_INCLUDE_LINK: z.coerce.boolean().default(false),
+  /** Base URL used when REPLY_INCLUDE_LINK is on. */
+  SITE_BASE_URL: z.string().default('https://ponsr.fun'),
   BOT_X_HANDLE: z.string().default('ponsrdotfun'), // x.com/ponsrdotfun
 
   // -- Robinhood Chain RPC (Part 10: Alchemy free tier, or fallback public RPC) --

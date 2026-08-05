@@ -1,4 +1,5 @@
 import { RejectionReason } from './types';
+import { config } from './config';
 
 /**
  * Every reply here follows the interface-writing guidance from the frontend-design skill even
@@ -9,17 +10,37 @@ import { RejectionReason } from './types';
  * try again"), which is a good template precisely because it's concrete, not vague.
  */
 
+/**
+ * The success reply.
+ *
+ * The link to the token's page on ponsr.fun sits behind `REPLY_INCLUDE_LINK` because it is a
+ * pricing decision, not a formatting one: X charges **$0.200 for a post containing a URL
+ * against $0.015 without**. Thirteen times more, for one link. At a hundred launches a month
+ * that is $20 against $1.50.
+ *
+ * Off by default so the cost is chosen rather than discovered on an invoice. Turning it on is
+ * entirely reasonable -- traffic to the board may well be worth $18.50 a month -- but someone
+ * should decide it. The contract address is included either way: it is what the recipient
+ * actually needs, and it is not a URL.
+ */
 export function composeSuccessReply(params: {
   tokenName: string;
   tokenSymbol: string;
   tokenAddress: string;
   txHash: string;
+  includeLink?: boolean;
+  siteBaseUrl?: string;
 }): string {
-  return (
-    `${params.tokenName} ($${params.tokenSymbol}) is live.\n` +
-    `Token: ${params.tokenAddress}\n` +
-    `Tx: ${params.txHash}`
-  );
+  const includeLink = params.includeLink ?? config.REPLY_INCLUDE_LINK;
+  const base = params.siteBaseUrl ?? config.SITE_BASE_URL;
+
+  const lines = [
+    `${params.tokenName} ($${params.tokenSymbol}) is live.`,
+    `Token: ${params.tokenAddress}`,
+    `Tx: ${params.txHash}`,
+  ];
+  if (includeLink) lines.push(`${base}/token/${encodeURIComponent(params.tokenSymbol)}`);
+  return lines.join('\n');
 }
 
 export function composeRejectionReply(reason: RejectionReason, detail?: string): string {

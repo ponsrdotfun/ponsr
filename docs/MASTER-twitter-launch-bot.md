@@ -499,6 +499,25 @@ This wasn't fully priced out in the first research pass, and it needs to be — 
 In other words: **the official, sanctioned way to listen for mentions of your bot in real time costs $5K+/month minimum.** This is a completely different budget category than "solo dev side project," and it would need real revenue (or real funding) to sustain before you even have users.
 
 **The workaround the market has converged on — third-party rule-based streaming resellers:**
+> **⚠️ SUPERSEDED 2026-08-04 — X's pricing model changed, and the conclusion changed with it.**
+> X no longer sells subscription tiers. It is **pay-per-use**, read from docs.x.com:
+> post creation **$0.015**, a post containing a URL **$0.200**, post reads **$0.005**,
+> user reads **$0.010**, capped at 2M post reads per cycle.
+>
+> The "$200/month for the official API" figure below describes a product that no longer
+> exists, and it was the whole reason for routing *posting* through a third party.
+>
+> **What the project does now:** reads through twitterapi.io (still ~33x cheaper on the
+> high-volume side, and reading is invisible as account activity), **writes through X's own
+> API** (~$0.015 per reply, one reply per launch — roughly $1.50/month at a hundred launches).
+> That retires the unanswered question in §"Action item" below about whether automated posting
+> via a third party sits inside X's rules, for the price of a coffee. The account is the
+> product and cannot be re-minted; a domain or a contract can.
+>
+> It also surfaced a real product decision: **a reply containing a link costs 13x more**, so
+> linking to ponsr.fun from the success reply is $20/month rather than $1.50. That is behind
+> `REPLY_INCLUDE_LINK`, defaulting to off. See `backend/src/xClient.ts`.
+
 Providers like twitterapi.io offer **rule-based filtered stream + webhook delivery at ~$0.00015 per matched tweet**, no monthly minimum, no enterprise contract. Concretely: at a small rule (~500 matched tweets/day, which is a very generous ceiling for a new bot's mention volume), that's roughly **$2.25/month**. Even at 10,000 matched tweets/day (a genuinely large, viral volume), that's roughly **$45/month**. This works because these providers pool many customers' rules onto shared streaming infrastructure they already maintain via their own enterprise-tier or scraping arrangement with X, and resell access at a fraction of the cost — a legitimate, commonly-used pattern for exactly your use case, not a shady workaround.
 
 **This is a genuinely critical decision point for your build, not a minor implementation detail:**
@@ -827,7 +846,8 @@ Previously, the only money-handling components were (a) the treasury wallet payi
 
 | Component | Estimated cost | Notes |
 |---|---|---|
-| X mention listener (twitterapi.io-style) | ~$2-45/month | Scales with matched-tweet volume |
+| X mention **reads** (twitterapi.io) | ~$2-45/month | Scales with matched-tweet volume |
+| X reply **writes** (X's own API) | ~$1.50/month | $0.015/reply, one per launch. **$0.200 if the reply contains a URL** — see `REPLY_INCLUDE_LINK` |
 | X posting/reply access | Needs separate confirmation | Own developer app, distinct from the listener |
 | RPC provider (Alchemy) | Likely free tier at low volume | Exact Robinhood Chain-specific pricing not yet confirmed |
 | Wallet provider — Privy | **Free** under 499 MAU, then $299/mo up to 2,500 MAU | Includes 50K signatures / $1M tx volume free monthly |
@@ -1000,7 +1020,7 @@ Previously flagged as an open gap: *"confirm the third-party stream provider sup
 - **$1 free trial credit on signup, no card required** — roughly 6,000 calls, enough to build and test the full listener → parse → reply loop before spending anything real
 - Concrete volume examples from their own published numbers: a small rule (~500 tweets/day, a realistic ceiling for a new bot) costs about **$2.25/month**; a much busier rule (~10,000 tweets/day) costs about **$45/month**
 
-**Action item, still standing but now more specific:** confirm during setup whether the write/posting endpoints are covered under the same per-call pricing or billed separately, and whether posting through a third-party provider like this is within X's platform rules for automated accounts — worth a quick check of twitterapi.io's own terms alongside the Robinhood Chain ToS email already planned (Part 7).
+~~**Action item, still standing but now more specific:**~~ **CLOSED 2026-08-04 by not needing the answer.** Posting moved to X's own API, so whether a third party's write endpoints are within X's rules no longer affects this project. The original question: confirm whether the write/posting endpoints are covered under the same per-call pricing or billed separately, and whether posting through a third-party provider like this is within X's platform rules for automated accounts — worth a quick check of twitterapi.io's own terms alongside the Robinhood Chain ToS email already planned (Part 7).
 
 ---
 
@@ -1201,8 +1221,8 @@ The full implementation described throughout this spec has been built: the FeeSp
 contract, the backend bot service, and the launch-board website (branded **Ponsr**; the
 project was originally called Holdfast).
 
-**212/212 automated checks passing**: 28 contract tests (including two live
-reentrancy attacks), 131 backend tests (unit + full pipeline integration, every
+**232/232 automated checks passing**: 28 contract tests (including two live
+reentrancy attacks), 151 backend tests (unit + full pipeline integration, every
 external dependency mocked), 53 website smoke-test checks.
 
 **What's real and tested vs. what's a stub waiting on your credentials** is documented in
