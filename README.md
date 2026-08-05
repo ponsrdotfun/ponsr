@@ -75,9 +75,9 @@ on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
 ## Test results
 
 - **Contract:** 28/28 passing (`contracts-test/`) — **run**
-- **Website:** 50/50 passing (`website/smoke-test.js`) — **run**
+- **Website:** 53/53 passing (`website/smoke-test.js`) — **run**
 - **Backend:** 131/131 passing (`backend/tests/`) — **run**
-- **Total: 209 automated checks, all run and passing.**
+- **Total: 212 automated checks, all run and passing.**
 
 All three suites were executed to produce those numbers — none of it is a claim taken on
 faith. Re-run any of them with the commands above (`backend/` needs `npm install` first,

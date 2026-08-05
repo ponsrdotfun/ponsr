@@ -35,11 +35,15 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is live at https://ponsr.fun** (50 smoke checks). Netlify, auto-deploying from
+- **Website is live at https://ponsr.fun** (53 smoke checks). Netlify, auto-deploying from
   `main` — a push publishes, there is no manual step. Three routes in one static file:
   `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
   still reads the old `?view=` / `?token=` forms, so existing links keep working.
-  `fetchLedger()` is the single integration point for real data.
+  **It shows real on-chain data**: `fetchLedger()` reads `TokenLaunched` from the factory,
+  filtered on the indexed `deployer` so only Ponsr's launches appear. Two rules follow:
+  a production treasury address must be added to `CHAIN.launchers` or its launches will not
+  show, and **nothing may be displayed that cannot be read from the chain** — the board
+  hides the sparkline, the 24h change and the what-if figures rather than inventing them.
 - **X account is `@ponsrdotfun`**, live with profile art, banner and bio. `BOT_X_HANDLE`
   in `config.ts` now defaults to it — it is what the bot matches mentions against, not
   decoration.
