@@ -790,9 +790,9 @@
         <button class="btn btn-ghost" id="how-it-works-btn"><span>How launching works</span></button>
       </div>
       <div class="hero-livebar" id="hero-livebar">
-        <div class="livechip"><span class="k">Tokens launched</span><span class="v"><span data-count-to="1284">0</span></span></div>
-        <div class="livechip"><span class="k"><span class="livedot" aria-hidden="true"></span>Launched today</span><span class="v"><span data-count-to="19">0</span></span></div>
-        <div class="livechip"><span class="k">Creator fees paid</span><span class="v"><span data-count-to="42" data-prefix="Ξ">0</span></span></div>
+        <div class="livechip"><span class="k">Tokens launched</span><span class="v"><span id="stat-total">—</span></span></div>
+        <div class="livechip"><span class="k"><span class="livedot" aria-hidden="true"></span>Launched today</span><span class="v"><span id="stat-today">—</span></span></div>
+        <div class="livechip"><span class="k">Liquidity on the curve</span><span class="v"><span id="stat-liq">—</span></span></div>
       </div>
     </div>
     <div class="hero-horizon" id="hero-horizon" aria-hidden="true"><svg id="hero-chart" viewBox="0 0 1440 200" preserveAspectRatio="none"></svg></div>
@@ -834,10 +834,13 @@
     <div class="reveal">
       <div class="section-eyebrow">Spotlight</div>
       <h2 class="section-title">The one that held.</h2>
+      <p class="section-lead">An illustration of what the simulator will show, using made-up
+        numbers. It is not a token on this board and nobody made this money — the real
+        per-wallet history needs an indexer that is not built yet.</p>
     </div>
     <div class="spotlight-card reveal" id="spotlight-card">
       <div class="spotlight-left">
-        <span class="spotlight-badge">◆ Top performer</span>
+        <span class="spotlight-badge">◆ Illustration</span>
         <div class="spotlight-name" id="sp-name">—</div>
         <div class="spotlight-sym" id="sp-sym">—</div>
         <div class="spotlight-figure">
@@ -845,7 +848,7 @@
           <div class="val metal-text" id="sp-val">$0</div>
         </div>
         <div class="spotlight-meta">
-          <div><div class="k">Market cap</div><div class="v" id="sp-mcap">—</div></div>
+          <div><div class="k">Liquidity</div><div class="v" id="sp-mcap">—</div></div>
           <div><div class="k">Launched</div><div class="v" id="sp-age">—</div></div>
         </div>
       </div>
@@ -997,7 +1000,7 @@
 
       <div class="tp-locked" id="tp-locked">
         <button class="btn btn-primary" id="tp-connect"><span>Connect wallet</span></button>
-        <span class="tp-demo-note">Preview build — connects to sample data, not a real wallet.</span>
+        <span class="tp-demo-note">Not built yet — needs the per-wallet trade indexer.</span>
       </div>
 
       <div class="tp-figures" id="tp-figures" hidden>
@@ -1039,96 +1042,138 @@
   'use strict';
 
   // ============================================================
-  // MOCK DATA — replace fetchLedger() with a real API call to wire
-  // up the backend/indexer (Part 1 launches table + Part 3 what-if).
-  // The realtime layer below simulates live updates over this data;
-  // when a real feed exists, drive the same update helpers from it.
+  // REAL ON-CHAIN DATA
+  //
+  // This board shows launches made through Ponsr, and only those. The filter is
+  // the `deployer` field of the factory's TokenLaunched event, which is an
+  // indexed topic -- so the chain itself does the filtering and we never have to
+  // fetch pons's whole history and sift it.
+  //
+  // Two endpoints, both public and both CORS-open, so the site stays a single
+  // static file with no backend:
+  //   - the chain's RPC, for logs and contract reads
+  //   - robinhoodchain.blockscout.com, for token metadata and holder counts
+  //
+  // What is deliberately NOT here: price history, 24h change, and the what-if
+  // figures. Those need an indexer that does not exist yet (Part 3 / Phase 6).
+  // Until it does, this board shows the fields it can actually prove and leaves
+  // the rest visibly absent. Before 2026-08-04 it rendered generated tokens with
+  // invented market caps under a "synced just now" badge, which is precisely the
+  // kind of thing a site promising "every launch, on the record" cannot do.
   // ============================================================
-  const NOW = Date.now();
-  const S = 1000, M = 60 * S, H = 60 * M, D = 24 * H;
-  function tk(name, sym, ageMs, mcap, holders, status, trend, neverSold, bought, actual) {
-    return { id: sym.toLowerCase(), name: name, symbol: sym, launchedAt: NOW - ageMs, mcap: mcap,
-      holders: holders, status: status, trend: trend,
-      whatIf: { neverSold: neverSold, boughtTokens: bought, actual: actual } };
+  const CHAIN = {
+    rpc: 'https://rpc.mainnet.chain.robinhood.com',
+    explorer: 'https://robinhoodchain.blockscout.com',
+    factory: '0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB',
+    pairToken: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', // WETH
+    // keccak("TokenLaunched(address,address,address,address,address,uint256,uint256,uint256,uint256,uint256)")
+    topicLaunched: '0xdb51ea9ad51ab453a65a4cb7e60c3cb378c9501bb002609f8f97778fb6c4235a',
+    // Launch config 0's graduation threshold, read live on 2026-08-04. Shown as
+    // progress, so being slightly stale would mislead rather than break -- worth
+    // re-checking with scripts/probe-pons-v1.js if pons edits the config.
+    graduationWei: 4200000000000000000,
+    // Addresses whose launches count as Ponsr's. Append the production treasury
+    // here when it exists; an unlisted launcher simply will not appear.
+    launchers: ['0x933045f792ef89c52700fcea64240737d910a97f']
+  };
+
+  function hexToBig(h) { return BigInt(h && h !== '0x' ? h : '0x0'); }
+  function weiToEth(v) { return Number(v) / 1e18; }
+  function pad32(addr) { return '0x' + '0'.repeat(24) + addr.replace(/^0x/, '').toLowerCase(); }
+  function word(data, i) { return '0x' + data.replace(/^0x/, '').substr(i * 64, 64); }
+  function addrFromWord(w) { return '0x' + w.slice(-40); }
+
+  function rpcCall(method, params) {
+    return fetch(CHAIN.rpc, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j.error) throw new Error(method + ': ' + j.error.message);
+      return j.result;
+    });
   }
-  const MOCK_TOKENS = [
-    tk('Neon Wolf','WOLF', 40*S, 47000, 320, 'curve', [4,5,6,6,8,9,11,10,13,15], 5200, '210,000', 3100),
-    tk('Solar Flare','SOLAR', 3*M, 96000, 700, 'curve', [3,5,4,7,9,8,12,14,13,17], 12800, '430,000', 8800),
-    tk('Comet Cash','COMET', 12*M, 152000, 1010, 'graduated', [5,6,8,7,11,13,12,16,19,22], 28400, '690,000', 15200),
-    tk('Golden Bull','GBULL', 40*M, 512000, 3400, 'graduated', [6,8,9,12,15,18,17,23,28,33], 210000, '2,600,000', 188000),
-    tk('Titan Coin','TITAN', 90*M, 274000, 1620, 'graduated', [7,9,8,12,11,15,18,17,21,24], 76000, '1,240,000', 41000),
-    tk('Aurora Finance','AURA', 2*H, 184000, 1180, 'curve', [4,6,5,8,12,10,14,18,16,20], 41200, '812,000', 9800),
-    tk('Moon Doge','MOON', 5*H, 62000, 610, 'curve', [10,9,11,8,6,5,4,3,4,3], 890, '120,000', 4100),
-    tk('Pixel Panda','PANDA', 6*H, 33000, 260, 'curve', [9,8,7,6,7,5,6,4,5,4], 640, '96,000', 900),
-    tk('Vault Vibe','VYBE', 8*H, 205000, 1330, 'graduated', [4,6,7,9,8,12,14,16,15,19], 58000, '870,000', 39000),
-    tk('Turbo Inu','TURBO', 11*H, 340000, 2210, 'graduated', [3,4,4,6,9,15,22,28,34,40], 128400, '2,040,000', 61200),
-    tk('Rocket Fuel','FUEL', 14*H, 88000, 720, 'curve', [5,7,6,9,11,10,13,12,15,14], 19200, '520,000', 12400),
-    tk('Frost Byte','FROST', 20*H, 41000, 300, 'curve', [8,7,9,6,8,7,9,8,10,9], 3400, '150,000', 4200),
-    tk('Pixel Punk','PIXL', 26*H, 21000, 180, 'curve', [12,10,8,7,5,4,3,2,2,1], 210, '54,000', 0),
-    tk('Galaxy Cat','GCAT', 30*H, 758000, 4120, 'graduated', [5,8,7,11,16,14,19,26,31,38], 302000, '4,120,000', 302000),
-    tk('Ember Ape','EMBER', 2*D, 690000, 3900, 'graduated', [6,9,11,14,13,19,24,22,29,35], 264000, '3,400,000', 264000),
-    tk('Desert Rose','DROSE', 2*D + 4*H, 9200, 90, 'curve', [8,7,6,5,4,3,2,2,1,1], 84, '18,000', 0),
-    tk('Nova Net','NOVA', 3*D, 15000, 140, 'curve', [10,9,8,8,6,5,5,3,3,2], 320, '72,000', 0),
-    tk('Iron Empire','IRON', 3*D + 6*H, 445000, 3050, 'graduated', [6,9,8,13,11,17,22,19,26,31], 176000, '3,080,000', 176000),
-    tk('Quartz Coin','QRTZ', 4*D, 129000, 980, 'graduated', [5,6,7,7,9,10,12,11,14,16], 31000, '610,000', 22000),
-    tk('Star Fox','STARFOX', 4*D + 8*H, 118000, 940, 'graduated', [9,10,12,10,14,12,15,13,16,15], 22400, '640,000', 30100),
-    tk('Cobalt Cat','CBLT', 5*D, 27000, 210, 'curve', [7,6,8,7,6,5,6,4,4,3], 540, '88,000', 700),
-    tk('Zephyr','ZEPH', 6*D, 361000, 2400, 'graduated', [6,8,10,9,13,16,15,20,24,29], 142000, '1,900,000', 120000),
-    tk('Onyx Owl','ONYX', 7*D, 54000, 430, 'curve', [8,9,8,10,9,11,10,12,11,13], 8600, '300,000', 9900),
-    tk('Halo Coin','HALO', 9*D, 233000, 1520, 'graduated', [5,7,9,8,12,14,13,18,21,25], 71000, '1,150,000', 58000),
-  ];
-  /* The curated list above is the hand-written part of the preview data. This pads
-     the board out to a realistic size, so paging, sorting and filtering are
-     exercised the way they would be against a live feed rather than against a
-     dataset that fits on one screen. Seeded, so the board is stable on reload. */
-  (function padPreviewData() {
-    var HEAD = ['Neon','Turbo','Golden','Iron','Quartz','Vault','Comet','Solar','Lunar','Onyx',
-                'Ember','Frost','Cobalt','Halo','Nova','Prism','Vertex','Drift','Blaze','Nimbus',
-                'Karat','Flux','Orbit','Zephyr','Echo','Titan','Pixel','Rocket','Atlas','Helix',
-                'Jade','Lumen','Crimson','Delta','Mint','Basalt','Verdant','Argent','Cinder','Polar'];
-    var TAIL = ['Fox','Ape','Cat','Coin','Cash','Bull','Wolf','Rat','Owl','Bear',
-                'Node','Finance','Protocol','Labs','Chain','Punk','Panda','Empire','Rose','Net',
-                'Byte','Vibe','Fuel','Flare','Dragon','Tiger','Falcon','Whale','Yeti','Forge'];
-    var seed = 987654321;
-    function rr() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
 
-    var used = {};
-    for (var u = 0; u < MOCK_TOKENS.length; u++) used[MOCK_TOKENS[u].symbol] = 1;
+  /* balanceOf(address) against any ERC20. Used for the pool's pair-token balance,
+     which is both the liquidity figure and the graduation progress. */
+  function erc20BalanceOf(token, holder) {
+    return rpcCall('eth_call', [{
+      to: token,
+      data: '0x70a08231' + '0'.repeat(24) + holder.replace(/^0x/, '')
+    }, 'latest']).then(hexToBig).catch(function () { return 0n; });
+  }
 
-    for (var i = 0; i < 96; i++) {
-      var a = HEAD[Math.floor(rr() * HEAD.length)];
-      var b = TAIL[Math.floor(rr() * TAIL.length)];
-      var name = a + ' ' + b;
-      var sym = (a.slice(0, 4) + b.slice(0, 2)).toUpperCase();
-      if (used[sym]) sym = sym + String(10 + Math.floor(rr() * 89));
-      if (used[sym]) continue;
-      used[sym] = 1;
+  function blockTime(blockNumberHex) {
+    return rpcCall('eth_getBlockByNumber', [blockNumberHex, false])
+      .then(function (b) { return Number(hexToBig(b.timestamp)) * 1000; })
+      .catch(function () { return Date.now(); });
+  }
 
-      // Long tail: most launches stay small, a few run away. Matches the real
-      // shape of a permissionless board far better than a uniform spread.
-      var mcap = Math.round(Math.pow(rr(), 2.4) * 880000) + 2500;
-      var graduated = mcap >= 250000;
-      var age = Math.round(rr() * 30 * D) + 6 * M;
-      var holders = Math.max(8, Math.round(mcap / (140 + rr() * 260)));
+  function tokenMeta(address) {
+    return fetch(CHAIN.explorer + '/api/v2/tokens/' + address)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  }
 
-      var v = 4 + rr() * 6, trend = [];
-      var bias = rr() * 2.6 - 1.0;
-      for (var k = 0; k < 10; k++) { v = Math.max(1, v + bias + (rr() * 2.4 - 1.2)); trend.push(Math.round(v)); }
-
-      var neverSold = Math.round(mcap * (0.03 + rr() * 0.42));
-      var actual = Math.round(neverSold * rr() * 1.4);
-      var bought = (Math.round(rr() * 900 + 20) * 1000).toLocaleString('en-US');
-
-      MOCK_TOKENS.push(tk(name, sym, age, mcap, holders, graduated ? 'graduated' : 'curve',
-                          trend, neverSold, bought, actual));
-    }
-  })();
-
-  /* Single integration point: swap this for the real API/websocket call to go live.
-     The short delay stands in for network latency so the loading state is a real
-     state rather than dead code -- it disappears with the real implementation. */
+  /**
+   * Reads every Ponsr launch from the chain.
+   *
+   * Single integration point, as before -- but it now integrates with the chain
+   * rather than with a generator. Anything it cannot establish is left null, and
+   * the UI hides the corresponding element rather than inventing a value.
+   */
   function fetchLedger() {
-    return new Promise(function (resolve) { setTimeout(function () { resolve(MOCK_TOKENS); }, 550); });
+    // A fixture seam for the smoke test, which runs in jsdom with no network. It
+    // exercises sorting, search and pagination, and needs more rows than the real
+    // board has. Production never sets this.
+    if (typeof window !== 'undefined' && window.__PONSR_FIXTURE__) {
+      return Promise.resolve(window.__PONSR_FIXTURE__);
+    }
+
+    return rpcCall('eth_getLogs', [{
+      address: CHAIN.factory,
+      fromBlock: '0x0',
+      toBlock: 'latest',
+      topics: [CHAIN.topicLaunched, null, CHAIN.launchers.map(pad32)]
+    }]).then(function (logs) {
+      return Promise.all(logs.map(function (log) {
+        var token = addrFromWord(log.topics[1]);
+        var pool = addrFromWord(word(log.data, 1));
+        return Promise.all([
+          blockTime(log.blockNumber),
+          tokenMeta(token),
+          erc20BalanceOf(CHAIN.pairToken, pool)
+        ]).then(function (parts) {
+          var launchedAt = parts[0], meta = parts[1] || {}, liquidityWei = parts[2];
+          var symbol = meta.symbol || token.slice(2, 8).toUpperCase();
+          var progress = Number(liquidityWei) / CHAIN.graduationWei;
+          return {
+            id: symbol.toLowerCase(),
+            name: meta.name || symbol,
+            symbol: symbol,
+            address: token,
+            pool: pool,
+            launchedAt: launchedAt,
+            // Pair-token liquidity in the pool, in ETH. Real and directly
+            // meaningful on a bonding curve: it is also the graduation progress.
+            // The old board showed a USD market cap, which would need a price
+            // oracle that does not exist on this chain.
+            liquidityEth: weiToEth(liquidityWei),
+            progress: Math.min(1, progress),
+            holders: typeof meta.holders_count === 'number'
+              ? meta.holders_count
+              : (meta.holders ? Number(meta.holders) : null),
+            status: progress >= 1 ? 'graduated' : 'curve',
+            // Needs an indexer. Null, not zero, so the UI can tell "no data" from
+            // "no change" and hide the sparkline instead of drawing a flat lie.
+            trend: null,
+            whatIf: null
+          };
+        });
+      }));
+    }).then(function (tokens) {
+      return tokens.sort(function (a, b) { return b.launchedAt - a.launchedAt; });
+    });
   }
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1136,17 +1181,36 @@
 
   // FORMATTERS
   function fmtUsd(n) { if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K'; return '$' + Math.round(n).toLocaleString('en-US'); }
+  /* Liquidity is shown in ETH, not converted to USD. Robinhood Chain has no price
+     oracle we can read from a static page, so a dollar figure would be a guess
+     dressed as a fact -- and this number is the one the graduation threshold is
+     denominated in anyway. */
+  function fmtEth(n) {
+    if (n === null || n === undefined) return '—';
+    if (n >= 1) return n.toFixed(2) + ' ETH';
+    if (n >= 0.001) return n.toFixed(4) + ' ETH';
+    return n > 0 ? n.toFixed(6) + ' ETH' : '0 ETH';
+  }
   function fmtUsdFull(n) { return '$' + Math.round(n).toLocaleString('en-US'); }
   function monogram(name) { return name.trim().charAt(0).toUpperCase(); }
-  function pctChange(trend) { const f = trend[0], l = trend[trend.length-1]; return f ? Math.round(((l-f)/f)*100) : 0; }
+  /* Returns null when there is no price history. The board has none until the
+     indexer exists, and null lets every caller hide the figure rather than print
+     a confident 0%. */
+  function pctChange(trend) {
+    if (!trend || !trend.length) return null;
+    const f = trend[0], l = trend[trend.length - 1];
+    return f ? Math.round(((l - f) / f) * 100) : 0;
+  }
 
   /** Bonding-curve progress toward graduation. pons graduates a token once its
    *  curve fills (~4.2 ETH per the spec); here that threshold is expressed in the
    *  same mock market-cap units the preview dataset uses. */
-  const GRADUATION_MCAP = 250000;
   function gradProgress(t) {
     if (t.status === 'graduated') return 100;
-    return Math.max(1, Math.min(99, Math.round((t.mcap / GRADUATION_MCAP) * 100)));
+    // Real progress: pair-token liquidity in the pool against the launch config's
+    // graduation threshold, both read from the chain.
+    if (typeof t.progress === 'number') return Math.max(0, Math.min(99, Math.round(t.progress * 100)));
+    return 0;
   }
 
   function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
@@ -1197,15 +1261,32 @@
   // handful of tokens. (It used to map the entire dataset, so growing the board
   // silently lengthened the track and, at a fixed duration, sped the scroll up.)
   const TICKER_COUNT = 18;
-  const tickerState = MOCK_TOKENS.slice(0, TICKER_COUNT).map(function(t){ return { symbol: t.symbol, chg: pctChange(t.trend) }; });
+  // Populated from the real ledger once it loads. Empty until then, and empty
+  // forever if there are no launches yet -- buildTicker() hides the strip rather
+  // than scrolling invented symbols past the hero.
+  let tickerState = [];
   function tickerItemHtml(s) {
-    const cls = s.chg >= 0 ? 'up' : 'down', sign = s.chg >= 0 ? '+' : '';
-    return '<span class="ticker-item" data-sym="'+s.symbol+'"><span class="sym">$'+s.symbol+'</span> <span class="chg '+cls+'">'+sign+s.chg+'%</span> <span class="sep">/</span></span>';
+    // Liquidity, not a percentage change: there is no price history to compute a
+    // change from, and a ticker of fabricated percentages was the most confident
+    // false thing on the page.
+    return '<span class="ticker-item" data-sym="'+s.symbol+'"><span class="sym">$'+s.symbol+'</span> <span class="chg">'+fmtEth(s.liquidityEth)+'</span> <span class="sep">/</span></span>';
   }
-  (function buildTicker() {
+  function buildTicker() {
     const track = document.getElementById('ticker-track');
     if (!track) return;
-    const once = tickerState.map(tickerItemHtml).join('');
+    const strip = track.closest('.ticker') || track.parentElement;
+    if (!tickerState.length) {
+      // No launches yet, or the chain is unreachable. An empty strip is honest;
+      // a scrolling one full of nothing is not.
+      if (strip) strip.hidden = true;
+      return;
+    }
+    if (strip) strip.hidden = false;
+    // Repeat short lists so the loop still reads as a ticker with two launches
+    // on the board rather than one symbol crawling across an empty bar.
+    let items = tickerState.slice(0, TICKER_COUNT);
+    while (items.length && items.length < 8) items = items.concat(tickerState);
+    const once = items.slice(0, TICKER_COUNT).map(tickerItemHtml).join('');
     track.innerHTML = once + once; // duplicated so the -50% loop is seamless
 
     // Derive the duration from the actual track width so the ticker always moves
@@ -1223,7 +1304,8 @@
     tuneSpeed();
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(tuneSpeed).catch(function () {});
     window.addEventListener('load', tuneSpeed);
-  })();
+  }
+  buildTicker(); // again once the ledger loads, in INIT
 
   // ============================================================
   // LEDGER — sortable/searchable table over a live-updating dataset.
@@ -1261,9 +1343,11 @@
     arr.sort(function(a, b) {
       switch (ledgerState.sort) {
         case 'oldest': return a.launchedAt - b.launchedAt;
-        case 'mcap': return b.mcap - a.mcap;
-        case 'gainers': return pctChange(b.trend) - pctChange(a.trend);
-        case 'holders': return b.holders - a.holders;
+        case 'mcap': return (b.liquidityEth || 0) - (a.liquidityEth || 0);
+        // 'gainers' needs price history. With none, fall back to liquidity rather
+        // than ordering by a number that does not exist.
+        case 'gainers': return (b.liquidityEth || 0) - (a.liquidityEth || 0);
+        case 'holders': return (b.holders || 0) - (a.holders || 0);
         default: return b.launchedAt - a.launchedAt; // newest
       }
     });
@@ -1282,12 +1366,12 @@
         '<span class="tcard-top">' +
           '<span class="tcard-names"><span class="tcard-name">' + t.name + '</span>' +
           '<span class="token-symbol">$' + t.symbol + '</span></span>' +
-          '<span class="tcard-chg ' + (chg >= 0 ? 'up' : 'down') + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>' +
+          (chg === null ? '' : '<span class="tcard-chg ' + (chg >= 0 ? 'up' : 'down') + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>') +
         '</span>' +
-        '<span class="tcard-mc"><b data-mcap>' + fmtUsd(t.mcap) + '</b> <i>MC</i></span>' +
+        '<span class="tcard-mc"><b data-mcap>' + fmtEth(t.liquidityEth) + '</b> <i>LIQ</i></span>' +
         '<span class="tcard-bar"><i style="width:' + prog + '%"></i></span>' +
         '<span class="tcard-foot">' +
-          '<span class="tcard-addr">' + shortAddr(previewAddress(t.symbol)) + '</span>' +
+          '<span class="tcard-addr">' + shortAddr(tokenAddress(t)) + '</span>' +
           '<span class="tcard-age" data-age>' + fmtAge(t.launchedAt) + '</span>' +
         '</span>' +
       '</span></button>';
@@ -1409,6 +1493,10 @@
   // Entry point wired to fetchLedger() in INIT.
   function renderLedger(data) {
     tokens = data.slice();
+    lastSyncedAt = Date.now();
+    tickerState = tokens.map(function (t) { return { symbol: t.symbol, liquidityEth: t.liquidityEth }; });
+    buildTicker();
+    refreshStats();
     render();
     wireLedgerControls();
     startLedgerRealtime();
@@ -1420,14 +1508,23 @@
   // ============================================================
   // SPOTLIGHT
   // ============================================================
-  const spotlightToken = MOCK_TOKENS.reduce(function(b, t){ return t.whatIf.neverSold > b.whatIf.neverSold ? t : b; }, MOCK_TOKENS[0]);
+  // A worked example, not a token. It used to pick the best performer out of the
+  // generated dataset and present it as a real one under a "Top performer" badge,
+  // which read as a claim about something that had happened. The numbers below are
+  // fixed and the section says plainly that they are invented.
+  const spotlightToken = {
+    name: 'Example Token', symbol: 'EXAMPLE',
+    liquidityEth: 3.1, launchedAt: Date.now() - 26 * 24 * 60 * 60 * 1000,
+    trend: [5, 6, 8, 7, 11, 14, 13, 19, 24, 31],
+    whatIf: { neverSold: 18400 }
+  };
   let spotlightDrawn = false;
 
   (function fillSpotlight() {
     const t = spotlightToken;
     document.getElementById('sp-name').textContent = t.name;
     document.getElementById('sp-sym').textContent = '$' + t.symbol;
-    document.getElementById('sp-mcap').textContent = fmtUsd(t.mcap);
+    document.getElementById('sp-mcap').textContent = fmtEth(t.liquidityEth);
     document.getElementById('sp-age').textContent = fmtAge(t.launchedAt);
     const w = 520, h = 320, line = sparklinePath(t.trend, w, h, 26), area = line + ' L'+w+','+h+' L0,'+h+' Z';
     document.getElementById('sp-chart').innerHTML =
@@ -1544,6 +1641,17 @@
     var settle = function () { root.classList.remove('vt-active'); tagShared(null); };
     let vt;
     try { vt = document.startViewTransition(fn); } catch (e) { fn(); settle(); return; }
+    // A ViewTransition exposes three promises, and every one of them rejects when
+    // the transition is skipped -- which happens routinely, e.g. a second
+    // navigation before the first finishes. `finished` was handled; `ready` and
+    // `updateCallbackDone` were not, so each navigation logged an uncaught
+    // InvalidStateError. Nothing broke, but a console full of red is how a real
+    // error gets missed later.
+    var hush = function () {};
+    if (vt) {
+      if (vt.ready && typeof vt.ready.catch === 'function') vt.ready.catch(hush);
+      if (vt.updateCallbackDone && typeof vt.updateCallbackDone.catch === 'function') vt.updateCallbackDone.catch(hush);
+    }
     if (vt && vt.finished && typeof vt.finished.then === 'function') vt.finished.then(settle, settle);
     else settle();
     // Guarantee the class comes off even if the transition never reports back.
@@ -1650,20 +1758,11 @@
     el.addEventListener('click', function (e) { e.preventDefault(); goToExplore(); });
   });
 
-  /** Deterministic placeholder contract address for the preview dataset.
-   *  Replace with the real `token_address` from the launches table once the
-   *  backend is wired up. */
-  const addrCache = {};
-  function previewAddress(sym) {
-    if (addrCache[sym]) return addrCache[sym]; // called once per card per render
-    var seed = 'ponsr:' + sym, h = 2166136261, hex = '';
-    for (var i = 0; i < 40; i++) {
-      h = (h ^ seed.charCodeAt(i % seed.length)) >>> 0;
-      h = (h * 16777619) >>> 0;
-      hex += '0123456789abcdef'.charAt((h >>> (i % 8)) & 15);
-    }
-    addrCache[sym] = '0x' + hex;
-    return addrCache[sym];
+  /** The token's real contract address, straight from the TokenLaunched event.
+   *  This used to hash the symbol into a plausible-looking address that existed
+   *  on no chain -- printed under a heading promising a public record. */
+  function tokenAddress(t) {
+    return (t && t.address) ? t.address : '';
   }
 
   function renderTokenPage(t) {
@@ -1680,16 +1779,33 @@
     st.className = 'tstatus ' + t.status;
 
     document.getElementById('tp-age').textContent = 'launched ' + fmtAge(t.launchedAt);
-    document.getElementById('tp-mcap').textContent = fmtUsd(t.mcap);
-    document.getElementById('tp-holders').textContent = fmtHolders(t.holders);
+    document.getElementById('tp-mcap').textContent = fmtEth(t.liquidityEth);
+    document.getElementById('tp-holders').textContent = t.holders === null ? '—' : fmtHolders(t.holders);
     document.getElementById('tp-status2').textContent = graduated ? 'Graduated' : 'On curve';
     document.getElementById('tp-launched').textContent = fmtAge(t.launchedAt);
-    document.getElementById('tp-addr').textContent = previewAddress(t.symbol);
+    document.getElementById('tp-addr').textContent = tokenAddress(t);
 
     var chg = pctChange(t.trend);
     var ce = document.getElementById('tp-change');
-    ce.textContent = (chg >= 0 ? '+' : '') + chg + '%';
-    ce.className = 'tp-change ' + (chg >= 0 ? 'up' : 'down');
+    // No price history means no change to state. Hidden, not zeroed: "+0%" is a
+    // claim that the price held steady, which nobody here knows.
+    ce.hidden = chg === null;
+    if (chg !== null) {
+      ce.textContent = (chg >= 0 ? '+' : '') + chg + '%';
+      ce.className = 'tp-change ' + (chg >= 0 ? 'up' : 'down');
+    }
+
+    var chartEl = document.getElementById('tp-chart');
+    var chartWrap = chartEl && (chartEl.closest('.tp-chart-wrap') || chartEl.parentElement);
+    if (!t.trend) {
+      // Same reasoning as the change chip: a flat line is a picture of a claim.
+      if (chartEl) chartEl.innerHTML = '';
+      if (chartWrap) chartWrap.hidden = true;
+      document.getElementById('tp-locked').hidden = false;
+      document.getElementById('tp-figures').hidden = true;
+      return;
+    }
+    if (chartWrap) chartWrap.hidden = false;
 
     var W = 900, H = 260;
     var line = sparklinePath(t.trend, W, H, 26);
@@ -1727,15 +1843,16 @@
   document.getElementById('tp-connect').addEventListener('click', function () {
     var t = currentToken;
     if (!t) return;
-    document.getElementById('tp-locked').hidden = true;
-    document.getElementById('tp-figures').hidden = false;
-    document.getElementById('tp-bought').textContent = t.whatIf.boughtTokens + ' ' + t.symbol;
-    document.getElementById('tp-actual').textContent = fmtUsdFull(t.whatIf.actual);
-    var delta = t.whatIf.neverSold - t.whatIf.actual;
-    var de = document.getElementById('tp-delta');
-    de.textContent = (delta >= 0 ? '+' : '−') + fmtUsdFull(Math.abs(delta));
-    de.className = 'value ' + (delta >= 0 ? 'gain' : 'loss');
-    animateCountUp(document.getElementById('tp-neversold'), t.whatIf.neverSold);
+    // This used to reveal a full set of figures generated for the preview
+    // dataset, presented as "what your position would be worth" for a wallet
+    // that was never connected. The calculation needs per-wallet trade history
+    // from an indexer (Part 3 §9 / Phase 6), and until that exists the honest
+    // answer is that there is nothing to show.
+    var note = document.querySelector('.tp-demo-note');
+    if (note) {
+      note.textContent = 'Not available yet — this needs the per-wallet trade indexer, which is not built.';
+      note.classList.add('tp-demo-note-strong');
+    }
   });
 
   document.getElementById('tp-share').addEventListener('click', function () {
@@ -1761,12 +1878,27 @@
     (function tick(now) { const p = Math.min((now-start)/duration, 1), e = 1 - Math.pow(1-p, 3); el.textContent = fmtUsdFull(Math.round(target*e)); if (p < 1) requestAnimationFrame(tick); })(start);
   }
   function animateStatStrip() {
-    document.querySelectorAll('[data-count-to]').forEach(function(el) {
+    // The strip used to count up to hardcoded totals -- 1,284 launches, Ξ42 in
+    // creator fees -- before any data loaded, and they never changed afterwards.
+    // It now waits for refreshStats(), which reads the chain.
+    document.querySelectorAll('[data-count-to]').forEach(function (el) {
       const target = parseFloat(el.dataset.countTo), prefix = el.dataset.prefix || '';
       if (reducedMotion) { el.textContent = prefix + target.toLocaleString('en-US'); return; }
       const duration = 1300, start = performance.now();
       (function tick(now) { const p = Math.min((now-start)/duration, 1), e = 1 - Math.pow(1-p, 3); el.textContent = prefix + Math.round(target*e).toLocaleString('en-US'); if (p < 1) requestAnimationFrame(tick); })(start);
     });
+  }
+
+  /** Hero stat strip, computed from whatever the chain actually returned. */
+  function refreshStats() {
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const total = tokens.length;
+    const today = tokens.filter(function (t) { return t.launchedAt >= dayAgo; }).length;
+    const liq = tokens.reduce(function (sum, t) { return sum + (t.liquidityEth || 0); }, 0);
+    const set = function (id, text) { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('stat-total', total.toLocaleString('en-US'));
+    set('stat-today', today.toLocaleString('en-US'));
+    set('stat-liq', fmtEth(liq));
   }
 
   // ============================================================
@@ -1857,124 +1989,63 @@
   // ============================================================
   // REALTIME (ticker flicker, creator-fees accrual, synced clock)
   // ============================================================
+  // The ticker flicker and the creator-fee counter that used to live here both
+  // invented movement -- a random walk on percentages and a number that went up
+  // by one every eight seconds regardless of anything. Neither had a source.
+  let lastSyncedAt = 0;
   function startRealtime() {
-    // Ticker price flicker
-    setInterval(function() {
-      const idx = Math.floor(Math.random() * tickerState.length);
-      tickerState[idx].chg += Math.round(rnd(-3, 4));
-      document.querySelectorAll('.ticker-item[data-sym="' + tickerState[idx].symbol + '"]').forEach(function(node) {
-        const s = tickerState[idx], cls = s.chg >= 0 ? 'up' : 'down', sign = s.chg >= 0 ? '+' : '';
-        node.innerHTML = '<span class="sym">$'+s.symbol+'</span> <span class="chg '+cls+'">'+sign+s.chg+'%</span> <span class="sep">/</span>';
-        node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash');
-      });
-    }, 4200);
-
-    // Creator fees slowly accruing
-    setInterval(function() {
-      const chip = document.querySelectorAll('[data-count-to]')[2];
-      if (chip) { const v = (parseInt(chip.textContent.replace(/\D/g,''),10)||0) + 1; chip.textContent = 'Ξ' + v.toLocaleString('en-US'); bumpChip(chip); }
-    }, 8000);
-
-    // Synced clock
-    let secs = 0;
-    setInterval(function() {
-      secs += 1;
+    // Says how long ago the chain was actually last read. Counting from a real
+    // event is the whole difference between this and the clock it replaced,
+    // which reset every twelve seconds so it always read "just now".
+    setInterval(function () {
       const el = document.getElementById('synced-ago');
-      if (el) el.textContent = secs < 2 ? 'just now' : secs + 's ago';
-      if (secs >= 12) secs = 0;
+      if (!el) return;
+      if (!lastSyncedAt) { el.textContent = 'connecting…'; return; }
+      const secs = Math.max(0, Math.round((Date.now() - lastSyncedAt) / 1000));
+      el.textContent = secs < 5 ? 'just now'
+        : secs < 90 ? secs + 's ago'
+        : Math.round(secs / 60) + 'm ago';
     }, 1000);
   }
 
-  // ============================================================
-  // LEDGER REALTIME — simulates fresh launches + market movement over
-  // the mock dataset. With a real backend, drive these from your feed.
-  // ============================================================
-  const incomingNames = [
-    { name: 'Lunar Fox', symbol: 'LFOX' }, { name: 'Drift Coin', symbol: 'DRIFT' },
-    { name: 'Prism', symbol: 'PRSM' }, { name: 'Vertex', symbol: 'VRTX' },
-    { name: 'Echo Ape', symbol: 'ECHO' }, { name: 'Blaze', symbol: 'BLAZE' },
-    { name: 'Nimbus', symbol: 'NMBS' }, { name: 'Karat', symbol: 'KARAT' },
-    { name: 'Flux', symbol: 'FLUX' }, { name: 'Orbit', symbol: 'ORBIT' }
-  ];
-  let launchSeq = 0;
-
-  /** Symbols are the routing key (?token=SYMBOL), so they have to stay unique --
-   *  the name pool is small, and two tokens sharing a symbol would make one of
-   *  their cards open the other one's page. */
-  function uniqueSymbol(base) {
-    let sym = base, n = 2;
-    while (tokens.some(function (t) { return t.symbol === sym; })) { sym = base + n; n++; }
-    return sym;
-  }
-
-  function makeToken() {
-    const pick = incomingNames[Math.floor(Math.random() * incomingNames.length)];
-    launchSeq++;
-    const mcap = Math.round(rnd(4000, 68000));
-    let v = rnd(4, 9); const trend = [];
-    for (let i = 0; i < 10; i++) { v = Math.max(1, v + rnd(-1.6, 2.2)); trend.push(Math.round(v)); }
-    const neverSold = Math.round(mcap * rnd(0.05, 0.45));
-    const actual = Math.round(neverSold * rnd(0, 1.15));
-    const bought = (Math.round(rnd(20, 620)) * 1000).toLocaleString('en-US');
-    const symbol = uniqueSymbol(pick.symbol);
-    return { id: symbol.toLowerCase() + '-' + launchSeq, name: pick.name, symbol: symbol,
-      launchedAt: Date.now(), mcap: mcap, holders: Math.round(rnd(15, 380)), status: 'curve', trend: trend,
-      whatIf: { neverSold: neverSold, boughtTokens: bought, actual: actual } };
-  }
+  // The generator that used to live here -- a pool of invented token names, a
+  // unique-symbol allocator and makeToken() -- produced the fake launches the
+  // board scrolled past every seven seconds. All of it is gone; the board reads
+  // the chain now.
 
   /** The board's DOM work is pointless while the explore view is hidden -- the
    *  data still updates, only the rendering is skipped. */
   function exploreVisible() { return exploreView && !exploreView.hidden; }
 
   function startLedgerRealtime() {
-    // A fresh launch arrives at the top
-    setInterval(function() {
-      const t = makeToken();
-      tokens.unshift(t);
-      if (tokens.length > 400) tokens.pop();
-      // Only redraw the grid when the newest launch would actually be on screen.
-      // Re-rendering while the visitor is deeper in the pages would shuffle the
-      // cards out from under them every few seconds.
-      if (ledgerState.page === 1 && exploreVisible()) {
-        render();
-        const row = document.querySelector('.tcard[data-id="' + t.id + '"]');
-        if (row && !reducedMotion) { row.classList.add('fresh'); setTimeout(function(){ row.classList.remove('fresh'); }, 2500); }
-      } else {
-        renderPager(Math.max(1, Math.ceil(ledgerView().length / PAGE_SIZE)));
-      }
-      spawnToast(t.symbol);
-      incChip(document.querySelectorAll('[data-count-to]')[0]);
-      incChip(document.querySelectorAll('[data-count-to]')[1]);
-    }, 7000);
-
-    // Live age ticking, in place (no full re-render)
-    setInterval(function() {
+    // Ages tick in place. Real: recomputed from the launch block's timestamp, so
+    // this is presentation, not invented movement.
+    setInterval(function () {
       if (!exploreVisible()) return;
-      document.querySelectorAll('.tcard').forEach(function(row) {
+      document.querySelectorAll('.tcard').forEach(function (row) {
         const el = row.querySelector('[data-age]');
         if (el) el.textContent = fmtAge(parseInt(row.dataset.launchedat, 10));
       });
     }, 3000);
 
-    // Market movement on a random token
-    setInterval(function() {
-      if (!tokens.length) return;
-      const t = tokens[Math.floor(Math.random() * tokens.length)];
-      t.mcap = Math.max(2000, Math.round(t.mcap * rnd(0.97, 1.045)));
-      t.holders += Math.round(rnd(0, 3));
-      const row = exploreVisible() ? document.querySelector('.tcard[data-id="' + t.id + '"]') : null;
-      if (row) {
-        const mc = row.querySelector('[data-mcap]');
-        if (mc) { mc.textContent = fmtUsd(t.mcap); mc.classList.remove('bump'); void mc.offsetWidth; mc.classList.add('bump'); setTimeout(function(){ mc.classList.remove('bump'); }, 550); }
-        const bar = row.querySelector('.tcard-bar i'); if (bar) bar.style.width = gradProgress(t) + '%';
-      }
-      // keep an open token page in sync with the same tick
-      if (currentToken && currentToken.id === t.id) {
-        const mc = document.getElementById('tp-mcap');
-        if (mc) { mc.textContent = fmtUsd(t.mcap); mc.classList.remove('bump'); void mc.offsetWidth; mc.classList.add('bump'); setTimeout(function(){ mc.classList.remove('bump'); }, 550); }
-        const hd = document.getElementById('tp-holders'); if (hd) hd.textContent = fmtHolders(t.holders);
-      }
-    }, 3400);
+    // Re-read the chain. This replaces a simulation that invented a new launch
+    // every 7 seconds and nudged market caps every 3.4 -- convincing motion over
+    // numbers that were never real. A launchpad this young is quiet, and showing
+    // that honestly is the point of the board.
+    setInterval(function () {
+      fetchLedger().then(function (fresh) {
+        if (!fresh) return;
+        const hadNew = fresh.length > tokens.length;
+        tokens = fresh;
+        lastSyncedAt = Date.now();
+        refreshStats();
+        if (exploreVisible()) render();
+        if (hadNew && !reducedMotion) spawnToast(fresh[0].symbol);
+      }).catch(function () {
+        // A failed poll changes nothing on screen. The "synced" clock keeps
+        // counting from the last success, which is what the visitor needs to know.
+      });
+    }, 60000);
   }
 
   function incChip(el) {
@@ -1992,7 +2063,8 @@
   function spawnToast(sym) {
     const wrap = document.getElementById('toast-wrap');
     if (!wrap || reducedMotion) return;
-    const symbol = sym || incomingNames[Math.floor(Math.random()*incomingNames.length)].symbol;
+    const symbol = sym;
+    if (!symbol) return; // only ever fired for a real launch now
     const el = document.createElement('div');
     el.className = 'toast';
     el.innerHTML = '<span class="tdot"></span><span>New launch <span class="tsym">$'+symbol+'</span></span><span class="tmeta">just now</span>';
