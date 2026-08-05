@@ -54,9 +54,21 @@ describe('SplitXClient', () => {
 });
 
 describe('providers refuse to run unconfigured', () => {
-  it('the reader says which key is missing', async () => {
+  it('the reader names the missing key before anything else', async () => {
+    // Ordering matters: with no key configured, complaining about a missing handle would
+    // send someone looking in the wrong place entirely.
+    await expect(new TwitterApiIoReader('', 'ponsrdotfun').getAccountSignals('u1', 'someone'))
+      .rejects.toThrow(/TWITTERAPI_IO_KEY/);
     await expect(new TwitterApiIoReader('', 'ponsrdotfun').getAccountSignals('u1'))
       .rejects.toThrow(/TWITTERAPI_IO_KEY/);
+  });
+
+  it('CRITICAL: refuses a lookup with no handle rather than querying the wrong thing', async () => {
+    // twitterapi.io keys user lookups on the handle and rejects a numeric id outright. A
+    // silent wrong query here would make every account look brand new with no followers,
+    // and the bot would turn away every user with a message about their account age.
+    await expect(new TwitterApiIoReader('k', 'ponsrdotfun').getAccountSignals('u1'))
+      .rejects.toThrow(/handle/i);
   });
 
   it('the writer says which keys are missing', async () => {

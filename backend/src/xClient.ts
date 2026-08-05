@@ -33,7 +33,13 @@ import { config } from './config';
 
 export interface XClient {
   postReply(inReplyToTweetId: string, text: string): Promise<{ tweetId: string }>;
-  getAccountSignals(xUserId: string): Promise<AccountSignals>;
+  /**
+   * @param xHandle passed alongside the id because twitterapi.io's user lookup keys on the
+   * handle, not the numeric id -- it rejects a userId outright with "userName is required".
+   * The id stays in the signature because it is what the rest of the pipeline identifies a
+   * user by, and it is what a future provider would most likely want.
+   */
+  getAccountSignals(xUserId: string, xHandle?: string): Promise<AccountSignals>;
   /** Mentions of the bot since a timestamp, newest-or-oldest order irrelevant.
    *  This is the fallback path for Part 7 §5: webhooks get dropped under real
    *  network conditions, and without a poll to fall back on a dropped delivery
@@ -43,7 +49,7 @@ export interface XClient {
 
 /** The read half -- high volume, no account exposure. */
 export interface XReader {
-  getAccountSignals(xUserId: string): Promise<AccountSignals>;
+  getAccountSignals(xUserId: string, xHandle?: string): Promise<AccountSignals>;
   getRecentMentions(sinceIso: string): Promise<InboundMention[]>;
 }
 
@@ -62,8 +68,8 @@ export interface XWriter {
 export class SplitXClient implements XClient {
   constructor(private reader: XReader, private writer: XWriter) {}
 
-  getAccountSignals(xUserId: string) {
-    return this.reader.getAccountSignals(xUserId);
+  getAccountSignals(xUserId: string, xHandle?: string) {
+    return this.reader.getAccountSignals(xUserId, xHandle);
   }
   getRecentMentions(sinceIso: string) {
     return this.reader.getRecentMentions(sinceIso);
@@ -81,20 +87,66 @@ export class TwitterApiIoReader implements XReader {
   constructor(
     private apiKey: string,
     private botHandle: string,
-    private baseUrl = 'https://api.twitterapi.io'
+    private baseUrl = 'https://api.twitterapi.io',
+    /** Free tier documents one request every 5 seconds. */
+    private minIntervalMs = 5200
   ) {}
 
-  private async get(pathAndQuery: string): Promise<any> {
+  /**
+   * One request at a time, spaced out, with a retry on 429.
+   *
+   * The free tier allows one request every five seconds, and the bot naturally bursts: a
+   * launch does an account lookup while the reconciler may be mid-poll. Without this, the
+   * second call returns 429 and the launch fails for a reason that has nothing to do with
+   * the user -- so the spacing is a correctness concern, not politeness.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+  private lastCallAt = 0;
+
+  private async get(pathAndQuery: string, attempt = 0): Promise<any> {
     if (!this.apiKey) throw new Error('twitterapi.io is not configured: set TWITTERAPI_IO_KEY.');
-    const res = await fetch(this.baseUrl + pathAndQuery, { headers: { 'x-api-key': this.apiKey } });
-    if (!res.ok) {
-      throw new Error(`twitterapi.io ${res.status} on ${pathAndQuery}: ${(await res.text()).slice(0, 200)}`);
-    }
-    return res.json();
+
+    const run = async (): Promise<any> => {
+      const wait = Math.max(0, this.minIntervalMs - (Date.now() - this.lastCallAt));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.lastCallAt = Date.now();
+
+      const res = await fetch(this.baseUrl + pathAndQuery, { headers: { 'x-api-key': this.apiKey } });
+      if (res.status === 429 && attempt < 3) {
+        // Exponential-ish: the documented window is 5s, so wait longer each time rather than
+        // hammering a limit that is already complaining.
+        await new Promise((r) => setTimeout(r, this.minIntervalMs * (attempt + 1)));
+        return this.get(pathAndQuery, attempt + 1);
+      }
+      if (!res.ok) {
+        throw new Error(`twitterapi.io ${res.status} on ${pathAndQuery}: ${(await res.text()).slice(0, 200)}`);
+      }
+      return res.json();
+    };
+
+    // Serialise through a promise chain so concurrent callers cannot both slip past the gap.
+    const next = this.queue.then(run, run);
+    this.queue = next.catch(() => undefined);
+    return next;
   }
 
-  async getAccountSignals(xUserId: string): Promise<AccountSignals> {
-    const body = await this.get(`/twitter/user/info?userId=${encodeURIComponent(xUserId)}`);
+  /** Checked before anything else: with no key configured, a complaint about a missing
+   *  handle sends the reader looking in the wrong place entirely. */
+  private assertConfigured(): void {
+    if (!this.apiKey) throw new Error('twitterapi.io is not configured: set TWITTERAPI_IO_KEY.');
+  }
+
+  async getAccountSignals(xUserId: string, xHandle?: string): Promise<AccountSignals> {
+    this.assertConfigured();
+    // Keyed on the handle: this endpoint rejects a numeric id with "userName is required".
+    // Discovered by calling it, not by reading about it -- the original guess typechecked.
+    if (!xHandle) {
+      throw new Error(
+        `twitterapi.io looks accounts up by handle, and none was supplied for ${xUserId}. ` +
+          'Pass mention.authorHandle through to getAccountSignals.'
+      );
+    }
+    const body = await this.get(`/twitter/user/info?userName=${encodeURIComponent(xHandle)}`);
     const u = body?.data ?? body;
     const createdAt = u?.createdAt ?? u?.created_at;
     const followers = u?.followers ?? u?.followers_count ?? u?.followersCount;
@@ -118,6 +170,7 @@ export class TwitterApiIoReader implements XReader {
   }
 
   async getRecentMentions(sinceIso: string): Promise<InboundMention[]> {
+    this.assertConfigured();
     const query = encodeURIComponent(`@${this.botHandle}`);
     const body = await this.get(`/twitter/tweet/advanced_search?query=${query}&queryType=Latest`);
     const tweets: any[] = body?.tweets ?? body?.data ?? [];

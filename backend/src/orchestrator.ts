@@ -77,7 +77,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   // --- Step 2: validation guard ---
   const validation = await validateLaunchRequest(intent, mention.authorXUserId, mention.tweetId, {
     db: deps.db,
-    getAccountSignals: (id) => deps.xClient.getAccountSignals(id),
+    getAccountSignals: (id) => deps.xClient.getAccountSignals(id, mention.authorHandle),
     getLiveFeeWei: deps.getLiveFeeWei,
     getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
     getLaunchReadiness: deps.getLaunchReadiness,
