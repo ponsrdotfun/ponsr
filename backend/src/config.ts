@@ -17,6 +17,9 @@ const ConfigSchema = z.object({
   // -- LLM parser (Part 9: Claude Haiku 4.5 is the chosen model) --
   ANTHROPIC_API_KEY: z.string().optional(),
   PARSER_MODEL: z.string().default('claude-haiku-4-5'),
+  // Same model, routed through OpenRouter when there is no direct Anthropic key.
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_MODEL: z.string().default('anthropic/claude-haiku-4.5'),
 
   // -- X: reads and writes go to different providers. See xClient.ts for why. --
   // READ (mentions, account signals) -- twitterapi.io, ~$0.00015/tweet vs X's $0.005.

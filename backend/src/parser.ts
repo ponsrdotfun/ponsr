@@ -65,6 +65,87 @@ export class ClaudeParser implements ParserClient {
   }
 }
 
+/**
+ * Same model, reached through OpenRouter instead of Anthropic directly.
+ *
+ * The model choice is not being revisited here -- `anthropic/claude-haiku-4.5` is the same
+ * Haiku 4.5 that Part 9 settled on, and the eval set is what decides whether a parser is
+ * trusted either way. Only the route changes.
+ *
+ * Two things follow from that route, and both are real:
+ *
+ *   - Tweets pass through a third party that Anthropic's own endpoint does not involve.
+ *     Tweets are public, so this leaks nothing private, but it is one more operator in the
+ *     path and worth knowing.
+ *   - OpenRouter speaks the OpenAI shape, so the system prompt goes in as a `system` message
+ *     rather than a top-level field. Same content, different envelope.
+ *
+ * Uses plain fetch rather than the OpenAI SDK: this is one POST, and a dependency added for
+ * one POST is a dependency to keep patched forever.
+ */
+export class OpenRouterParser implements ParserClient {
+  constructor(
+    private apiKey: string,
+    private model: string = config.OPENROUTER_MODEL
+  ) {}
+
+  async parse(tweetText: string): Promise<ParsedIntent> {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        // OpenRouter attributes usage by these; they are optional but make the dashboard
+        // readable when something starts costing more than expected.
+        'HTTP-Referer': 'https://ponsr.fun',
+        'X-Title': 'Ponsr',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: 300,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: tweetText },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+
+    const body: any = await res.json();
+    // OpenRouter returns HTTP 200 with an `error` body for upstream failures -- a provider
+    // outage or an exhausted credit balance arrives looking like success. Checking the status
+    // alone would hand an undefined down to the validator and report it as a parse failure,
+    // which points at the prompt instead of at the account.
+    if (body?.error) {
+      throw new Error(`OpenRouter upstream error: ${JSON.stringify(body.error).slice(0, 300)}`);
+    }
+    const text = body?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.length === 0) {
+      throw new Error(`OpenRouter returned no text content: ${JSON.stringify(body).slice(0, 300)}`);
+    }
+
+    return parseAndValidateModelOutput(text);
+  }
+}
+
+/**
+ * Picks the parser from whichever credential is configured, preferring Anthropic directly.
+ *
+ * Returns null rather than throwing when neither is set. A missing parser key is a
+ * configuration state the caller decides how to handle -- the bot refuses to boot, while the
+ * eval script says which key to set. Throwing here would force both into a try/catch to tell
+ * those apart.
+ */
+export function createParser(): ParserClient | null {
+  if (config.ANTHROPIC_API_KEY) return new ClaudeParser(config.ANTHROPIC_API_KEY);
+  if (config.OPENROUTER_API_KEY) return new OpenRouterParser(config.OPENROUTER_API_KEY);
+  return null;
+}
+
 /** Parses and validates raw model output against the strict schema. Exported separately so
  * it can be unit-tested against the eval set's fixed strings without needing API access. */
 export function parseAndValidateModelOutput(raw: string): ParsedIntent {

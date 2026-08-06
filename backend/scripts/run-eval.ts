@@ -1,18 +1,22 @@
 /**
  * Runs parser-eval-set.json against the real Claude Haiku 4.5 API and reports pass/fail per
- * the scoring rules from parser-eval-guide.md. Requires ANTHROPIC_API_KEY to be set (this
+ * the scoring rules from parser-eval-guide.md. Requires a parser credential to be set (this
  * hits the real API and incurs real, tiny cost -- see Part 9's cost simulation, well under
  * $0.01 total for all 28 cases).
  *
  * Usage:
  *   ANTHROPIC_API_KEY=sk-ant-... npx ts-node scripts/run-eval.ts
  *
+ * Runs against whichever parser credential is configured -- Anthropic directly, or the same
+ * Haiku 4.5 through OpenRouter. The eval is what decides whether a parser is trusted, so it
+ * must be re-run when the route changes, not only when the prompt does.
+ *
  * Per Part 11's roadmap, this should be run and pass cleanly before Phase 1 testnet code is
  * trusted, and kept as a regression check any time the system prompt in parser.ts changes.
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { ClaudeParser } from '../src/parser';
+import { createParser } from '../src/parser';
 import { ParsedIntent } from '../src/types';
 
 interface EvalCase {
@@ -68,13 +72,13 @@ function scoreAdversarialCase(actual: ParsedIntent): { pass: boolean; note: stri
 }
 
 async function main() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.error('ANTHROPIC_API_KEY is not set. See the usage comment at the top of this file.');
+  const parser = createParser();
+  if (!parser) {
+    console.error('No parser credential. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY in backend/.env.');
     process.exit(1);
   }
-
-  const parser = new ClaudeParser(apiKey);
+  console.log(`parser: ${parser.constructor.name}
+`);
   const cases = loadEvalSet();
 
   let passCount = 0;

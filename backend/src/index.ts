@@ -2,7 +2,7 @@ import express from 'express';
 import { ethers } from 'ethers';
 import { config, requireConfig } from './config';
 import { Db } from './db';
-import { ClaudeParser } from './parser';
+import { createParser } from './parser';
 import { PrivyWalletResolver } from './walletResolver';
 import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
@@ -33,7 +33,13 @@ const monitor = new TreasuryMonitor(db, new ConsoleNotifier(), undefined, 30, {
 // account signups (Privy, Turnkey, twitterapi.io) per Phase 0 of the implementation roadmap.
 const deps = {
   db,
-  parser: new ClaudeParser(requireConfig('ANTHROPIC_API_KEY')),
+  parser: (() => {
+    const p = createParser();
+    // Refuse to boot rather than start and fail on the first mention. Without a parser the
+    // bot can accept tweets and do nothing with them, which looks like the bot ignoring users.
+    if (!p) throw new Error('No parser credential. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY.');
+    return p;
+  })(),
   walletResolver: new PrivyWalletResolver(db, config.PRIVY_APP_ID ?? '', config.PRIVY_APP_SECRET ?? ''),
   xClient: createXClient(),
   treasurySigner,
