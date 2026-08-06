@@ -5,7 +5,7 @@
   "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest --runInBand"

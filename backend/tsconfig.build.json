@@ -1,0 +1,23 @@
+{
+  // Production build only. `tsconfig.json` deliberately includes tests and scripts so that
+  // `tsc --noEmit` typechecks the whole repo -- but compiling them is wrong for two reasons:
+  //
+  //   1. With `rootDir: "."` and three source roots, tsc mirrors the tree and emits
+  //      `dist/src/index.js`. package.json's `start` and `main` both say `dist/index.js`, so
+  //      `npm start` has never worked. Local development uses `npm run dev` (ts-node), which
+  //      is why nothing surfaced it until the Dockerfile needed a real build.
+  //
+  //   2. It shipped the operator scripts into the production image. `phase-b-launch.ts` and
+  //      `collect-and-split.ts` spend the treasury; they belong on the operator's machine, not
+  //      on an internet-facing container.
+  //
+  // Narrowing rootDir to `src` fixes both: the entrypoint lands at dist/index.js, and nothing
+  // outside src is emitted.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "scripts"]
+}
