@@ -17,7 +17,14 @@
 # Do not run `fly scale count 2`. See docs/DEPLOY.md.
 
 app = "ponsr-backend"
-primary_region = "sin"   # Singapore -- nearest region to the operator
+# Ashburn, Virginia. Chosen for proximity to the services this process talks to, not to the
+# operator: the Robinhood Chain RPC, twitterapi.io and the X API are all US-hosted, and the
+# bot makes far more calls to them than a person ever makes to it. The operator touches this
+# through `fly` commands, where a few hundred milliseconds costs nothing.
+#
+# The volume must be created in this SAME region -- a machine cannot mount a volume from
+# another one, and the failure appears at deploy time as a machine that will not place.
+primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"

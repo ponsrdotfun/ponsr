@@ -48,8 +48,12 @@ fly apps create ponsr-backend
 Then the volume the database lives on. Without it the deploy fails, which is the intended
 behaviour: better a failed deploy than a running bot with a disposable database.
 
+The region must match `primary_region` in `fly.toml` (`iad`). A machine cannot mount a volume
+from a different region, and the symptom is a deploy whose machine never places rather than an
+error naming the region.
+
 ```bash
-fly volumes create ponsr_data --region sin --size 1 -a ponsr-backend
+fly volumes create ponsr_data --region iad --size 1 -a ponsr-backend
 ```
 
 Set the secrets. These never enter the image — an image layer is readable by anyone who can
