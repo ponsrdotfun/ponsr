@@ -88,6 +88,10 @@ a scenario in Part 5's audit.
 fly deploy
 ```
 
+The image is verified to build and run (2026-08-06): it starts as the non-root `node` user,
+carries no compiler, and contains no `.env`, `scripts/` or `tests/`. It refuses to start on a
+read-only mount, boots on a writable volume, and the database survives across containers.
+
 ### Two variables that must NOT be set
 
 - **`TREASURY_SIGNER_PRIVATE_KEY`.** Production signs through Turnkey, with a policy that
@@ -113,9 +117,12 @@ fly logs
 
 Three lines to look for, all of them written specifically so a broken deploy is loud:
 
-- `Database at /data/bot.sqlite (volume).` — if this says the development default instead, or
-  reports `[storage/error]`, the volume is not mounted and **the bot must be stopped**. Every
-  redeploy from that state loses the idempotency record.
+- `Database at /data/bot.sqlite (configured, not the default).` — the wording is deliberate:
+  nothing can portably verify that a path is a real mount, so the line reports what was
+  configured and claims nothing more. If it instead reports `[storage/error]`, the process
+  **exits rather than starting** — a bot that listens with an unwritable database spends the
+  launch fee and then cannot record that it did, so the next sweep launches the same request
+  again. A production deploy still on the development default is reported as an error too.
 - `Hot treasury wallet 0x… ; cold 0x… .` — anything at `[treasury/error]` means the hot/cold
   split is not real. A missing cold address, or one equal to the hot wallet, is a split that
   looks configured and is not.
