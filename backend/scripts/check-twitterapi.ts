@@ -31,7 +31,8 @@ function line(label: string, value: unknown) {
 (async () => {
   if (!config.TWITTERAPI_IO_KEY) {
     console.error('TWITTERAPI_IO_KEY is not set in backend/.env.');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const reader = new TwitterApiIoReader(config.TWITTERAPI_IO_KEY, config.BOT_X_HANDLE);
 
@@ -75,10 +76,21 @@ function line(label: string, value: unknown) {
     mentionsOk = true;
 
     if (mentions.length === 0) {
-      console.log('\n  Zero is plausible -- the account is new and nobody has tagged it. But it is');
-      console.log('  also exactly what a wrong endpoint returns, and the two are indistinguishable');
-      console.log('  from here. Tag @' + config.BOT_X_HANDLE + ' from any account and re-run: if it');
-      console.log('  still reads zero, the query is wrong rather than the world being quiet.');
+      // Zero for a new account is honest; zero from a broken query looks identical. Rather
+      // than leave that ambiguous -- or wait for someone to tag the bot -- run the same query
+      // against an account that certainly has mentions. If that returns rows, the query
+      // works and the silence is real.
+      console.log('\n  Zero. Checking whether the query itself works, against a busy account...');
+      const control = new TwitterApiIoReader(config.TWITTERAPI_IO_KEY!, 'elonmusk');
+      const sample = await control.getRecentMentions(new Date(Date.now() - 2 * 86400000).toISOString());
+      line('control query', `${sample.length} mention(s) for a busy account`);
+      if (sample.length > 0 && sample[0].tweetId && sample[0].authorXUserId) {
+        console.log('  The query works and the fields map. Zero mentions for @' + config.BOT_X_HANDLE);
+        console.log('  is genuine: nobody has tagged it yet.');
+      } else {
+        mentionsOk = false;
+        console.log('  >>> Returns nothing even for a busy account. The query is wrong.');
+      }
     } else {
       const m = mentions[0];
       console.log('\n  Most recent, with the fields the pipeline needs:');
@@ -100,7 +112,7 @@ function line(label: string, value: unknown) {
   console.log('\n=== RESULT ===');
   line('account signals', signalsOk ? 'OK ✅' : 'needs mapping ❌');
   line('mention polling', mentionsOk ? 'OK ✅' : 'needs mapping ❌');
-  process.exit(signalsOk && mentionsOk ? 0 : 1);
+  process.exitCode = signalsOk && mentionsOk ? 0 : 1;
 })().catch((err) => {
   console.error('FAILED:', err?.message ?? err);
   process.exit(1);
