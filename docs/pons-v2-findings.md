@@ -894,17 +894,31 @@ checks in `validator.ts` are required scope and not hardening, and why weakening
    hardcoding it. The bot reads it live; **revenue models must treat 30 as today's value, not
    a constant.**
 
-### The open decision
+### ✅ DECIDED 2026-08-06: keep 95/5
 
-`FeeSplitter` is immutable, but a fresh one is deployed per launch, so a ratio change affects
-future launches only and strands nothing. Three options, none yet chosen:
+The owner's call, and it needs no code change — `FeeSplitter` already splits 95/5. The
+reasoning is that Ponsr will launch its own token, and the owner takes the **creator** share
+on it (66.5% of that token's trading fees), which is expected to cover running costs. The
+platform's 3.5% then does not have to carry infrastructure on its own.
 
-- **Keep 95/5.** Creator takes 66.5% of trading fees, treasury 3.5%. Most generous, slowest
-  to pay back, most exposed to a `protocolFeeShare` rise.
-- **Move to 90/10.** Creator 63%, treasury 7%. Break-even drops to ~0.71 ETH of volume — half
-  the traded volume needed per launch.
-- **Keep the ratio, fix only the claims.** Viable, but only if the published figures are the
-  post-protocol ones.
+Options not taken, kept so the decision can be revisited with its alternatives intact:
+
+- **90/10** — creator 63%, treasury 7%, break-even ~0.71 ETH of volume instead of ~1.43.
+- **Keep the ratio, change only the claims** — what was chosen, with the claims already
+  corrected in §9.9.1.
+
+Two consequences that follow from *how* this is funded, neither of them blocking:
+
+1. **Running costs now depend on Ponsr's own token trading**, not on launch volume across the
+   platform. Those are different risks: the platform can be busy while the token is flat, and
+   the 3.5% alone breaks even at ~1.43 ETH of volume per launch. Worth revisiting if the
+   token's fees come in under the infrastructure bill.
+2. **The creator share arrives in the same shape as the treasury's** — the launched token plus
+   WETH, never ETH (§9.9.1). Half of the owner's creator fees will be Ponsr's own token, which
+   cannot be spent on hosting without selling it. Only the WETH half is directly usable.
+
+A ratio change remains cheap at any time: a fresh `FeeSplitter` is deployed per launch, so a
+future change affects later launches only and strands nothing already deployed.
 
 Whichever is chosen, the numbers that may appear in user-facing copy are **66.5% and 3.5%**,
 because those are what the contracts actually transfer. §9.9.1 covers why: the pre-protocol

@@ -125,8 +125,10 @@ Still blocked on the owner:
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 
-**Undecided, and it is a product call — see `docs/pons-v2-findings.md` §9.12 for the
-worked numbers.** The locker takes **30%** before our splitter sees anything, so 95/5 divides
+**DECIDED 2026-08-06: the split stays 95/5** — no code change, `FeeSplitter` already does
+this. Funded by the owner taking the *creator* share (66.5%) on Ponsr's own token launch
+rather than by widening the platform's cut. See `docs/pons-v2-findings.md` §9.12 for the
+worked numbers and the two consequences that follow. The locker takes **30%** before our splitter sees anything, so 95/5 divides
 70: the creator's real take is **66.5%** of trading fees and the treasury's is **3.5%**, not
 5%. Any revenue model built on 5% is overstated by ~1.4×.
 
