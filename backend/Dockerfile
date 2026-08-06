@@ -16,7 +16,9 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+# Both: tsconfig.build.json extends tsconfig.json, so the base is needed at build time even
+# though nothing compiles against it directly.
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
 
