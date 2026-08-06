@@ -29,16 +29,27 @@ none of the first's idempotency state. **Never `fly scale count 2`.**
 
 ## First deploy
 
+Run everything from `backend/`, which is where `fly.toml` and the `Dockerfile` live.
+
+**Do not use the dashboard's "Launch from GitHub".** It builds from the repository root, where
+there is no Dockerfile, and it generates its own `fly.toml` — discarding the volume, the
+`auto_stop_machines = false` and the `min_machines_running = 1` that the two constraints above
+depend on. It also wires auto-deploy on every push to `main`. That suits the website, which is
+static; this process holds the treasury, and when it redeploys should be a decision.
+
+`fly launch` is avoided for the same reason: it rewrites `fly.toml`. Creating the app directly
+never touches it.
+
 ```bash
-fly launch --no-deploy --name ponsr-backend --region sin
+fly auth login
+fly apps create ponsr-backend
 ```
 
-Answer no to any offer to create a Postgres or Redis instance — the app uses neither. Then
-create the volume the database lives on. Without it the deploy fails, which is the intended
+Then the volume the database lives on. Without it the deploy fails, which is the intended
 behaviour: better a failed deploy than a running bot with a disposable database.
 
 ```bash
-fly volumes create ponsr_data --region sin --size 1
+fly volumes create ponsr_data --region sin --size 1 -a ponsr-backend
 ```
 
 Set the secrets. These never enter the image — an image layer is readable by anyone who can
