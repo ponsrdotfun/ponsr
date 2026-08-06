@@ -1,4 +1,6 @@
 import express from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ethers } from 'ethers';
 import { config, requireConfig } from './config';
 import { Db } from './db';
@@ -155,9 +157,55 @@ async function reportTreasurySetup(): Promise<void> {
   }
 }
 
+/**
+ * The database is not a cache, and losing it is not a cosmetic failure.
+ *
+ * `processed_tweets` is the idempotency key for every mention, and `treasury_spend_log` is
+ * what the daily circuit breaker counts against. On a container filesystem that resets each
+ * deploy, both reset too: previously-handled mentions become eligible for reprocessing, and
+ * the day's spend returns to zero. Nothing errors. The bot relaunches tokens it already
+ * launched, paying the fee again each time, and the cap that was meant to bound the damage
+ * has just been cleared.
+ *
+ * There is no portable way to ask whether a path is on a persistent mount, so this checks the
+ * two things that are actually knowable: that the path was configured at all, and that it can
+ * be written to. A production deploy still holding the development default is the specific
+ * mistake worth catching, because it is what happens when the container runs but nobody set
+ * DATABASE_PATH.
+ */
+function reportStorage(): void {
+  const isProduction = config.NODE_ENV === 'production';
+  const isDefault = config.DATABASE_PATH === './data/bot.sqlite';
+
+  if (isProduction && isDefault) {
+    console.error(
+      '[storage/error] DATABASE_PATH is still the development default in production. If this ' +
+        'is a container, the database is inside it and every redeploy wipes the idempotency ' +
+        'record and the daily spend total. Point it at a mounted volume (fly.toml uses ' +
+        '/data/bot.sqlite).'
+    );
+  }
+
+  try {
+    const dir = path.dirname(path.resolve(config.DATABASE_PATH));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    // Says "configured", not "persistent": this cannot verify that the path is a real mount,
+    // and a log line claiming otherwise would be the kind of unearned reassurance that makes
+    // an operator stop checking.
+    console.log(`Database at ${config.DATABASE_PATH}${isProduction && !isDefault ? ' (configured, not the default)' : ''}.`);
+  } catch (err: any) {
+    // Worth failing loudly at boot: a read-only or root-owned mount point produces a database
+    // that cannot be written, and the first symptom would otherwise be a launch that cannot
+    // record itself -- after the fee has been spent.
+    console.error(`[storage/error] cannot write to the database directory: ${err?.message ?? err}`);
+  }
+}
+
 const server = app.listen(config.PORT, () => {
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log('Reconciliation sweep every 5 minutes. Treasury balance watch every 15 minutes.');
+  reportStorage();
   reportTreasurySetup().catch((err) =>
     console.error('[treasury] could not verify hot/cold setup at boot:', err?.message ?? err)
   );
