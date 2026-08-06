@@ -843,3 +843,70 @@ It now reads the ratio from the `ERC20FeesSplit` event, which carries both amoun
 and reports what the contract actually did. **A verification tool that cannot distinguish
 "wrong" from "measured wrong" is not a verification tool**, and this one nearly caused a
 correct result to be thrown away.
+
+---
+
+## 9.12 The unit economics, from live mainnet reads (2026-08-06)
+
+§9.9.1 established the *ratio*. This is the part that decides whether the ratio is viable:
+what a launch costs, what it returns, and how far it can move without us. Every figure below
+was read from the mainnet contracts on 2026-08-06, not taken from documentation.
+
+| Value | Source | Read |
+|---|---|---|
+| `launchFee()` | factory | **0.0005 ETH** |
+| `poolFee` | dex config 0 — uniswap v3 | **10000 = 1%** |
+| `graduationThreshold` | launch config 0 | **4.2 ETH** |
+| `protocolFeeShare` | locker | **30** |
+| `MAX_PROTOCOL_FEE_SHARE` | locker | **50** |
+
+### Break-even
+
+The treasury pays the launch fee for every user (Part 5), so each launch starts underwater
+and has to trade its way out:
+
+```
+treasury take   = 3.5% of trading fees
+trading fees    = 1% of volume
+treasury take   = 0.035% of volume
+
+break-even      = 0.0005 / 0.00035  ≈  1.43 ETH of volume
+```
+
+Graduation is at 4.2 ETH, so **a token that graduates returns roughly 3× its launch fee**.
+A token that never clears ~1.43 ETH of volume is a loss the treasury absorbs.
+
+That ratio is the whole anti-abuse argument in one line. The attacker does not need to steal
+anything — they only need to make the bot launch tokens that never trade. This is why the
+checks in `validator.ts` are required scope and not hardening, and why weakening one to
+"simplify the flow" changes the economics rather than the ergonomics.
+
+### Two reasons 3.5% is still the optimistic figure
+
+1. **Half the revenue is not money.** Fees arrive as `token0` and `token1` — the launched
+   token itself plus WETH, never native ETH. The WETH half is real. The token half is a share
+   of a new meme token, and most go to zero. Any model that values the token half at its
+   nominal price is counting an asset that usually cannot be sold at that price.
+
+2. **`protocolFeeShare` is theirs to raise, up to 50.** At the cap, the treasury's take falls
+   from 3.5% to **2.5%** and break-even volume rises to ~2 ETH — with no action on our side
+   and no notice. It is owner-settable on pons's side, which is exactly why CLAUDE.md forbids
+   hardcoding it. The bot reads it live; **revenue models must treat 30 as today's value, not
+   a constant.**
+
+### The open decision
+
+`FeeSplitter` is immutable, but a fresh one is deployed per launch, so a ratio change affects
+future launches only and strands nothing. Three options, none yet chosen:
+
+- **Keep 95/5.** Creator takes 66.5% of trading fees, treasury 3.5%. Most generous, slowest
+  to pay back, most exposed to a `protocolFeeShare` rise.
+- **Move to 90/10.** Creator 63%, treasury 7%. Break-even drops to ~0.71 ETH of volume — half
+  the traded volume needed per launch.
+- **Keep the ratio, fix only the claims.** Viable, but only if the published figures are the
+  post-protocol ones.
+
+Whichever is chosen, the numbers that may appear in user-facing copy are **66.5% and 3.5%**,
+because those are what the contracts actually transfer. §9.9.1 covers why: the pre-protocol
+figures overstate a creator's take by ~1.4×, and it is a number anyone can check on-chain in
+a minute.
