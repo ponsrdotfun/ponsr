@@ -1,0 +1,64 @@
+# Fly.io deployment for the Ponsr backend.
+#
+# Chosen for two hard requirements that most of the easy options fail:
+#
+#   1. A PERSISTENT DISK. The database holds `processed_tweets` (the idempotency key for every
+#      mention) and `treasury_spend_log` (what the daily circuit breaker counts against).
+#      A filesystem that resets on redeploy does not merely lose history -- it re-opens every
+#      handled mention for reprocessing and resets the day's spend to zero. Both safety
+#      mechanisms fail silently and in the expensive direction.
+#
+#   2. ONE INSTANCE, ALWAYS RUNNING. This is not a request/response service that can scale out.
+#      It runs a reconciliation sweep every 5 minutes and a treasury watch every 15. Two copies
+#      means two listeners racing on the same mentions; `processed_tweets` is per-database and
+#      each Fly machine gets its OWN volume, so the second copy shares none of the first's
+#      idempotency state.
+#
+# Do not run `fly scale count 2`. See docs/DEPLOY.md.
+
+app = "ponsr-backend"
+primary_region = "sin"   # Singapore -- nearest region to the operator
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  DATABASE_PATH = "/data/bot.sqlite"
+
+# The volume that makes item 1 above true. `source` is the volume name created with
+# `fly volumes create ponsr_data`; if it does not exist the deploy fails rather than starting
+# with an empty ephemeral directory, which is the behaviour we want.
+[mounts]
+  source = "ponsr_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # BOTH of these are load-bearing, not defaults left in place.
+  #
+  # auto_stop_machines = false: Fly's default suspends a machine with no HTTP traffic. This
+  # process does most of its work on timers, not on requests -- a suspended machine stops
+  # reconciling dropped webhooks and stops watching the treasury balance while looking
+  # perfectly healthy in the dashboard.
+  #
+  # min_machines_running = 1: keeps the listener up between deploys.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  # better-sqlite3 is synchronous and the workload is light, so one shared CPU is enough.
+  # 512MB is sized for the Node heap plus the native module, not for concurrency.
+  size = "shared-cpu-1x"
+  memory = "512mb"

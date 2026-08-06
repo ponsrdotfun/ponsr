@@ -1,0 +1,18 @@
+# .env first, and it is the only line here that matters for anything but build speed.
+# Secrets reach the container through `fly secrets`, never through the image -- an image layer
+# is readable by anyone who can pull it, and deleting the file in a later layer does not
+# remove it from the earlier one.
+.env
+.env.*
+
+node_modules
+dist
+data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+tests
+scripts
+jest.config.js
+docs
