@@ -125,9 +125,22 @@ Still blocked on the owner:
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 
-**Undecided, and it is a product call:** the treasury's 5% arrives as **tokens and WETH, not
-ETH** — and the locker takes **30%** first, so the treasury's real take is **3.5% of trading
-fees, not 5%**. Any revenue model built on 5% is overstated by ~1.4×.
+**Undecided, and it is a product call — see `docs/pons-v2-findings.md` §9.12 for the
+worked numbers.** The locker takes **30%** before our splitter sees anything, so 95/5 divides
+70: the creator's real take is **66.5%** of trading fees and the treasury's is **3.5%**, not
+5%. Any revenue model built on 5% is overstated by ~1.4×.
+
+Read together with the costs (all live mainnet reads, 2026-08-06: launch fee 0.0005 ETH, pool
+fee 1%, graduation 4.2 ETH), break-even is **~1.43 ETH of volume per launch**, and a token
+that graduates returns roughly 3×. That ratio is the anti-abuse case in one line — an attacker
+need not steal anything, only make the bot launch tokens that never trade.
+
+Two things keep 3.5% on the optimistic side: the take arrives as **the launched token plus
+WETH, never ETH**, and the token half usually goes to zero; and `MAX_PROTOCOL_FEE_SHARE` is
+**50**, so pons can cut us to 2.5% without notice. Treat 30 as today's value, not a constant.
+
+Whatever ratio is chosen, the only figures that may appear in user-facing copy are **66.5%
+and 3.5%** — they are what the contracts actually transfer, and anyone can check on-chain.
 
 ### Buildable right now, with no accounts needed — nothing left
 
