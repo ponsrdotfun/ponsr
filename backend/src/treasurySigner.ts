@@ -9,14 +9,22 @@ import { config, requireConfig } from './config';
  * creation before signing), which is the purpose-built way to enforce "this key may only
  * ever call launchToken() on the Pons factory address, nothing else."
  *
- * TODO before Phase 3 / any mainnet exposure (see action-checklist.md):
- *   1. Sign up for Turnkey, create an organization + a wallet scoped via policy to:
- *        - destination address == PONS_FACTORY_ADDRESS only
- *        - function selector == launchToken's selector only
- *        - a per-transaction value ceiling matching TREASURY_MAX_FEE_WEI
- *   2. Replace TurnkeyTreasurySigner's stub body with real Turnkey SDK calls.
- *   3. Retire RawKeyTreasurySigner entirely once Turnkey is wired up -- it exists ONLY for
- *      local testnet development, per the explicit warning below.
+ * DONE 2026-08-06: Turnkey is wired and the policy is verified by
+ * `scripts/turnkey-verify-policy.ts` -- a transaction to the factory signs, an arbitrary
+ * destination is refused. The bot signs as a non-root user; root bypasses every policy and
+ * its key no longer lives in backend/.env.
+ *
+ * The policy is deliberately WIDER than the original plan above. It permits contract creation
+ * as well as calls to the factory, because each launch deploys that launch's FeeSplitter and a
+ * factory-only policy would refuse it. The value ceiling still applies. This was a considered
+ * trade, not an oversight: the widening lets the key deploy code, and the denial of arbitrary
+ * destinations is what still stops it moving funds.
+ *
+ * STILL OUTSTANDING:
+ *   - Retire RawKeyTreasurySigner. It is still used by scripts/phase-b-launch.ts and
+ *     scripts/collect-and-split.ts, which are operator tools run by hand, not the bot. It
+ *     already refuses to run under NODE_ENV=production, so it cannot reach the bot's path --
+ *     but it stays on this list until nothing constructs it from a raw key.
  */
 export interface TreasurySigner {
   address(): Promise<string>;

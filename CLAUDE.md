@@ -29,6 +29,12 @@ survives in historical notes.
 - **Parser model: Claude Haiku 4.5**, chosen for structured-output reliability over cost
   (Part 9). Run `backend/scripts/run-eval.ts` (28 cases) after any change to the system prompt
   in `backend/src/parser.ts` — the eval set must pass cleanly before the change is trusted.
+  **Re-run it when the route changes too, not only the prompt.** Its first-ever run (2026-08-06)
+  scored 25/28 against a prompt that had been assumed good for weeks. All three failures were
+  one gap: distinguishing "this field is genuinely unsettled" from "I can work it out". The
+  worst would have launched a token named `MOON` from `launch $MOON` — a permanent on-chain
+  name nobody chose. The rules covering all three were already written; they were stated but
+  not operational. An eval that has never run is not evidence of anything.
 - **Wallet-per-user: Privy. Treasury signer: Turnkey** (native Robinhood Chain policy support,
   Part 10). Two separate provider decisions, not one shared choice.
 - **Treasury pays every launch fee, not the user.** Part 5 explains why this requires the
@@ -90,13 +96,32 @@ Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key)
 
 ## Immediate next actions
 
-Blocked on the owner. Nothing here is code:
+Items 1-3 and 5 closed 2026-08-06. Every external provider is now wired and **verified
+against the live service**, not merely configured:
 
-1. Wire up real Privy calls in `backend/src/walletResolver.ts` (stub throws with a TODO).
-2. Wire up real Turnkey calls in `backend/src/treasurySigner.ts` (stub throws with a TODO).
-3. Wire up real twitterapi.io calls in `backend/src/xClient.ts` (stub throws with a TODO).
-4. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
-5. Run the parser eval (`scripts/run-eval.ts`, 28 cases) once `ANTHROPIC_API_KEY` exists.
+- ~~Privy~~ — `scripts/check-providers.ts` creates a real wallet, not just a credential read.
+- ~~Turnkey~~ — signs as a scoped non-root user. `scripts/turnkey-verify-policy.ts` proves the
+  policy bites: factory allowed, contract creation allowed, arbitrary destination **denied**.
+  The root key is out of `backend/.env` (root bypasses all policies, so storing it beside the
+  bot's key made the scoping pointless).
+- ~~twitterapi.io~~ — both calls the bot makes return correctly-mapped fields. Free tier is
+  1 req/5s, so the reader serialises its own calls.
+- ~~Parser eval~~ — **28/28**, stable across three runs. See the note below; it had never
+  actually run before, and it found three real defects on its first execution.
+
+**Parser routing:** there is no `ANTHROPIC_API_KEY`; the same `claude-haiku-4.5` is reached
+through OpenRouter (`OPENROUTER_API_KEY`). Part 9's model decision is unchanged — only the
+route is. `createParser()` prefers Anthropic whenever a direct key is added. Note OpenRouter
+returns HTTP 200 with an `error` body on upstream failure or exhausted credit, so a billing
+problem would otherwise surface as a parse failure and send you to the system prompt.
+
+Still blocked on the owner:
+
+1. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
+2. Move the Turnkey root key from `~/ponsr-turnkey-root-key.txt` into a password manager and
+   delete the file. A fresh root API key can be minted from the dashboard with a passkey, so
+   deleting it loses nothing.
+3. Backend hosting, for the listener to run 24/7.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 
