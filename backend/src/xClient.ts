@@ -93,38 +93,47 @@ export class TwitterApiIoReader implements XReader {
   ) {}
 
   /**
-   * One request at a time, spaced out, with a retry on 429.
+   * One request at a time, spaced out, with a bounded retry on 429.
    *
-   * The free tier allows one request every five seconds, and the bot naturally bursts: a
-   * launch does an account lookup while the reconciler may be mid-poll. Without this, the
-   * second call returns 429 and the launch fails for a reason that has nothing to do with
-   * the user -- so the spacing is a correctness concern, not politeness.
+   * twitterapi.io's free tier allows one request every five seconds, and it rate-limits by
+   * API KEY, not per client object -- so two readers sharing a key still contend. The bot
+   * bursts naturally: a launch does an account lookup while the reconciler may be mid-poll.
+   * Without spacing, the second call gets a 429 and a user's launch fails for a reason that
+   * has nothing to do with them.
+   *
+   * The retry loop lives INSIDE the queued unit of work on purpose. An earlier version
+   * retried by calling `get()` again, which re-entered the queue -- and the queue was waiting
+   * on the very call doing the retrying. That deadlocked permanently, and because a
+   * deadlocked promise leaves no pending timers, Node simply exited with status 0 and no
+   * message. It would have silently killed mention polling on the first 429 in production.
    */
   private queue: Promise<unknown> = Promise.resolve();
   private lastCallAt = 0;
 
-  private async get(pathAndQuery: string, attempt = 0): Promise<any> {
-    if (!this.apiKey) throw new Error('twitterapi.io is not configured: set TWITTERAPI_IO_KEY.');
+  private async get(pathAndQuery: string): Promise<any> {
+    this.assertConfigured();
 
     const run = async (): Promise<any> => {
-      const wait = Math.max(0, this.minIntervalMs - (Date.now() - this.lastCallAt));
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      this.lastCallAt = Date.now();
+      for (let attempt = 0; ; attempt++) {
+        const wait = Math.max(0, this.minIntervalMs - (Date.now() - this.lastCallAt));
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        this.lastCallAt = Date.now();
 
-      const res = await fetch(this.baseUrl + pathAndQuery, { headers: { 'x-api-key': this.apiKey } });
-      if (res.status === 429 && attempt < 3) {
-        // Exponential-ish: the documented window is 5s, so wait longer each time rather than
-        // hammering a limit that is already complaining.
-        await new Promise((r) => setTimeout(r, this.minIntervalMs * (attempt + 1)));
-        return this.get(pathAndQuery, attempt + 1);
+        const res = await fetch(this.baseUrl + pathAndQuery, { headers: { 'x-api-key': this.apiKey } });
+        if (res.status === 429 && attempt < 3) {
+          // Back off further each time rather than hammering a limit already complaining.
+          await new Promise((r) => setTimeout(r, this.minIntervalMs * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) {
+          throw new Error(`twitterapi.io ${res.status} on ${pathAndQuery}: ${(await res.text()).slice(0, 200)}`);
+        }
+        return res.json();
       }
-      if (!res.ok) {
-        throw new Error(`twitterapi.io ${res.status} on ${pathAndQuery}: ${(await res.text()).slice(0, 200)}`);
-      }
-      return res.json();
     };
 
-    // Serialise through a promise chain so concurrent callers cannot both slip past the gap.
+    // Serialise so concurrent callers cannot both slip through the gap. Failures are
+    // swallowed on the chain itself -- one rejected call must not poison every later one.
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
     return next;
