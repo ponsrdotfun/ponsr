@@ -127,5 +127,5 @@ async function checkTurnkey(): Promise<boolean> {
     console.log('  - Note the splitter deployment is a contract creation, not a call to the');
     console.log('    factory, so a launchToken-only policy will reject it.');
   }
-  process.exit(privyOk && turnkeyOk ? 0 : 1);
+  process.exitCode = privyOk && turnkeyOk ? 0 : 1;
 })();

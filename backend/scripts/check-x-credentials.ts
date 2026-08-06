@@ -114,7 +114,8 @@ async function call(method: string, url: string, body?: unknown) {
     console.error('\n  Fix: developer console -> your app -> User authentication settings ->');
     console.error('  App permissions = "Read and write" -> save -> then REGENERATE the access');
     console.error('  token. The regeneration is the step people skip.');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   if (probe.status === 400) {
     line('result', 'READ AND WRITE ✅');
@@ -133,7 +134,8 @@ async function call(method: string, url: string, body?: unknown) {
     console.log('  scope was, so a read-only token would look identical here. Once credits are');
     console.log('  loaded, re-run: a 400 confirms write, a 403 means the token is read-only and');
     console.log('  must be regenerated after setting the app to Read and write.');
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   } else {
     line('result', `inconclusive (HTTP ${probe.status})`);
     console.log('  ' + probe.text.slice(0, 160));

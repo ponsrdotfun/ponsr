@@ -109,7 +109,7 @@ function line(label: string, value: unknown) {
     if (!toFactory || !deploy) console.log('  The policy is too narrow -- the bot cannot do its job.');
     if (elsewhere) console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
   }
-  process.exit(good ? 0 : 1);
+  process.exitCode = good ? 0 : 1;
 })().catch((err) => {
   console.error('FAILED:', err?.message ?? err);
   process.exit(1);
