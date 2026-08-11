@@ -107,27 +107,26 @@ The image is verified to build and run (2026-08-06): it starts as the non-root `
 carries no compiler, and contains no `.env`, `scripts/` or `tests/`. It refuses to start on a
 read-only mount, boots on a writable volume, and the database survives across containers.
 
-### Deployed once, then parked (2026-08-11)
+### Live since 2026-08-11
 
-The app, the `ponsr_data` volume (iad) and every secret exist and are proven: a first deploy
-booted cleanly on Fly, reported `Database at /data/bot.sqlite`, passed its health check, and
-raised exactly the two alerts it should — no cold address, and a hot wallet holding nothing.
+Deployed and running. The boot log is clean end to end:
 
-It was then scaled to **zero machines**, deliberately. Deploying makes the bot *live*: the
-reconciliation sweep looks for mentions of @ponsrdotfun and replies to real people, webhook or
-no webhook. With an unfunded hot wallet it would answer requests it cannot complete.
-
-Stopping the machine is not sufficient on its own. `auto_start_machines = true` means Fly's
-proxy restarts a stopped machine on any inbound HTTP request, and the hostname is public —
-internet scanners reach it within hours. Scaling to zero is what actually keeps it parked.
-
-Nothing is lost by this: the image is in Fly's registry, the volume and secrets persist, and
-
-```bash
-fly deploy -a ponsr-backend
+```
+Database at /data/bot.sqlite (configured, not the default).
+Ponsr backend listening on port 8080 (production)
+Hot treasury wallet 0x08e0…74Fa; cold 0x1148…431d.
+[ALERT/INFO] TREASURY_RECOVERED: 0.027668 ETH, ~51 launch(es) of headroom.
 ```
 
-recreates the machine in about a minute. Do that once the hot wallet is funded.
+No `[treasury/error]`, no `[storage/error]`, health check passing, `/health` returning 200.
+`checkTreasurySetup` reports no problems — the first time it has.
+
+An earlier deploy the same morning was scaled to zero on purpose, before the hot wallet held
+anything: deploying makes the bot answer real people, and it would have been answering
+requests it could not complete. Stopping the machine is not enough on its own, because
+`auto_start_machines = true` lets Fly's proxy restart it on any inbound HTTP request and the
+hostname is public. Scaling to zero is the state that holds; keep that in mind if the bot ever
+needs taking off the air in a hurry.
 
 ### Two variables that must NOT be set
 
@@ -191,12 +190,12 @@ during quiet periods without further ceremony.
 
 Deploying does not make the bot operational. Outstanding, in order:
 
-1. **`TREASURY_COLD_ADDRESS`** — see `docs/action-checklist.md` 0.8. Boot reports the setup as
-   unhealthy without it, deliberately.
-2. **Fund the Turnkey hot wallet on mainnet.** It currently holds nothing. The treasury pays
-   every launch fee, so an empty hot wallet means every launch fails at the last step.
-3. **Point the X webhook at `https://ponsr-backend.fly.dev`.** Until then the reconciler's
-   5-minute sweep is the only path mentions arrive by — it works, but it is the safety net
-   rather than the mechanism.
-4. **Replace `ConsoleNotifier`.** Alerts currently go to the Fly log, where nobody is watching
-   at 3am. It is one line against the `Notifier` interface in `src/monitor.ts`.
+1. ~~`TREASURY_COLD_ADDRESS`~~ — set 2026-08-11.
+2. ~~Fund the Turnkey hot wallet~~ — 0.027668 ETH, about 51 launches.
+3. **Replace `ConsoleNotifier`, before announcing the bot.** Alerts go to the Fly log, where
+   nobody is watching at 3am. One line against the `Notifier` interface in `src/monitor.ts`.
+   The account is new and unannounced, so traffic is near zero and the log is survivable for
+   now — that stops being true the moment anyone is told about it.
+4. **Point the X webhook at `https://ponsr-backend.fly.dev`.** Until then the reconciler's
+   5-minute sweep is the only path mentions arrive by. It works — it is the safety net doing
+   the mechanism's job, which means every reply is up to five minutes late.
