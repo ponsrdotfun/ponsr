@@ -195,18 +195,16 @@ Deploying does not make the bot operational. Outstanding, in order:
 3. ~~Replace `ConsoleNotifier`~~ — done 2026-08-11. Alerts go to Telegram (`@PonsrLogs_Bot`).
    Delivery was verified against the real chat; the console remains the fallback, so a
    Telegram outage degrades the channel rather than losing the alert.
-4. **Finish the mention webhook.** The filter rule exists at twitterapi.io
-   (`rule_id ab620f8f51a04b7f99b2237ef12af110`, tag `ponsr-mentions`, value `@ponsrdotfun`,
-   10s interval) but is **inactive** (`is_effect: 0`) until the delivery URL is set.
+4. ~~Finish the mention webhook~~ — **decided against 2026-08-11.** twitterapi.io bills a
+   filter rule on every poll, not per match ("ACTIVATING A RULE STARTS BILLING ... consumes
+   credits on every poll"), and so does the search the reconciler already runs. At equal
+   intervals the two cost the same, so the webhook buys nothing while adding a delivery URL
+   that can only be set in their dashboard, a per-account setting shared with any other rule,
+   and our `WEBHOOK_SECRET` living in a third party's configuration.
 
-   The URL cannot be set through the API — twitterapi.io takes it in their dashboard only.
-   Get it with `npx ts-node scripts/print-webhook-url.ts`; it is not written down anywhere
-   because it carries `WEBHOOK_SECRET`. Their dashboard accepts a URL and nothing else, so the
-   secret rides as a query parameter — which is why `webhookAuthorised` accepts that form.
+   The interval is the only lever that moves latency, and it is ours to set for free:
+   `MENTION_POLL_SECONDS`, currently **120** — replies within two minutes, ~95 days on a $10
+   balance. The rule remains created but in standby (`is_effect: 0`), costing nothing.
 
-   Then activate: POST `/oapi/tweet_filter/update_rule` with the rule's `rule_id`, `tag`,
-   `value`, `interval_seconds` and `is_effect: 1`.
-
-   Until it is active the reconciliation sweep is the only path mentions arrive by. It works —
-   it is the safety net doing the mechanism's job, which means every reply is up to five
-   minutes late.
+   The webhook endpoint stays, authenticated, because it is the right shape if a provider that
+   pushes for free ever appears.
