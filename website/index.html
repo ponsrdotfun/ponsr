@@ -1109,6 +1109,50 @@
       .catch(function () { return Date.now(); });
   }
 
+  /**
+   * Decodes an ABI-encoded string return value: offset word, length word, then bytes.
+   */
+  function decodeString(hex) {
+    if (!hex || hex === '0x') return null;
+    var d = hex.replace(/^0x/, '');
+    if (d.length < 128) return null;
+    var len = parseInt(d.substr(64, 64), 16);
+    if (!len || len * 2 > d.length - 128) return null;
+    var out = '';
+    for (var i = 0; i < len; i++) {
+      var c = parseInt(d.substr(128 + i * 2, 2), 16);
+      if (c) out += String.fromCharCode(c);
+    }
+    return out || null;
+  }
+
+  /**
+   * A token's name and symbol, read from the token contract itself.
+   *
+   * These used to come from Blockscout's /api/v2/tokens, and a failed call fell back to a
+   * slice of the contract address. That fallback is worse than it looks: it is silent, it is
+   * indistinguishable from a real name, and `id` is derived from the symbol -- so a token's
+   * URL became /token/C615D1 instead of /token/PONSRHOOD, and the same token had two
+   * identities depending on whether a third-party indexer answered that second. PONSRHOOD
+   * shipped looking like "C615D1" for exactly this reason.
+   *
+   * name() and symbol() are ERC20 standard calls served by the same RPC the rest of the board
+   * already depends on, so this removes a dependency rather than adding one.
+   */
+  function tokenIdentity(address) {
+    return Promise.all([
+      rpcCall('eth_call', [{ to: address, data: '0x06fdde03' }, 'latest']).catch(function () { return null; }),
+      rpcCall('eth_call', [{ to: address, data: '0x95d89b41' }, 'latest']).catch(function () { return null; })
+    ]).then(function (r) {
+      return { name: decodeString(r[0]), symbol: decodeString(r[1]) };
+    });
+  }
+
+  /**
+   * Holder count only. It cannot be derived from the contract -- it needs an index over every
+   * transfer -- so this stays on Blockscout, and stays optional: a failure hides the figure
+   * rather than inventing one, which is the board's rule everywhere else.
+   */
   function tokenMeta(address) {
     return fetch(CHAIN.explorer + '/api/v2/tokens/' + address)
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -1142,14 +1186,17 @@
         return Promise.all([
           blockTime(log.blockNumber),
           tokenMeta(token),
-          erc20BalanceOf(CHAIN.pairToken, pool)
+          erc20BalanceOf(CHAIN.pairToken, pool),
+          tokenIdentity(token)
         ]).then(function (parts) {
           var launchedAt = parts[0], meta = parts[1] || {}, liquidityWei = parts[2];
-          var symbol = meta.symbol || token.slice(2, 8).toUpperCase();
+          var ident = parts[3] || {};
+          // Contract first, indexer second, address slice only if both are unreachable.
+          var symbol = ident.symbol || meta.symbol || token.slice(2, 8).toUpperCase();
           var progress = Number(liquidityWei) / CHAIN.graduationWei;
           return {
             id: symbol.toLowerCase(),
-            name: meta.name || symbol,
+            name: ident.name || meta.name || symbol,
             symbol: symbol,
             address: token,
             pool: pool,
