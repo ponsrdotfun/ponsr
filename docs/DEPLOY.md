@@ -107,6 +107,28 @@ The image is verified to build and run (2026-08-06): it starts as the non-root `
 carries no compiler, and contains no `.env`, `scripts/` or `tests/`. It refuses to start on a
 read-only mount, boots on a writable volume, and the database survives across containers.
 
+### Deployed once, then parked (2026-08-11)
+
+The app, the `ponsr_data` volume (iad) and every secret exist and are proven: a first deploy
+booted cleanly on Fly, reported `Database at /data/bot.sqlite`, passed its health check, and
+raised exactly the two alerts it should — no cold address, and a hot wallet holding nothing.
+
+It was then scaled to **zero machines**, deliberately. Deploying makes the bot *live*: the
+reconciliation sweep looks for mentions of @ponsrdotfun and replies to real people, webhook or
+no webhook. With an unfunded hot wallet it would answer requests it cannot complete.
+
+Stopping the machine is not sufficient on its own. `auto_start_machines = true` means Fly's
+proxy restarts a stopped machine on any inbound HTTP request, and the hostname is public —
+internet scanners reach it within hours. Scaling to zero is what actually keeps it parked.
+
+Nothing is lost by this: the image is in Fly's registry, the volume and secrets persist, and
+
+```bash
+fly deploy -a ponsr-backend
+```
+
+recreates the machine in about a minute. Do that once the hot wallet is funded.
+
 ### Two variables that must NOT be set
 
 - **`TREASURY_SIGNER_PRIVATE_KEY`.** Production signs through Turnkey, with a policy that
