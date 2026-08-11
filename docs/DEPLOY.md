@@ -195,6 +195,18 @@ Deploying does not make the bot operational. Outstanding, in order:
 3. ~~Replace `ConsoleNotifier`~~ — done 2026-08-11. Alerts go to Telegram (`@PonsrLogs_Bot`).
    Delivery was verified against the real chat; the console remains the fallback, so a
    Telegram outage degrades the channel rather than losing the alert.
-4. **Point the X webhook at `https://ponsr-backend.fly.dev`.** Until then the reconciler's
-   5-minute sweep is the only path mentions arrive by. It works — it is the safety net doing
-   the mechanism's job, which means every reply is up to five minutes late.
+4. **Finish the mention webhook.** The filter rule exists at twitterapi.io
+   (`rule_id ab620f8f51a04b7f99b2237ef12af110`, tag `ponsr-mentions`, value `@ponsrdotfun`,
+   10s interval) but is **inactive** (`is_effect: 0`) until the delivery URL is set.
+
+   The URL cannot be set through the API — twitterapi.io takes it in their dashboard only.
+   Get it with `npx ts-node scripts/print-webhook-url.ts`; it is not written down anywhere
+   because it carries `WEBHOOK_SECRET`. Their dashboard accepts a URL and nothing else, so the
+   secret rides as a query parameter — which is why `webhookAuthorised` accepts that form.
+
+   Then activate: POST `/oapi/tweet_filter/update_rule` with the rule's `rule_id`, `tag`,
+   `value`, `interval_seconds` and `is_effect: 1`.
+
+   Until it is active the reconciliation sweep is the only path mentions arrive by. It works —
+   it is the safety net doing the mechanism's job, which means every reply is up to five
+   minutes late.
