@@ -19,6 +19,9 @@ const ConfigSchema = z.object({
   PARSER_MODEL: z.string().default('claude-haiku-4-5'),
   // Same model, routed through OpenRouter when there is no direct Anthropic key.
   OPENROUTER_API_KEY: z.string().optional(),
+  // Alert transport. Both are required together -- a token without a chat id cannot deliver.
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('anthropic/claude-haiku-4.5'),
 
   // -- X: reads and writes go to different providers. See xClient.ts for why. --

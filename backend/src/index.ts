@@ -10,7 +10,7 @@ import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from './chainClient';
 import { handleMention } from './orchestrator';
-import { TreasuryMonitor, ConsoleNotifier } from './monitor';
+import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation } from './reconciler';
 import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from './treasuryPolicy';
 import { InboundMention } from './types';
@@ -80,7 +80,7 @@ const treasuryPolicy = treasuryPolicyFromConfig();
 // Part 5 mitigation #7. The monitor is constructed before the hot address is known
 // (the signer answers asynchronously), so the addresses are attached below once it
 // has -- they are only used to make alert text actionable, never to gate anything.
-const monitor = new TreasuryMonitor(db, new ConsoleNotifier(), undefined, 30, {
+const monitor = new TreasuryMonitor(db, createNotifier(), undefined, 30, {
   policy: treasuryPolicy,
   coldAddress: config.TREASURY_COLD_ADDRESS,
 });

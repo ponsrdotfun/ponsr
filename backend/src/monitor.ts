@@ -69,6 +69,87 @@ export class ConsoleNotifier implements Notifier {
   }
 }
 
+/**
+ * Sends alerts to a Telegram chat -- the operator's phone, which is the point.
+ *
+ * Part 5 asks for alerting "wired to something you'll see (not just logs no one reads)".
+ * ConsoleNotifier was always a placeholder; on Fly its output goes to a log stream nobody is
+ * watching at 3am, which is exactly when a treasury drain would matter.
+ *
+ * TWO DESIGN DECISIONS THAT LOOK LIKE OVERSIGHTS AND ARE NOT
+ * ----------------------------------------------------------
+ * 1. It never throws. An alert transport must not be able to break the thing it is watching,
+ *    and `recordRejection` runs inside the launch path -- a throw there would turn "Telegram
+ *    is briefly unreachable" into a failed launch for a user who did nothing wrong. On any
+ *    failure it falls through to the console instead, so the alert still lands in the Fly log.
+ *    Nothing is lost; only the delivery channel degrades.
+ *
+ * 2. No parse_mode. Telegram's Markdown and HTML modes reject messages containing unescaped
+ *    special characters, and these alerts carry user-supplied token symbols and JSON detail.
+ *    A symbol like `_MOON_` would make the API refuse the message -- an alert lost to
+ *    formatting. Plain text always sends.
+ */
+export class TelegramNotifier implements Notifier {
+  constructor(
+    private token: string,
+    private chatId: string,
+    private fallback: Notifier = new ConsoleNotifier()
+  ) {}
+
+  private format(alert: Alert): string {
+    const lines = [
+      `${alert.severity.toUpperCase()} — ${alert.kind}`,
+      '',
+      alert.message,
+    ];
+    if (alert.detail && Object.keys(alert.detail).length > 0) {
+      // Truncated: Telegram caps a message at 4096 characters, and a detail blob that pushes
+      // past it would take the whole alert down with it.
+      lines.push('', JSON.stringify(alert.detail, null, 2).slice(0, 1500));
+    }
+    lines.push('', alert.at);
+    return lines.join('\n');
+  }
+
+  async send(alert: Alert): Promise<void> {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: this.chatId,
+          text: this.format(alert),
+          disable_web_page_preview: true,
+        }),
+      });
+      // Telegram answers 200 only on success, but check the body too: it returns ok:false with
+      // a description for things like a bot blocked by the user, which is a delivery failure
+      // that a status check alone would read as delivered.
+      const body: any = await res.json().catch(() => ({}));
+      if (!res.ok || body?.ok !== true) {
+        throw new Error(`telegram ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+      }
+    } catch (err: any) {
+      console.error(`[notifier] Telegram delivery failed, falling back to log: ${err?.message ?? err}`);
+      await this.fallback.send(alert);
+    }
+  }
+}
+
+/**
+ * Picks the alert transport from configuration, preferring Telegram.
+ *
+ * Falls back to the console rather than refusing to boot: no alerting is bad, but a bot that
+ * will not start is worse, and the console path still records everything.
+ */
+export function createNotifier(): Notifier {
+  if (config.TELEGRAM_BOT_TOKEN && config.TELEGRAM_CHAT_ID) {
+    return new TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID);
+  }
+  console.warn('[notifier] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set -- alerts go to the log only.');
+  return new ConsoleNotifier();
+}
+
 /** Collects alerts in memory so tests can assert on them. */
 export class MockNotifier implements Notifier {
   public sent: Alert[] = [];
