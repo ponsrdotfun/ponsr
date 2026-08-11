@@ -192,10 +192,9 @@ Deploying does not make the bot operational. Outstanding, in order:
 
 1. ~~`TREASURY_COLD_ADDRESS`~~ — set 2026-08-11.
 2. ~~Fund the Turnkey hot wallet~~ — 0.027668 ETH, about 51 launches.
-3. **Replace `ConsoleNotifier`, before announcing the bot.** Alerts go to the Fly log, where
-   nobody is watching at 3am. One line against the `Notifier` interface in `src/monitor.ts`.
-   The account is new and unannounced, so traffic is near zero and the log is survivable for
-   now — that stops being true the moment anyone is told about it.
+3. ~~Replace `ConsoleNotifier`~~ — done 2026-08-11. Alerts go to Telegram (`@PonsrLogs_Bot`).
+   Delivery was verified against the real chat; the console remains the fallback, so a
+   Telegram outage degrades the channel rather than losing the alert.
 4. **Point the X webhook at `https://ponsr-backend.fly.dev`.** Until then the reconciler's
    5-minute sweep is the only path mentions arrive by. It works — it is the safety net doing
    the mechanism's job, which means every reply is up to five minutes late.
