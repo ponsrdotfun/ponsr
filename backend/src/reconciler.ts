@@ -1,4 +1,5 @@
 import { handleMention, OrchestratorDeps } from './orchestrator';
+import { Notifier } from './monitor';
 
 /**
  * Part 7 §5 -- listener reconciliation.
@@ -124,12 +125,58 @@ export interface ReconcilerHandle {
 
 /** Starts the periodic sweep. Returns a handle so tests and shutdown paths can
  *  stop it -- an un-stoppable interval is a leak in any long-lived process. */
+/**
+ * How many consecutive failures before the operator is told.
+ *
+ * Not one: a single failed poll is usually a blip -- a timeout, a 429, a provider hiccup --
+ * and an alert per blip trains people to ignore alerts. Three in a row is a pattern, and at a
+ * 300s interval that is fifteen minutes of silence, which is still well inside the window
+ * where nobody has noticed the bot is deaf.
+ */
+const FAILURES_BEFORE_ALERT = 3;
+
 export function startReconciliation(
   deps: OrchestratorDeps,
   intervalMinutes = 5,
-  options: ReconcilerOptions = DEFAULT_RECONCILER_OPTIONS
+  options: ReconcilerOptions = DEFAULT_RECONCILER_OPTIONS,
+  notifier?: Notifier
 ): ReconcilerHandle {
   let running = false;
+  // The sweep failing is invisible from outside: the process stays up, /health keeps
+  // answering 200, and mentions simply stop being seen. Running out of twitterapi.io credit
+  // produces exactly this, and so does a rotated key. Without an alert the first symptom is
+  // somebody asking why the bot ignored them.
+  let consecutiveFailures = 0;
+  let alerted = false;
+
+  const onFailure = async (reason: string) => {
+    consecutiveFailures += 1;
+    if (consecutiveFailures < FAILURES_BEFORE_ALERT || alerted || !notifier) return;
+    alerted = true;
+    await notifier.send({
+      kind: 'MENTION_SWEEP_FAILING',
+      severity: 'critical',
+      message:
+        `The mention sweep has failed ${consecutiveFailures} times in a row. The bot is not ` +
+        'seeing mentions and nobody is being answered. Check twitterapi.io credit first -- ' +
+        'an exhausted balance looks exactly like this.',
+      detail: { consecutiveFailures, lastError: reason.slice(0, 300) },
+      at: new Date().toISOString(),
+    });
+  };
+
+  const onSuccess = async () => {
+    const wasAlerted = alerted;
+    consecutiveFailures = 0;
+    alerted = false;
+    if (!wasAlerted || !notifier) return;
+    await notifier.send({
+      kind: 'MENTION_SWEEP_RECOVERED',
+      severity: 'info',
+      message: 'The mention sweep is working again.',
+      at: new Date().toISOString(),
+    });
+  };
 
   const tick = async () => {
     // Skip rather than queue: a sweep that outlasts its interval would otherwise
@@ -138,9 +185,15 @@ export function startReconciliation(
     running = true;
     try {
       const r = await reconcileOnce(deps, options);
-      if (r.error) console.error('[reconciler] poll failed, watermark held:', r.error);
+      if (r.error) {
+        console.error('[reconciler] poll failed, watermark held:', r.error);
+        await onFailure(String(r.error));
+      } else {
+        await onSuccess();
+      }
     } catch (err: any) {
       console.error('[reconciler] sweep threw:', err?.message ?? err);
+      await onFailure(String(err?.message ?? err));
     } finally {
       running = false;
     }

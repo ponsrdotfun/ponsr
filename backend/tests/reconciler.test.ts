@@ -7,6 +7,7 @@ import { MockXClient } from '../src/xClient';
 import { TreasurySigner } from '../src/treasurySigner';
 import { handleMention, OrchestratorDeps } from '../src/orchestrator';
 import { reconcileOnce, startReconciliation, DEFAULT_RECONCILER_OPTIONS } from '../src/reconciler';
+import { MockNotifier } from '../src/monitor';
 import { InboundMention, ParsedIntent } from '../src/types';
 import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 
@@ -199,5 +200,85 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
     const handle = startReconciliation(deps, 5);
     expect(typeof handle.stop).toBe('function');
     expect(() => handle.stop()).not.toThrow();
+  });
+});
+
+describe('startReconciliation failure alerting', () => {
+  // The sweep failing is invisible from outside: the process stays up, /health answers 200,
+  // and mentions simply stop being seen. Running out of twitterapi.io credit produces exactly
+  // this. Without an alert, the first symptom is somebody asking why the bot ignored them.
+  //
+  // A minimal deps is enough: reconcileOnce reads the watermark, then polls, and the poll is
+  // what fails here.
+  const failingDeps = (): any => ({
+    db: { getState: () => undefined },
+    xClient: {
+      getRecentMentions: async () => {
+        throw new Error('twitterapi.io 402: insufficient credit');
+      },
+    },
+  });
+
+  beforeEach(() => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  // Not on the first failure: a single failed poll is usually a blip, and an alert per blip
+  // trains people to ignore alerts.
+  it('alerts after three consecutive failures, not on the first', async () => {
+    jest.useFakeTimers();
+    const notifier = new MockNotifier();
+    const handle = startReconciliation(failingDeps(), 1 / 60, DEFAULT_RECONCILER_OPTIONS, notifier);
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(notifier.kinds()).not.toContain('MENTION_SWEEP_FAILING');
+
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(notifier.kinds()).toContain('MENTION_SWEEP_FAILING');
+
+    handle.stop();
+  });
+
+  it('alerts only once while it stays broken', async () => {
+    jest.useFakeTimers();
+    const notifier = new MockNotifier();
+    const handle = startReconciliation(failingDeps(), 1 / 60, DEFAULT_RECONCILER_OPTIONS, notifier);
+
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(notifier.sent.filter((a) => a.kind === 'MENTION_SWEEP_FAILING')).toHaveLength(1);
+
+    handle.stop();
+  });
+
+  // Recovery is the half operators actually wait for: it confirms the top-up or the key fix
+  // took, without having to go and look.
+  it('reports recovery once the sweep works again', async () => {
+    jest.useFakeTimers();
+    const notifier = new MockNotifier();
+    let broken = true;
+    const deps: any = {
+      db: { getState: () => undefined, setState: () => undefined },
+      xClient: {
+        getRecentMentions: async () => {
+          if (broken) throw new Error('twitterapi.io 402: insufficient credit');
+          return [];
+        },
+      },
+    };
+    const handle = startReconciliation(deps, 1 / 60, DEFAULT_RECONCILER_OPTIONS, notifier);
+
+    await jest.advanceTimersByTimeAsync(3000);
+    expect(notifier.kinds()).toContain('MENTION_SWEEP_FAILING');
+
+    broken = false;
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(notifier.kinds()).toContain('MENTION_SWEEP_RECOVERED');
+
+    handle.stop();
   });
 });

@@ -81,7 +81,11 @@ const treasuryPolicy = treasuryPolicyFromConfig();
 // Part 5 mitigation #7. The monitor is constructed before the hot address is known
 // (the signer answers asynchronously), so the addresses are attached below once it
 // has -- they are only used to make alert text actionable, never to gate anything.
-const monitor = new TreasuryMonitor(db, createNotifier(), undefined, 30, {
+// One transport, shared. The treasury monitor and the mention sweep both need to reach the
+// operator, and two instances would mean two places to change when the transport changes.
+const notifier = createNotifier();
+
+const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
   policy: treasuryPolicy,
   coldAddress: config.TREASURY_COLD_ADDRESS,
 });
@@ -172,7 +176,7 @@ app.get('/health', (_req, res) => {
  * nothing here. Watch the logs: repeated recoveries mean the webhook itself is
  * unhealthy and worth investigating rather than quietly relying on this.
  */
-const reconciler = startReconciliation(deps, config.MENTION_POLL_SECONDS / 60);
+const reconciler = startReconciliation(deps, config.MENTION_POLL_SECONDS / 60, undefined, notifier);
 
 /**
  * Part 5 mitigation #7. Two distinct jobs, and both are needed:

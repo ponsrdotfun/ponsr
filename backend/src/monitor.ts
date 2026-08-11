@@ -33,6 +33,12 @@ export type AlertKind =
   | 'CIRCUIT_BREAKER_TRIPPED'
   | 'FEE_CEILING_EXCEEDED'
   | 'TREASURY_LOW'
+  /** The mention sweep has failed repeatedly. Nothing else reports this: the process stays
+   *  up, /health keeps returning 200, and the bot simply stops hearing anyone. Running out of
+   *  twitterapi.io credit looks exactly like this. */
+  | 'MENTION_SWEEP_FAILING'
+  /** The sweep started working again, so the operator knows the fix took. */
+  | 'MENTION_SWEEP_RECOVERED'
   /** Part 5 mitigation #7: the hot wallet needs a cold -> hot transfer. */
   | 'TOP_UP_REQUIRED'
   /** Part 5 mitigation #7: the hot wallet holds more than the bot can ever spend,
