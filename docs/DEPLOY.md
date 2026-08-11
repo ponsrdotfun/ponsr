@@ -204,7 +204,17 @@ Deploying does not make the bot operational. Outstanding, in order:
 
    The interval is the only lever that moves latency, and it is ours to set for free:
    `MENTION_POLL_SECONDS`, currently **120** — replies within two minutes, ~95 days on a $10
-   balance. The rule remains created but in standby (`is_effect: 0`), costing nothing.
+   balance.
+
+   The rule was **deleted**, not left in standby. Standby costs nothing, but the ON_AIR toggle
+   sits in their dashboard next to it, and one stray click bills a 10-second poll with no
+   delivery URL configured — paying in full to deliver nowhere, and emptying a $10 balance in
+   about eight days unnoticed. Recreating it is one call:
+
+   ```
+   POST /oapi/tweet_filter/add_rule
+   { "tag": "ponsr-mentions", "value": "@ponsrdotfun", "interval_seconds": 10 }
+   ```
 
    The webhook endpoint stays, authenticated, because it is the right shape if a provider that
    pushes for free ever appears.
