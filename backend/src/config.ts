@@ -22,6 +22,22 @@ const ConfigSchema = z.object({
   // Alert transport. Both are required together -- a token without a chat id cannot deliver.
   // Shared secret the webhook caller must present. Without it the endpoint is an
   // unauthenticated way to spend the treasury -- see the guard in index.ts.
+  /**
+   * How often to sweep for mentions, in seconds.
+   *
+   * This is the latency a user feels between tagging the bot and being answered, and it is
+   * bought by the poll: twitterapi.io bills a search whether or not it matches anything, at
+   * roughly 15 credits (1 USD = 100,000 credits). So, per month:
+   *
+   *   300s (default)  288 polls/day   ~$1.30
+   *    60s          1,440 polls/day   ~$6.50
+   *    10s          8,640 polls/day  ~$39
+   *
+   * Their own filter-rule product bills per poll too, so it costs the same at the same
+   * interval while adding a webhook, a dashboard setting and a shared secret held by a third
+   * party. This is the cheaper half of that trade, and the interval is the only real lever.
+   */
+  MENTION_POLL_SECONDS: z.coerce.number().int().min(5).default(300),
   WEBHOOK_SECRET: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),

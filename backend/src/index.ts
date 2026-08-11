@@ -172,7 +172,7 @@ app.get('/health', (_req, res) => {
  * nothing here. Watch the logs: repeated recoveries mean the webhook itself is
  * unhealthy and worth investigating rather than quietly relying on this.
  */
-const reconciler = startReconciliation(deps, 5);
+const reconciler = startReconciliation(deps, config.MENTION_POLL_SECONDS / 60);
 
 /**
  * Part 5 mitigation #7. Two distinct jobs, and both are needed:
@@ -222,7 +222,7 @@ async function reportTreasurySetup(): Promise<void> {
 
 const server = app.listen(config.PORT, () => {
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
-  console.log('Reconciliation sweep every 5 minutes. Treasury balance watch every 15 minutes.');
+  console.log(`Mention sweep every ${config.MENTION_POLL_SECONDS}s. Treasury balance watch every 15 minutes.`);
   // Say this at boot rather than leaving it to be discovered when a webhook silently 401s.
   if (!config.WEBHOOK_SECRET) {
     console.error(

@@ -146,7 +146,10 @@ export function startReconciliation(
     }
   };
 
-  const timer = setInterval(tick, intervalMinutes * 60 * 1000);
+  // Fractional minutes are meaningful here: the interval is the latency users feel, and it
+  // is bought from twitterapi.io by the poll. See MENTION_POLL_SECONDS in config.ts for the
+  // arithmetic behind whatever value index.ts passes.
+  const timer = setInterval(tick, Math.round(intervalMinutes * 60 * 1000));
   // Don't hold the process open on this timer alone.
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 
