@@ -14,6 +14,7 @@ import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation } from './reconciler';
 import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from './treasuryPolicy';
 import { InboundMention } from './types';
+import { webhookAuthorised } from './webhookAuth';
 
 const app = express();
 app.use(express.json());
@@ -120,6 +121,14 @@ const deps = {
  */
 app.post('/webhook/mention', async (req, res) => {
   try {
+    if (!webhookAuthorised(req, config.WEBHOOK_SECRET)) {
+      // Deliberately terse. A response that distinguished "no secret configured" from "wrong
+      // secret" would tell an attacker which of the two they are up against.
+      console.warn(`[webhook] rejected an unauthorised POST from ${req.ip}`);
+      res.status(401).json({ error: 'unauthorised' });
+      return;
+    }
+
     const body = req.body;
     const mention: InboundMention = {
       tweetId: body.id ?? body.tweet_id,
@@ -214,6 +223,15 @@ async function reportTreasurySetup(): Promise<void> {
 const server = app.listen(config.PORT, () => {
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log('Reconciliation sweep every 5 minutes. Treasury balance watch every 15 minutes.');
+  // Say this at boot rather than leaving it to be discovered when a webhook silently 401s.
+  if (!config.WEBHOOK_SECRET) {
+    console.error(
+      '[webhook/error] WEBHOOK_SECRET is not set, so /webhook/mention refuses every request. ' +
+        'Mentions still arrive via the 5-minute reconciliation sweep, just later.'
+    );
+  } else {
+    console.log('Webhook authentication is on.');
+  }
   reportTreasurySetup().catch((err) =>
     console.error('[treasury] could not verify hot/cold setup at boot:', err?.message ?? err)
   );

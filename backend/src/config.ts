@@ -20,6 +20,9 @@ const ConfigSchema = z.object({
   // Same model, routed through OpenRouter when there is no direct Anthropic key.
   OPENROUTER_API_KEY: z.string().optional(),
   // Alert transport. Both are required together -- a token without a chat id cannot deliver.
+  // Shared secret the webhook caller must present. Without it the endpoint is an
+  // unauthenticated way to spend the treasury -- see the guard in index.ts.
+  WEBHOOK_SECRET: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('anthropic/claude-haiku-4.5'),
