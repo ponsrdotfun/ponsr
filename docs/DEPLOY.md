@@ -142,12 +142,33 @@ Two defects the rehearsals could not have found, because both need the live X AP
    failure that had not happened, and attempted a second reply through the transport that had
    just failed. Fixed in `replySafely`; the row was corrected by hand.
 
-2. **X's POST /2/tweets returns a persistent 503.** Reads work — `check-x-credentials.ts`
-   authenticates as @ponsrdotfun and reports READ AND WRITE — but every write attempt returns
-   `503 Service Unavailable`, three for three, minutes apart. Reads go to twitterapi.io so the
-   bot still hears everyone; it just cannot answer. Check the X developer portal: an app must
-   belong to a Project with an active plan before v2 writes are permitted, and an unattached
-   app fails at the write endpoint while reads keep working.
+2. **X's POST /2/tweets returns a persistent 503, and it is not ours to fix.** Every
+   configuration cause was checked and eliminated:
+
+   | Checked | Result |
+   |---|---|
+   | App attached to a project | yes — Pay Per Use |
+   | Token permission | Read and write, for @ponsrdotfun |
+   | Access token regenerated | still 503 |
+   | Credit balance | $4.99 |
+   | Billing cycle spend cap | Unlimited |
+   | Manual posting from the account | works |
+   | A brand-new app in the same project | still 503 |
+   | OAuth 2.0 user context instead of 1.0a | still 503 |
+   | Reads on the same credentials | 200, every time |
+
+   Two auth methods, two apps, freshly generated credentials: writes 503, reads 200. X's own
+   developer forum carries many identical reports from Pay-Per-Use accounts, several months
+   old and unresolved. Nothing in this repository can change it.
+
+   The bot is otherwise whole: it hears every mention through twitterapi.io and launches
+   correctly. It just cannot answer. `REPLY_FAILED` fires as critical on every launch that
+   goes unanswered, and replying to those people is a manual job — nothing retries a reply.
+
+   Rejected as a workaround: twitterapi.io can post via `create_tweet_v2`, but only with a
+   `login_cookie` obtained by handing them the account's email, password and 2FA secret. That
+   is full account control to a third party, against X's terms, and grounds for suspension —
+   too high a price for a reply.
 
 Until writes work the bot launches tokens silently. `REPLY_FAILED` fires as critical on every
 such launch, and answering those people is a manual job — nothing retries a reply.
