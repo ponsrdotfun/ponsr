@@ -65,6 +65,24 @@ async function run() {
           whatIf: null,
         };
       });
+
+      // Two tokens, one symbol. This is not hypothetical: two people asked the bot for
+      // $PONSR within a day on 2026-08-12, and the detail page keyed on symbol showed the
+      // first one to anyone following a link about the second.
+      window.__PONSR_FIXTURE__.push(
+        {
+          id: '0x' + 'aa'.repeat(20), name: 'Dupe One', symbol: 'DUPE',
+          address: '0x' + 'aa'.repeat(20), pool: '0x' + 'aa'.repeat(20),
+          launchedAt: Date.now() - 1000, liquidityEth: 0.5, progress: 0.1,
+          holders: 1, status: 'curve', trend: null, whatIf: null,
+        },
+        {
+          id: '0x' + 'bb'.repeat(20), name: 'Dupe Two', symbol: 'DUPE',
+          address: '0x' + 'bb'.repeat(20), pool: '0x' + 'bb'.repeat(20),
+          launchedAt: Date.now() - 2000, liquidityEth: 0.6, progress: 0.1,
+          holders: 1, status: 'curve', trend: null, whatIf: null,
+        }
+      );
     },
   });
 
@@ -85,7 +103,7 @@ async function run() {
   // The strip used to count up to hardcoded totals. It now reports what the
   // ledger actually returned, so the check is that it reflects the data.
   checks.push(['stat strip reports the real launch count',
-    doc.getElementById('stat-total').textContent === '30', doc.getElementById('stat-total').textContent]);
+    doc.getElementById('stat-total').textContent === '32', doc.getElementById('stat-total').textContent]);
   checks.push(['stat strip reports liquidity in ETH, not invented dollars',
     /ETH$/.test(doc.getElementById('stat-liq').textContent), doc.getElementById('stat-liq').textContent]);
   // Three separate views: the landing page is the pitch, explore is the tool.
@@ -254,6 +272,31 @@ async function run() {
     !doc.getElementById('view-token').hidden && doc.getElementById('tp-symbol').textContent === '$' + sym,
     window.location.pathname + ' -> ' + doc.getElementById('tp-symbol').textContent]);
 
+  // A token's URL is its contract address, because symbols are chosen by whoever tweets and
+  // two people can pick the same one. Keyed on symbol, the page showed a stranger's token to
+  // someone following a link about their own.
+  window.history.replaceState({}, '', '/token/0x' + 'aa'.repeat(20));
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  checks.push(['/token/ADDRESS opens exactly that token',
+    !doc.getElementById('view-token').hidden && doc.getElementById('tp-name').textContent === 'Dupe One',
+    doc.getElementById('tp-name').textContent]);
+
+  window.history.replaceState({}, '', '/token/0x' + 'bb'.repeat(20));
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  checks.push(['a second token with the SAME symbol opens its own page',
+    doc.getElementById('tp-name').textContent === 'Dupe Two',
+    doc.getElementById('tp-name').textContent]);
+
+  // Guessing would be worse than not resolving: it shows someone a token that is not the one
+  // they were sent. The board lets them choose instead.
+  window.history.replaceState({}, '', '/token/DUPE');
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  checks.push(['an ambiguous SYMBOL link refuses to guess a token',
+    doc.getElementById('view-token').hidden, 'token view hidden: ' + doc.getElementById('view-token').hidden]);
+
   window.history.replaceState({}, '', '/');
   window.dispatchEvent(new window.PopStateEvent('popstate'));
   await new Promise((resolve) => setTimeout(resolve, 80));
@@ -266,19 +309,23 @@ async function run() {
   checks.push(['at most one element carries the shared transition name',
     taggedNow.length <= 1, taggedNow.length + ' tagged']);
 
-  // Symbols are the routing key, so duplicates would make one card open another
-  // token's page. Confirmed by reading the rendered grid across every page.
-  const seenSyms = {};
-  let dupSym = null;
+  // This once asserted that symbols were unique, on the reasoning that "symbols are the
+  // routing key, so duplicates would make one card open another token's page". The premise
+  // was the bug: symbols are chosen by whoever tweets, and two people asked for $PONSR within
+  // a day on 2026-08-12. Routing moved to the contract address, and the invariant worth
+  // guarding moved with it -- duplicate symbols are now expected and harmless, duplicate
+  // routing keys are not.
+  const seenIds = {};
+  let dupId = null;
   const allSortBtn = doc.querySelector('#ledger-sort button[data-sort="newest"]');
   if (allSortBtn) allSortBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 40));
-  for (const el of doc.querySelectorAll('.tcard .token-symbol')) {
-    const s = el.textContent;
-    if (seenSyms[s]) dupSym = s;
-    seenSyms[s] = 1;
+  for (const el of doc.querySelectorAll('.tcard')) {
+    const k = el.dataset.id;
+    if (k && seenIds[k]) dupId = k;
+    if (k) seenIds[k] = 1;
   }
-  checks.push(['no duplicate token symbols on a page', dupSym === null, dupSym || 'all unique']);
+  checks.push(['no duplicate routing keys on a page', dupId === null, dupId || 'all unique']);
 
   // Focus must follow a route change into the view that is actually visible.
   checks.push(['focus is never stranded inside a hidden view',

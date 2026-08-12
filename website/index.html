@@ -1195,7 +1195,12 @@
           var symbol = ident.symbol || meta.symbol || token.slice(2, 8).toUpperCase();
           var progress = Number(liquidityWei) / CHAIN.graduationWei;
           return {
-            id: symbol.toLowerCase(),
+            // The contract address, not the symbol. Symbols are chosen by whoever tweets,
+            // so two people asking for $PONSR produce two tokens with one id -- and the
+            // detail page would silently show a stranger's token to someone following a
+            // link about their own. Happened on 2026-08-12, twice within a day. The
+            // address is the only identifier the chain guarantees unique.
+            id: token.toLowerCase(),
             name: ident.name || meta.name || symbol,
             symbol: symbol,
             address: token,
@@ -1447,7 +1452,7 @@
     rowEls.forEach(function(row) {
       row.addEventListener('click', function() {
         const t = tokens.filter(function(x){ return x.id === row.dataset.id; })[0];
-        if (t) goToToken(t.symbol, row.querySelector('.cardart'));
+        if (t) goToToken(t.address, row.querySelector('.cardart'));
       });
     });
     if (firstLedgerRender) { revealRowsOnScroll(); firstLedgerRender = false; }
@@ -1613,13 +1618,26 @@
   const tokenView = document.getElementById('view-token');
   let currentToken = null;
 
-  function tokenBySymbol(sym) {
-    if (!sym) return null;
-    var s = String(sym).toLowerCase();
-    for (var i = 0; i < tokens.length; i++) {
-      if (tokens[i].symbol.toLowerCase() === s) return tokens[i];
+  /**
+   * Resolves the URL's token reference.
+   *
+   * An address is exact. A symbol is kept working so links shared before the switch still
+   * open -- but only when exactly one token carries it. If several do, this returns null and
+   * the router falls back to the board, where the visitor can pick. Guessing would show
+   * someone a token that is not the one they were sent.
+   */
+  function tokenByRef(ref) {
+    if (!ref) return null;
+    var r = String(ref).toLowerCase();
+    var i;
+    for (i = 0; i < tokens.length; i++) {
+      if (tokens[i].address && tokens[i].address.toLowerCase() === r) return tokens[i];
     }
-    return null;
+    var matches = [];
+    for (i = 0; i < tokens.length; i++) {
+      if (tokens[i].symbol.toLowerCase() === r) matches.push(tokens[i]);
+    }
+    return matches.length === 1 ? matches[0] : null;
   }
 
   /* Routes exist in two shapes:
@@ -1650,8 +1668,8 @@
     return { view: q && q.get('view'), token: q && q.get('token') };
   }
 
-  function urlForToken(sym) {
-    return PRETTY_URLS ? '/token/' + encodeURIComponent(sym) : '?token=' + encodeURIComponent(sym);
+  function urlForToken(ref) {
+    return PRETTY_URLS ? '/token/' + encodeURIComponent(ref) : '?token=' + encodeURIComponent(ref);
   }
   function urlForExplore() { return PRETTY_URLS ? '/explore' : '?view=explore'; }
   function urlForHome() { return PRETTY_URLS ? '/' : location.pathname; }
@@ -1705,13 +1723,13 @@
     setTimeout(settle, TRANSITION_MS + 400);
   }
 
-  function goToToken(sym, sharedEl) {
+  function goToToken(ref, sharedEl) {
     // Giving the card's art the same name the token page's monogram carries makes
     // the browser morph one into the other, which is the shared element the
     // Complex page-transition preset asks for.
     tagShared(sharedEl || null);
     withTransition(function () {
-      push(urlForToken(sym));
+      push(urlForToken(ref));
       applyRoute();
     });
   }
@@ -1741,7 +1759,7 @@
   function applyRoute() {
     var route = routeFromUrl();
     var wanted = route.token;
-    var t = tokenBySymbol(wanted);
+    var t = tokenByRef(wanted);
     var explore = route.view === 'explore';
 
     // A deep link to ?token=X arrives before the board's data does. Show the
@@ -1905,7 +1923,7 @@
   document.getElementById('tp-share').addEventListener('click', function () {
     var t = currentToken;
     if (!t) return;
-    var url = new URL(urlForToken(t.symbol), location.href).href;
+    var url = new URL(urlForToken(t.address), location.href).href;
     var label = this.querySelector('span');
     if (navigator.share) {
       navigator.share({ title: t.name + ' ($' + t.symbol + ') on Ponsr', url: url }).catch(function () {});
