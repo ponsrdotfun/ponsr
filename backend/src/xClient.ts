@@ -273,7 +273,20 @@ export class XApiWriter implements XWriter {
     });
 
     if (!res.ok) {
-      throw new Error(`X API ${res.status} posting reply: ${(await res.text()).slice(0, 300)}`);
+      const body = (await res.text()).slice(0, 300);
+      // 503 from this endpoint usually means the tweet being replied to no longer exists --
+      // deleted by its author, or from a suspended account. X returns Service Unavailable
+      // rather than 404, which reads like an outage on their side and is not one.
+      //
+      // Verified 2026-08-12 with a control: identical calls differing only in the target.
+      // An existing tweet returns 201; a non-existent one returns 503. A whole day was spent
+      // diagnosing a "broken write path" that was an artifact of testing against a deliberately
+      // impossible tweet id -- chosen precisely so the test could not publish anything.
+      const hint =
+        res.status === 503
+          ? ' -- the tweet being replied to probably no longer exists (deleted or suspended author)'
+          : '';
+      throw new Error(`X API ${res.status} posting reply${hint}: ${body}`);
     }
     const body: any = await res.json();
     return { tweetId: String(body?.data?.id ?? '') };

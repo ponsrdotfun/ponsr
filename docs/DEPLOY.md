@@ -142,36 +142,26 @@ Two defects the rehearsals could not have found, because both need the live X AP
    failure that had not happened, and attempted a second reply through the transport that had
    just failed. Fixed in `replySafely`; the row was corrected by hand.
 
-2. **X's POST /2/tweets returns a persistent 503, and it is not ours to fix.** Every
-   configuration cause was checked and eliminated:
+2. **A 503 from POST /2/tweets means the tweet being replied to does not exist.** Not an
+   outage, not a plan problem, not a broken account. X returns Service Unavailable where it
+   should return 404.
 
-   | Checked | Result |
-   |---|---|
-   | App attached to a project | yes — Pay Per Use |
-   | Token permission | Read and write, for @ponsrdotfun |
-   | Access token regenerated | still 503 |
-   | Credit balance | $4.99 |
-   | Billing cycle spend cap | Unlimited |
-   | Manual posting from the account | works |
-   | A brand-new app in the same project | still 503 |
-   | OAuth 2.0 user context instead of 1.0a | still 503 |
-   | Reads on the same credentials | 200, every time |
+   Established by control, 2026-08-12: two identical calls differing only in the reply target.
+   An existing tweet returned **201**; a non-existent one returned **503**.
 
-   Two auth methods, two apps, freshly generated credentials: writes 503, reads 200. X's own
-   developer forum carries many identical reports from Pay-Per-Use accounts, several months
-   old and unresolved. Nothing in this repository can change it.
+   This cost a day. Every diagnostic before that control used a deliberately impossible tweet
+   id (`9999999999999999999`) so the tests could not publish anything — and that exact choice
+   manufactured the 503 being investigated. An elaborate theory was built on top of it: broken
+   write entitlement, the Pay-Per-Use migration, a failing metering path. All of it invented to
+   explain an artifact of the test method.
 
-   The bot is otherwise whole: it hears every mention through twitterapi.io and launches
-   correctly. It just cannot answer. `REPLY_FAILED` fires as critical on every launch that
-   goes unanswered, and replying to those people is a manual job — nothing retries a reply.
+   The lesson is not "check the docs". It is that **a safe proxy for a dangerous operation is
+   only evidence if the substitution cannot change the result** — and here the substitution was
+   the whole result. The suspicion was even written down at the time ("a non-existent reply
+   target should give 400 not found, not 503") and then walked past.
 
-   Rejected as a workaround: twitterapi.io can post via `create_tweet_v2`, but only with a
-   `login_cookie` obtained by handing them the account's email, password and 2FA secret. That
-   is full account control to a third party, against X's terms, and grounds for suspension —
-   too high a price for a reply.
-
-Until writes work the bot launches tokens silently. `REPLY_FAILED` fires as critical on every
-such launch, and answering those people is a manual job — nothing retries a reply.
+   `postReply` now says so in its error text, so the next person reads the explanation instead
+   of rediscovering it.
 
 ### Two variables that must NOT be set
 
