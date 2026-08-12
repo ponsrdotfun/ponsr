@@ -395,8 +395,11 @@ describe("X's 7-day crypto-address rule", () => {
 
     expect(sent).toHaveLength(2);
     expect(sent[0]).toContain('Token: 0x');
-    expect(sent[1]).not.toContain('0x');
-    expect(sent[1]).toContain('/token/MOON');
+    // The retry drops the labelled address and tx lines -- the part X objects to -- and keeps
+    // the link, which is keyed on the address so it cannot point at someone else's token.
+    expect(sent[1]).not.toContain('Token: 0x');
+    expect(sent[1]).not.toContain('Tx: 0x');
+    expect(sent[1]).toMatch(/\/token\/0x[0-9a-fA-F]+$/m);
   });
 
   // The retry is for this rule only. Any other failure must not silently drop the addresses.

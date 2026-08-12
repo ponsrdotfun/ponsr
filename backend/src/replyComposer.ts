@@ -45,11 +45,15 @@ export function composeSuccessReply(params: {
   // The address-free form carries the link instead: a reply announcing a token without saying
   // where to find it is not worth sending. That costs $0.20 rather than $0.015, which is the
   // price of answering at all during the window.
+  // The link is keyed on the contract address, never the symbol. Symbols come from whoever
+  // tweets, so two people can claim the same one -- two tokens called PONSR were launched
+  // within a day on 2026-08-12 -- and a symbol link then resolves to whichever the site
+  // happens to match, or to nothing at all. Sending someone a link to a stranger's token is
+  // worse than sending no link.
+  const link = `${base}/token/${encodeURIComponent(params.tokenAddress)}`;
+
   if (params.omitAddresses) {
-    return [
-      `${params.tokenName} ($${params.tokenSymbol}) is live.`,
-      `${base}/token/${encodeURIComponent(params.tokenSymbol)}`,
-    ].join('\n');
+    return [`${params.tokenName} ($${params.tokenSymbol}) is live.`, link].join('\n');
   }
 
   const lines = [
@@ -57,7 +61,7 @@ export function composeSuccessReply(params: {
     `Token: ${params.tokenAddress}`,
     `Tx: ${params.txHash}`,
   ];
-  if (includeLink) lines.push(`${base}/token/${encodeURIComponent(params.tokenSymbol)}`);
+  if (includeLink) lines.push(link);
   return lines.join('\n');
 }
 

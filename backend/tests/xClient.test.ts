@@ -96,17 +96,20 @@ describe('the success reply and the price of a link', () => {
     expect(composeSuccessReply({ ...base, includeLink: false })).toContain(base.tokenAddress);
   });
 
-  it('adds the token page link when the cost is opted into', () => {
+  it('links to the token page by contract address', () => {
     const text = composeSuccessReply({ ...base, includeLink: true, siteBaseUrl: 'https://ponsr.fun' });
-    expect(text).toContain('https://ponsr.fun/token/MOON');
+    expect(text).toContain('https://ponsr.fun/token/' + base.tokenAddress);
   });
 
-  it('escapes the symbol into the link rather than trusting it', () => {
-    // Symbols are sanitised upstream, but a URL built by string concatenation is exactly
-    // where an unexpected character becomes someone else's problem.
+  // Two people asked the bot for $PONSR within a day on 2026-08-12. A symbol link resolves to
+  // whichever token the site happens to match, or to nothing -- so sending one risks pointing
+  // someone at a stranger's token. Keying on the address removes the ambiguity entirely, and
+  // removes the symbol from the URL, so nothing a user chose is ever concatenated into a link.
+  it('never puts the symbol in the link, however odd the symbol is', () => {
     const text = composeSuccessReply({
       ...base, tokenSymbol: 'A B', includeLink: true, siteBaseUrl: 'https://ponsr.fun',
     });
-    expect(text).toContain('/token/A%20B');
+    expect(text).toContain('/token/' + base.tokenAddress);
+    expect(text).not.toContain('/token/A');
   });
 });
