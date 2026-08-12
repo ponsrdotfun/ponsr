@@ -10,6 +10,11 @@
 # refresh or a direct visit. Flip PRETTY_URLS to true in website/index.html in
 # the same commit, so the app also *writes* URLs in this shape.
 [[redirects]]
+  from = "/terms"
+  to = "/terms.html"
+  status = 200
+
+[[redirects]]
   from = "/explore"
   to = "/index.html"
   status = 200

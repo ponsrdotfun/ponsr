@@ -433,7 +433,7 @@ async function run() {
     !!(fx && /x\.com\/ponsrdotfun/.test(fx.getAttribute('href') || ''))]);
   // Part 4 asks for the disclaimer to be live on a public surface, not filed in the repo.
   // A page nothing links to is filed in the repo.
-  const termsLink = doc.querySelector('footer a[href$="terms.html"]');
+  const termsLink = doc.querySelector('footer a[href="/terms"], footer a[href$="terms.html"]');
   checks.push(['footer links to the terms & disclaimer page', !!termsLink,
     termsLink ? termsLink.getAttribute('href') : 'missing']);
 
