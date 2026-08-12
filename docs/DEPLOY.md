@@ -163,6 +163,33 @@ Two defects the rehearsals could not have found, because both need the live X AP
    `postReply` now says so in its error text, so the next person reads the explanation instead
    of rediscovering it.
 
+### X blocks crypto addresses for 7 days after authentication
+
+The real reason the first launches went unanswered, visible only once `replySafely` began
+logging the error instead of swallowing it:
+
+```
+403 "Crypto addresses are prohibited for the first 7 days after authentication."
+```
+
+The success reply carries `Token: 0x…` and `Tx: 0x…`, so the whole reply is refused while the
+token sits on-chain. **Regenerating credentials appears to restart the window**, so the clock
+tracks the credentials, not the account's age — worth knowing before reaching for the
+regenerate button.
+
+Verified against the live API, 2026-08-12:
+
+| Form | Result |
+|---|---|
+| Address in the body text (`Token: 0x…`) | **403, refused** |
+| Address inside a URL (`/token/0x…`) | **accepted** |
+| A plain `ponsr.fun` link | accepted |
+
+So the bot retries once without the labelled address and tx lines, keeping the link — which
+carries the address anyway, and is keyed on it so it cannot point at another token with the
+same symbol. That costs $0.20 rather than $0.015, which is the price of answering at all
+during the window. After it passes, the first attempt succeeds and the retry never runs.
+
 ### Two variables that must NOT be set
 
 - **`TREASURY_SIGNER_PRIVATE_KEY`.** Production signs through Turnkey, with a policy that
