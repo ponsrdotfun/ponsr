@@ -128,6 +128,30 @@ requests it could not complete. Stopping the machine is not enough on its own, b
 hostname is public. Scaling to zero is the state that holds; keep that in mind if the bot ever
 needs taking off the air in a hurry.
 
+### First real launch, and what it exposed (2026-08-12)
+
+A tweet from a real account produced a real token: parse, anti-Sybil validation, Privy wallet,
+FeeSplitter deploy, `launchToken`, all correct on mainnet. `splitERC20` is present in the
+deployed splitter's bytecode, so the fee path is the ERC20 one.
+
+Two defects the rehearsals could not have found, because both need the live X API:
+
+1. **A failed reply rewrote a successful launch.** `postReply` was inside the launch's
+   try/catch, so X refusing the POST reached the handler meant for on-chain failures: it
+   marked the launch `failed` beside a real token address and transaction hash, alerted a
+   failure that had not happened, and attempted a second reply through the transport that had
+   just failed. Fixed in `replySafely`; the row was corrected by hand.
+
+2. **X's POST /2/tweets returns a persistent 503.** Reads work — `check-x-credentials.ts`
+   authenticates as @ponsrdotfun and reports READ AND WRITE — but every write attempt returns
+   `503 Service Unavailable`, three for three, minutes apart. Reads go to twitterapi.io so the
+   bot still hears everyone; it just cannot answer. Check the X developer portal: an app must
+   belong to a Project with an active plan before v2 writes are permitted, and an unattached
+   app fails at the write endpoint while reads keep working.
+
+Until writes work the bot launches tokens silently. `REPLY_FAILED` fires as critical on every
+such launch, and answering those people is a manual job — nothing retries a reply.
+
 ### Two variables that must NOT be set
 
 - **`TREASURY_SIGNER_PRIVATE_KEY`.** Production signs through Turnkey, with a policy that
