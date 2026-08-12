@@ -78,12 +78,30 @@ async function replySafely(
   deps: OrchestratorDeps,
   inReplyToTweetId: string,
   text: string,
-  context: Record<string, unknown> = {}
+  context: Record<string, unknown> = {},
+  /** Second attempt, used only when X rejects the first for containing a crypto address. */
+  withoutAddresses?: () => string
 ): Promise<void> {
   try {
     await deps.xClient.postReply(inReplyToTweetId, text);
+    return;
   } catch (err: any) {
     const detail = err?.message ?? String(err);
+
+    // X blocks crypto addresses for the first 7 days after authentication, and our success
+    // reply carries both a token address and a transaction hash. Retrying without them is
+    // better than staying silent: the person still learns their token exists and where to
+    // find it. Once the window passes, the first attempt succeeds and this never runs.
+    if (withoutAddresses && /crypto addresses are prohibited/i.test(detail)) {
+      try {
+        await deps.xClient.postReply(inReplyToTweetId, withoutAddresses());
+        console.warn(`[reply] ${inReplyToTweetId}: addresses refused by X, answered without them`);
+        return;
+      } catch (second: any) {
+        console.error(`[reply] address-free retry also failed: ${second?.message ?? second}`);
+      }
+    }
+
     console.error(`[reply] could not answer tweet ${inReplyToTweetId}: ${detail}`);
     notify(deps, (m) =>
       m.onReplyFailed(inReplyToTweetId, detail, context)
@@ -231,7 +249,13 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // The launch is complete and recorded at this point. The reply cannot change that, and
     // replySafely makes sure a refusal from X cannot pretend otherwise.
     const replyText = composeSuccessReply({ tokenName, tokenSymbol, tokenAddress, txHash: sent.hash });
-    await replySafely(deps, mention.tweetId, replyText, { stage: 'launched', tokenAddress, txHash: sent.hash });
+    await replySafely(
+      deps,
+      mention.tweetId,
+      replyText,
+      { stage: 'launched', tokenAddress, txHash: sent.hash },
+      () => composeSuccessReply({ tokenName, tokenSymbol, tokenAddress, txHash: sent.hash, omitAddresses: true })
+    );
 
     return { kind: 'launched', tokenAddress, txHash: sent.hash };
   } catch (err: any) {

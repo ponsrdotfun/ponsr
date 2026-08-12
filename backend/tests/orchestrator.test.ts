@@ -343,3 +343,69 @@ describe('a failed reply must not rewrite a successful launch', () => {
     expect(sent[0][2]).toMatchObject({ stage: 'launched' });
   });
 });
+
+describe("X's 7-day crypto-address rule", () => {
+  // Observed on a real launch, 2026-08-12: X returns 403 "Crypto addresses are prohibited for
+  // the first 7 days after authentication." The success reply carries both a token address and
+  // a transaction hash, so the whole reply is refused -- and the person who asked learns
+  // nothing, despite their token existing.
+  let db: Db;
+  let xClient: MockXClient;
+  let treasurySigner: FakeTreasurySigner;
+
+  beforeEach(() => {
+    db = freshDb();
+    xClient = new MockXClient();
+    treasurySigner = new FakeTreasurySigner();
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    db.close();
+    jest.restoreAllMocks();
+  });
+
+  function run(postReply: (id: string, text: string) => Promise<any>) {
+    const mention = makeMention();
+    (xClient as any).postReply = postReply;
+    return handleMention(mention, {
+      db,
+      parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
+      walletResolver: new MockWalletResolver(db),
+      xClient,
+      treasurySigner,
+      provider: {} as any,
+      getLiveFeeWei: async () => 500_000_000_000_000n,
+      getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+    } as any);
+  }
+
+  it('retries without the address when X refuses it, and that reply carries the link', async () => {
+    const sent: string[] = [];
+    await run(async (_id, text) => {
+      sent.push(text);
+      if (/0x/.test(text)) {
+        throw new Error(
+          'X API 403 posting reply: {"detail":"Crypto addresses are prohibited for the first 7 days after authentication."}'
+        );
+      }
+      return { tweetId: 'ok' };
+    });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain('Token: 0x');
+    expect(sent[1]).not.toContain('0x');
+    expect(sent[1]).toContain('/token/MOON');
+  });
+
+  // The retry is for this rule only. Any other failure must not silently drop the addresses.
+  it('does not retry for an unrelated failure', async () => {
+    const sent: string[] = [];
+    await run(async (_id, text) => {
+      sent.push(text);
+      throw new Error('X API 500 posting reply: something else');
+    });
+    expect(sent).toHaveLength(1);
+  });
+});

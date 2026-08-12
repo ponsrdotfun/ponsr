@@ -30,9 +30,27 @@ export function composeSuccessReply(params: {
   txHash: string;
   includeLink?: boolean;
   siteBaseUrl?: string;
+  /** Drop the address and tx hash, carrying the site link instead. See the note below. */
+  omitAddresses?: boolean;
 }): string {
   const includeLink = params.includeLink ?? config.REPLY_INCLUDE_LINK;
   const base = params.siteBaseUrl ?? config.SITE_BASE_URL;
+
+  // X refuses posts containing crypto addresses for the first 7 days after an app or token is
+  // authenticated: "Crypto addresses are prohibited for the first 7 days after authentication."
+  // (403, observed 2026-08-12 on a real launch). Both the token address and the transaction
+  // hash trip it, and regenerating credentials appears to restart the window -- so the clock
+  // tracks the credentials, not the account.
+  //
+  // The address-free form carries the link instead: a reply announcing a token without saying
+  // where to find it is not worth sending. That costs $0.20 rather than $0.015, which is the
+  // price of answering at all during the window.
+  if (params.omitAddresses) {
+    return [
+      `${params.tokenName} ($${params.tokenSymbol}) is live.`,
+      `${base}/token/${encodeURIComponent(params.tokenSymbol)}`,
+    ].join('\n');
+  }
 
   const lines = [
     `${params.tokenName} ($${params.tokenSymbol}) is live.`,
