@@ -39,6 +39,10 @@ const ConfigSchema = z.object({
    */
   MENTION_POLL_SECONDS: z.coerce.number().int().min(5).default(300),
   WEBHOOK_SECRET: z.string().optional(),
+  // OAuth 2.0 App-Only. The bot never writes with this -- replies must come from the
+  // account, which needs user context. It exists because /2/usage/tweets refuses OAuth 1.0a
+  // and is the only way to read the project's post quota.
+  X_BEARER_TOKEN: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('anthropic/claude-haiku-4.5'),
