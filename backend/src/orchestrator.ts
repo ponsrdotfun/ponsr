@@ -58,6 +58,39 @@ function notify(deps: OrchestratorDeps, fn: (m: TreasuryMonitor) => Promise<void
     .catch((err) => console.error('[monitor] alert failed (launch unaffected):', err?.message ?? err));
 }
 
+/**
+ * Posts a reply without letting a failure touch the launch.
+ *
+ * A reply is a NOTIFICATION. The token is on-chain and the fee is spent before this is
+ * attempted, and none of that becomes untrue because X refused a POST.
+ *
+ * On 2026-08-12 it was inside the launch's try/catch, so when the reply failed the catch
+ * marked a successful launch `failed` -- overwriting the `confirmed` row that had been written
+ * seconds earlier, next to a real token address and transaction hash. It then attempted a
+ * second reply, through the same transport that had just failed, from inside the catch that
+ * was handling the first failure.
+ *
+ * So this never throws and never reports the launch. It logs the real error, which is the only
+ * record of WHY X refused, and raises an alert -- because a launch nobody was told about is
+ * the operator's problem to fix by hand, and silence there is indistinguishable from success.
+ */
+async function replySafely(
+  deps: OrchestratorDeps,
+  inReplyToTweetId: string,
+  text: string,
+  context: Record<string, unknown> = {}
+): Promise<void> {
+  try {
+    await deps.xClient.postReply(inReplyToTweetId, text);
+  } catch (err: any) {
+    const detail = err?.message ?? String(err);
+    console.error(`[reply] could not answer tweet ${inReplyToTweetId}: ${detail}`);
+    notify(deps, (m) =>
+      m.onReplyFailed(inReplyToTweetId, detail, context)
+    );
+  }
+}
+
 export type OrchestratorOutcome =
   | { kind: 'duplicate' }
   | { kind: 'rejected'; reason: string }
@@ -87,7 +120,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, validation.reason!));
     const replyText = composeRejectionReply(validation.reason!, validation.detail);
     if (replyText) {
-      await deps.xClient.postReply(mention.tweetId, replyText);
+      await replySafely(deps, mention.tweetId, replyText, { stage: 'rejected', reason: validation.reason });
     }
     return { kind: 'rejected', reason: validation.reason! };
   }
@@ -136,7 +169,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       deps.db.updateLaunchStatus(launchId, 'rejected');
       notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, 'FEE_EXCEEDS_CEILING'));
       const replyText = composeRejectionReply('FEE_EXCEEDS_CEILING');
-      await deps.xClient.postReply(mention.tweetId, replyText);
+      await replySafely(deps, mention.tweetId, replyText, { stage: 'fee_ceiling' });
       return { kind: 'rejected', reason: 'FEE_EXCEEDS_CEILING' };
     }
 
@@ -171,7 +204,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     if (!receipt || receipt.status !== 1) {
       deps.db.updateLaunchStatus(launchId, 'failed', { txHash: sent.hash });
       const replyText = composeOnChainFailureReply({ reasonSummary: 'transaction reverted on-chain' });
-      await deps.xClient.postReply(mention.tweetId, replyText);
+      await replySafely(deps, mention.tweetId, replyText, { stage: 'reverted', txHash: sent.hash });
       return { kind: 'onchain_failure', detail: 'transaction reverted' };
     }
 
@@ -183,7 +216,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       // guessing an address.
       deps.db.updateLaunchStatus(launchId, 'failed', { txHash: sent.hash });
       const replyText = composeOnChainFailureReply({ reasonSummary: 'could not confirm the deployed token address' });
-      await deps.xClient.postReply(mention.tweetId, replyText);
+      await replySafely(deps, mention.tweetId, replyText, { stage: 'no_token_address', txHash: sent.hash });
       return { kind: 'onchain_failure', detail: 'token address not found in logs' };
     }
 
@@ -195,15 +228,17 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     deps.db.recordTreasurySpend(launchId, liveFee);
     notify(deps, (m) => m.onLaunchRecorded());
 
+    // The launch is complete and recorded at this point. The reply cannot change that, and
+    // replySafely makes sure a refusal from X cannot pretend otherwise.
     const replyText = composeSuccessReply({ tokenName, tokenSymbol, tokenAddress, txHash: sent.hash });
-    await deps.xClient.postReply(mention.tweetId, replyText);
+    await replySafely(deps, mention.tweetId, replyText, { stage: 'launched', tokenAddress, txHash: sent.hash });
 
     return { kind: 'launched', tokenAddress, txHash: sent.hash };
   } catch (err: any) {
     deps.db.updateLaunchStatus(launchId, 'failed');
     notify(deps, (m) => m.onLaunchFailed(mention.tweetId, err?.message ?? 'unknown error'));
     const replyText = composeOnChainFailureReply({ reasonSummary: err?.message ?? 'unknown error' });
-    await deps.xClient.postReply(mention.tweetId, replyText);
+    await replySafely(deps, mention.tweetId, replyText, { stage: 'launch_threw' });
     return { kind: 'onchain_failure', detail: err?.message ?? 'unknown error' };
   }
 }

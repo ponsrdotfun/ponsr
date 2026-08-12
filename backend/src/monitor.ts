@@ -33,6 +33,9 @@ export type AlertKind =
   | 'CIRCUIT_BREAKER_TRIPPED'
   | 'FEE_CEILING_EXCEEDED'
   | 'TREASURY_LOW'
+  /** A launch completed but the person who asked for it could not be told. The token exists
+   *  and the fee is spent, so this needs a human to answer them by hand. */
+  | 'REPLY_FAILED'
   /** The mention sweep has failed repeatedly. Nothing else reports this: the process stays
    *  up, /health keeps returning 200, and the bot simply stops hearing anyone. Running out of
    *  twitterapi.io credit looks exactly like this. */
@@ -414,6 +417,33 @@ export class TreasuryMonitor {
 
   /** Called when a launch reaches the chain and fails. Every one of these costs
    *  real gas, so a run of them is both a bug signal and a spend leak. */
+  /**
+   * A reply could not be posted.
+   *
+   * Severity is critical when a launch already succeeded: the token is on-chain, the treasury
+   * paid for it, and the only person who does not know is the one who asked. Nothing in the
+   * system will retry it, so it needs a human. For a rejection the stakes are lower -- nobody
+   * is owed a token -- but it still means someone was ignored.
+   */
+  async onReplyFailed(
+    tweetId: string,
+    detail: string,
+    context: Record<string, unknown> = {},
+    now: Date = new Date()
+  ): Promise<void> {
+    const launched = context.stage === 'launched';
+    await this.notifier.send({
+      kind: 'REPLY_FAILED',
+      severity: launched ? 'critical' : 'warning',
+      message: launched
+        ? 'A token launched but the reply failed, so the person who asked has not been told. ' +
+          'The token exists and the fee is spent. Answer them by hand.'
+        : 'Could not reply to a mention. Nobody was launched anything, but they were left without an answer.',
+      detail: { tweetId, error: detail.slice(0, 300), ...context },
+      at: now.toISOString(),
+    });
+  }
+
   async onLaunchFailed(tweetId: string, detail: string, now: Date = new Date()): Promise<void> {
     await this.notifier.send({
       kind: 'LAUNCH_FAILED',

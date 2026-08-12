@@ -264,3 +264,82 @@ describe('handleMention -- full pipeline integration', () => {
     expect(db.totalSpendLast24h()).toBe(0n);
   });
 });
+
+describe('a failed reply must not rewrite a successful launch', () => {
+  // 2026-08-12, the first real launch through the bot. The reply sat inside the launch's
+  // try/catch, so when X refused the POST the catch marked a confirmed launch `failed` --
+  // beside a real token address and transaction hash -- and then attempted a second reply
+  // through the transport that had just failed.
+  let db: Db;
+  let xClient: MockXClient;
+  let treasurySigner: FakeTreasurySigner;
+  const LIVE_FEE = 500_000_000_000_000n;
+
+  function deps(monitor?: any) {
+    const mention = makeMention();
+    return {
+      mention,
+      d: {
+        db,
+        parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
+        walletResolver: new MockWalletResolver(db),
+        xClient,
+        treasurySigner,
+        provider: {} as any,
+        monitor,
+        getLiveFeeWei: async () => LIVE_FEE,
+        getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
+        getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+      } as any,
+    };
+  }
+
+  beforeEach(() => {
+    db = freshDb();
+    xClient = new MockXClient();
+    treasurySigner = new FakeTreasurySigner();
+    // The transport refuses, exactly as X did.
+    (xClient as any).postReply = async () => {
+      throw new Error('X API 403 posting reply');
+    };
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    db.close();
+    jest.restoreAllMocks();
+  });
+
+  it('still reports the launch as launched', async () => {
+    const { mention, d } = deps();
+    const outcome = await handleMention(mention, d);
+    expect(outcome.kind).toBe('launched');
+  });
+
+  // countLaunchesBetween counts only pending and confirmed rows, so a launch wrongly marked
+  // failed disappears from it -- which is what the bug did.
+  it('leaves the launch recorded as confirmed, not failed', async () => {
+    const { mention, d } = deps();
+    await handleMention(mention, d);
+    const from = new Date(Date.now() - 3600_000).toISOString();
+    const to = new Date(Date.now() + 3600_000).toISOString();
+    expect(db.countLaunchesBetween(from, to)).toBe(1);
+  });
+
+  it('still records the treasury spend, which really did happen', async () => {
+    const { mention, d } = deps();
+    await handleMention(mention, d);
+    expect(db.totalSpendLast24h()).toBe(LIVE_FEE);
+  });
+
+  // The token exists and the fee is spent; the only person who does not know is the one who
+  // asked. Nothing retries it, so it has to reach a human.
+  it('raises a critical REPLY_FAILED alert rather than failing quietly', async () => {
+    const sent: any[] = [];
+    const monitor = { onReplyFailed: async (...a: any[]) => { sent.push(a); } };
+    const { mention, d } = deps(monitor);
+    await handleMention(mention, d);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent).toHaveLength(1);
+    expect(sent[0][2]).toMatchObject({ stage: 'launched' });
+  });
+});
