@@ -1074,7 +1074,16 @@
     graduationWei: 4200000000000000000,
     // Addresses whose launches count as Ponsr's. Append the production treasury
     // here when it exists; an unlisted launcher simply will not appear.
-    launchers: ['0x933045f792ef89c52700fcea64240737d910a97f']
+    // Every address the bot has ever launched from. A launch by an address missing here is
+    // invisible on this board -- the token exists on-chain and the site simply does not show
+    // it. Both bot launches on 2026-08-12 were lost this way until the Turnkey wallet was
+    // added, which is exactly the failure CLAUDE.md warns about for a new treasury.
+    //
+    // Old addresses stay: retiring a wallet must not erase the launches it made.
+    launchers: [
+      '0x933045f792ef89c52700fcea64240737d910a97f', // Phase B, raw key, retired
+      '0x08e01f1b3156a5d8fe42ed47f09df5156e7c74fa'  // Turnkey treasury, production
+    ]
   };
 
   function hexToBig(h) { return BigInt(h && h !== '0x' ? h : '0x0'); }
