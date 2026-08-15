@@ -2502,86 +2502,91 @@
     c.width = W; c.height = H;
     var x = c.getContext('2d');
     var kind = roastKind(wi.received, wi.sold, wi.balance);
-    var hue = kind === 'diamond' ? 148 : (kind === 'moved' ? 38 : 6);
+    var hue = kind === 'diamond' ? 148 : (kind === 'moved' ? 34 : 6);
 
-    // Flat, saturated ground. The old card used a soft gradient that read as a
-    // dashboard; a meme wants one loud colour and high contrast.
-    x.fillStyle = 'hsl(' + hue + ' 55% 22%)';
+    // Layout is a two-column grid with a fixed rhythm rather than hand-placed
+    // offsets. The first attempt put everything at guessed coordinates and the
+    // speech bubble's tail cut straight through the caption underneath it.
+    var PAD = 64;
+    var COL = 620;            // text column width
+    var mascotCx = W - 260;
+    var mascotCy = H / 2 + 20;
+
+    x.fillStyle = 'hsl(' + hue + ' 52% 24%)';
     x.fillRect(0, 0, W, H);
 
-    // Sunburst behind the mascot.
-    var bx = W - 300, by = H / 2;
+    // Sunburst, quieter than before: it sat at 0.20 alpha and fought the words.
     x.save();
-    x.translate(bx, by);
+    x.translate(mascotCx, mascotCy);
     for (var i = 0; i < 24; i++) {
       x.rotate(Math.PI * 2 / 24);
-      x.fillStyle = i % 2 ? 'hsla(' + hue + ', 70%, 55%, 0.20)' : 'hsla(' + hue + ', 70%, 62%, 0.07)';
-      x.beginPath();
-      x.moveTo(0, 0);
-      x.lineTo(1500, -120);
-      x.lineTo(1500, 120);
-      x.closePath();
-      x.fill();
+      x.fillStyle = i % 2 ? 'hsla(' + hue + ', 68%, 56%, 0.11)' : 'hsla(' + hue + ', 68%, 62%, 0.04)';
+      x.beginPath(); x.moveTo(0, 0); x.lineTo(1500, -120); x.lineTo(1500, 120); x.closePath(); x.fill();
     }
     x.restore();
 
-    // Halftone, the comic-print texture that makes flat colour look printed.
-    x.fillStyle = 'rgba(0,0,0,0.16)';
-    for (var gy = 0; gy < H; gy += 18) {
-      for (var gx = 0; gx < W; gx += 18) {
-        var d = Math.hypot(gx - bx, gy - by) / 900;
-        var r = Math.max(0, 3.6 - d * 3.6);
-        if (r > 0.3) { x.beginPath(); x.arc(gx, gy, r, 0, Math.PI * 2); x.fill(); }
+    x.fillStyle = 'rgba(0,0,0,0.13)';
+    for (var gy = 0; gy < H; gy += 20) {
+      for (var gx = 0; gx < W; gx += 20) {
+        var dd = Math.hypot(gx - mascotCx, gy - mascotCy) / 820;
+        var rr = Math.max(0, 3.4 - dd * 3.4);
+        if (rr > 0.3) { x.beginPath(); x.arc(gx, gy, rr, 0, Math.PI * 2); x.fill(); }
       }
     }
 
     var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
-    drawMascot(x, bx + 40, by + 60, 460, mood, kind === 'diamond' ? -7 : 9);
+    drawMascot(x, mascotCx, mascotCy, 430, mood, kind === 'diamond' ? -7 : 9);
 
-    // Speech bubble, so the roast comes OUT of the character rather than sitting
-    // in a corner next to it.
+    // --- speech bubble, top of the column ---
     var roast = pickRandom(ROAST[kind]).toUpperCase();
-    var lines = memeLines(x, roast, 58, 470);
-    var bw = 540, bh = 70 + lines.length * 62, bxx = 60, byy = 90;
-    x.fillStyle = '#ffffff';
-    x.strokeStyle = '#000000';
-    x.lineWidth = 7;
+    var lines = memeLines(x, roast, 52, COL - 76);
+    var bh = 52 + lines.length * 58;
+    var by = PAD;
+    x.fillStyle = '#ffffff'; x.strokeStyle = '#000000'; x.lineWidth = 7;
     x.beginPath();
-    if (x.roundRect) x.roundRect(bxx, byy, bw, bh, 26); else x.rect(bxx, byy, bw, bh);
+    if (x.roundRect) x.roundRect(PAD, by, COL, bh, 26); else x.rect(PAD, by, COL, bh);
     x.fill(); x.stroke();
+    // Tail leaves from the RIGHT edge toward the mascot, so it never crosses the
+    // text that sits below the bubble.
     x.beginPath();
-    x.moveTo(bxx + bw - 90, byy + bh - 8);
-    x.lineTo(bxx + bw + 70, byy + bh + 66);
-    x.lineTo(bxx + bw - 150, byy + bh - 8);
+    x.moveTo(PAD + COL - 6, by + bh * 0.42);
+    x.lineTo(PAD + COL + 92, by + bh * 0.60);
+    x.lineTo(PAD + COL - 6, by + bh * 0.78);
     x.closePath();
-    x.fill(); x.stroke();
+    x.fill();
+    x.beginPath();
+    x.moveTo(PAD + COL - 6, by + bh * 0.42);
+    x.lineTo(PAD + COL + 92, by + bh * 0.60);
+    x.lineTo(PAD + COL - 6, by + bh * 0.78);
+    x.stroke();
 
-    x.fillStyle = '#0b0c0e';
-    x.textAlign = 'left';
+    x.fillStyle = '#0b0c0e'; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
     for (var j = 0; j < lines.length; j++) {
-      x.font = '900 58px Impact, "Arial Black", Haettenschweiler, sans-serif';
-      x.fillText(lines[j], bxx + 34, byy + 74 + j * 62);
+      x.font = '900 52px Impact, "Arial Black", Haettenschweiler, sans-serif';
+      x.fillText(lines[j], PAD + 32, by + 60 + j * 58);
     }
 
-    // The number, in meme caption style rather than dashboard style.
-    var valueY = byy + bh + 150;
-    memeText(x, 'IF YOU NEVER SOLD $' + t.symbol, 60, valueY - 74, 30, 'left');
-    memeText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', 60, valueY, 96, 'left');
+    // --- the number, given room to be the hero ---
+    var y = by + bh + 84;
+    memeText(x, 'IF YOU NEVER SOLD $' + t.symbol, PAD, y, 28, 'left');
+    y += 96;
+    memeText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', PAD, y, 104, 'left');
 
+    // --- stats row, evenly spaced across the column ---
+    y += 78;
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
       ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
       ['STILL HOLD', fmtTokens(Number(wi.balance) / 1e18)]
     ];
-    var sx = 60;
+    var step = COL / 3;
     for (var k = 0; k < stats.length; k++) {
-      memeText(x, stats[k][0], sx, valueY + 56, 22, 'left');
-      memeText(x, stats[k][1], sx, valueY + 96, 34, 'left');
-      sx += 200;
+      memeText(x, stats[k][0], PAD + k * step, y, 21, 'left');
+      memeText(x, stats[k][1], PAD + k * step, y + 40, 36, 'left');
     }
 
-    memeText(x, 'PONSR.FUN', 60, H - 40, 30, 'left');
-    return { canvas: c, kind: kind };
+    memeText(x, 'PONSR.FUN', PAD, H - 40, 28, 'left');
+    return { canvas: c, kind: kind, layout: { bubbleBottom: by + bh, statsBottom: y + 40 } };
   }
 
   function canvasToBlob(canvas) {
