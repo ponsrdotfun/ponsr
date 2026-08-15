@@ -2138,6 +2138,17 @@
      against for good reason -- and it would be a claim about a token nobody vetted.
      --------------------------------------------------------------------------- */
 
+  /* The mascot is the whole point of the card: a share should be recognisable as
+     Ponsr's at a glance, before anyone reads a word of it. Preloaded once, and the
+     card still renders without it if the image fails -- a missing robot is a
+     plainer card, not a broken share. */
+  var mascot = null;
+  (function () {
+    var img = new Image();
+    img.onload = function () { mascot = img; };
+    img.src = '/logo-transparent.png';
+  })();
+
   var SHARE_LINES = [
     'launched by a tweet',
     'it exists now',
@@ -2175,24 +2186,40 @@
     x.fill();
     x.globalAlpha = 1;
 
-    // Ghost monogram, the same letter the board and token page already use.
-    x.globalAlpha = 0.07;
+    // Ghost monogram, well behind everything -- context, not decoration.
+    x.globalAlpha = 0.05;
     x.fillStyle = '#ffffff';
-    x.font = '700 460px Fraunces, Georgia, serif';
+    x.font = '700 420px Fraunces, Georgia, serif';
     x.textAlign = 'right';
     x.textBaseline = 'alphabetic';
-    x.fillText(monogram(t.name), W - 60, H - 40);
+    x.fillText(monogram(t.name), W - 340, H - 70);
     x.globalAlpha = 1;
 
+    // The mascot, large and to the right, tilted a little so it reads as a
+    // character rather than a logo dropped into a corner. The tilt is seeded, so
+    // each token's card is its own without ever being a different card.
+    if (mascot) {
+      var mh = 430;
+      var mw = mh * (mascot.width / mascot.height);
+      x.save();
+      x.translate(W - mw / 2 - 70, H / 2 + 40);
+      x.rotate(((seed % 14) - 7) * Math.PI / 180);
+      x.shadowColor = 'rgba(0,0,0,0.45)';
+      x.shadowBlur = 40;
+      x.shadowOffsetY = 12;
+      x.drawImage(mascot, -mw / 2, -mh / 2, mw, mh);
+      x.restore();
+    }
+
     x.textAlign = 'left';
-    x.fillStyle = 'rgba(255,255,255,0.62)';
-    x.font = '500 22px ui-monospace, SFMono-Regular, Menlo, monospace';
-    x.fillText(SHARE_LINES[seed % SHARE_LINES.length].toUpperCase(), 72, 96);
+    x.fillStyle = 'rgba(255,255,255,0.72)';
+    x.font = '600 26px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText(SHARE_LINES[seed % SHARE_LINES.length].toUpperCase(), 72, 100);
 
     x.fillStyle = '#ffffff';
     var name = t.name.length > 22 ? t.name.slice(0, 21) + '…' : t.name;
-    x.font = '600 92px Fraunces, Georgia, serif';
-    x.fillText(name, 72, 210);
+    x.font = '600 88px Fraunces, Georgia, serif';
+    x.fillText(name, 72, 216);
 
     x.fillStyle = 'rgba(255,255,255,0.78)';
     x.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -2266,42 +2293,67 @@
       return;
     }
 
-    canvasToBlob(canvas).then(function (blob) {
-      var file = blob ? new File([blob], t.symbol.toLowerCase() + '-ponsr.png', { type: 'image/png' }) : null;
+    var composeUrl = 'https://x.com/intent/post?text=' + encodeURIComponent(text) +
+      '&url=' + encodeURIComponent(url);
+    var fileName = t.symbol.toLowerCase() + '-ponsr.png';
+    var blobPromise = canvasToBlob(canvas);
 
-      // Download the card, then open the composer for the person to attach it. X
-      // will not take an image by URL, so this is the only route on a desktop.
-      function downloadAndCompose() {
-        if (blob) {
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = t.symbol.toLowerCase() + '-ponsr.png';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    // Saving the card into a Downloads folder and asking someone to go and find it
+    // is a step too many. The clipboard is the closest a website can get to
+    // attaching it: paste into the composer and post. A page cannot attach media to
+    // X's composer directly -- the intent URL takes text and a link and nothing
+    // else -- and the only real alternative would be posting through the API on the
+    // person's behalf, which means asking every user for write access to their
+    // account for the sake of one image.
+    function downloadAndCompose(blob) {
+      if (blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      }
+      window.open(composeUrl, '_blank', 'noopener');
+      say('Card saved');
+    }
+
+    var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+
+    // Touch first: the share sheet is the natural gesture there and carries the
+    // image itself. Chrome on Windows also reports canShare({files}) as true and
+    // then opens a dialog that fails, which is why this is gated on the pointer.
+    if (touch && navigator.canShare) {
+      blobPromise.then(function (blob) {
+        var file = blob ? new File([blob], fileName, { type: 'image/png' }) : null;
+        if (file && navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file], text: text, url: url }).catch(function (err) {
+            if (!err || err.name !== 'AbortError') downloadAndCompose(blob);
+          });
+        } else {
+          downloadAndCompose(blob);
         }
-        window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) +
-          '&url=' + encodeURIComponent(url), '_blank', 'noopener');
-        say('Card saved');
-      }
+      });
+      return;
+    }
 
-      // The share sheet is only used on touch devices. Chrome on Windows reports
-      // canShare({files}) as true and then opens an OS dialog that fails with
-      // "We couldn't show you all the ways you could share" -- a dead end, because
-      // a rejected share used to be swallowed and nothing happened next.
-      var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-      if (touch && file && navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], text: text, url: url }).catch(function (err) {
-          // AbortError means the person closed the sheet on purpose; anything else
-          // means it failed, and then they still deserve a way to share.
-          if (!err || err.name !== 'AbortError') downloadAndCompose();
-        });
+    // The ClipboardItem is constructed with the PROMISE, not an awaited blob.
+    // Waiting first would spend the click's transient activation and the write
+    // would be refused.
+    if (navigator.clipboard && window.ClipboardItem && navigator.clipboard.write) {
+      try {
+        navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blobPromise })])
+          .then(function () {
+            window.open(composeUrl, '_blank', 'noopener');
+            say('Copied — paste it');
+          })
+          .catch(function () { blobPromise.then(downloadAndCompose); });
         return;
-      }
+      } catch (e) { /* older ClipboardItem cannot take a promise */ }
+    }
 
-      downloadAndCompose();
-    });
+    blobPromise.then(downloadAndCompose);
   });
 
   // ============================================================
