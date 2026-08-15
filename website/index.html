@@ -613,6 +613,7 @@
     background-blend-mode: overlay, normal;
     box-shadow: var(--lift-3); }
   .tp-whatif-lead { color: var(--mute); font-size: 15px; line-height: 1.65; max-width: 62ch; }
+  .tp-whatif-foot { color: var(--mute); font-size: 12.5px; line-height: 1.6; margin: 14px 0 0; max-width: 62ch; }
   .tp-locked { display: flex; align-items: center; gap: 16px; margin-top: 24px; flex-wrap: wrap; }
   .tp-demo-note { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
   .tp-figures { margin-top: 26px; animation: tpIn 0.45s var(--ease-expo-out) both; }
@@ -1000,19 +1001,21 @@
 
       <div class="tp-locked" id="tp-locked">
         <button class="btn btn-primary" id="tp-connect"><span>Connect wallet</span></button>
-        <span class="tp-demo-note">Not built yet — needs the per-wallet trade indexer.</span>
+        <span class="tp-demo-note" id="tp-wallet-note">Read-only. Nothing is signed and no transaction is sent.</span>
       </div>
 
       <div class="tp-figures" id="tp-figures" hidden>
         <div class="tp-figure">
-          <div class="tp-k">Value today, had you held everything</div>
-          <div class="tp-figure-v" id="tp-neversold">$0</div>
+          <div class="tp-k">Value today, had you kept everything</div>
+          <div class="tp-figure-v" id="tp-neversold">—</div>
         </div>
         <div class="statement-rows">
-          <div class="statement-row"><span class="label">Tokens ever bought</span><span class="value" id="tp-bought">—</span></div>
+          <div class="statement-row"><span class="label">Tokens ever received</span><span class="value" id="tp-bought">—</span></div>
           <div class="statement-row"><span class="label">What you actually have now</span><span class="value" id="tp-actual">—</span></div>
-          <div class="statement-row"><span class="label">Difference</span><span class="value" id="tp-delta">—</span></div>
+          <div class="statement-row"><span class="label">Left your wallet</span><span class="value" id="tp-delta">—</span></div>
+          <div class="statement-row"><span class="label">Value of what you still hold</span><span class="value" id="tp-heldvalue">—</span></div>
         </div>
+        <p class="tp-whatif-foot" id="tp-whatif-foot"></p>
       </div>
     </div>
   </div>
@@ -1914,19 +1917,144 @@
 
   document.getElementById('tp-back').addEventListener('click', function (e) { e.preventDefault(); goToExplore(); });
 
+  /* ---------------------------------------------------------------------------
+     What-if: what this wallet would hold today if nothing had ever left it.
+
+     This panel said "needs the per-wallet trade indexer" for months. That is true
+     of a general answer across every token, and wrong for the question the page
+     actually asks, which is about ONE token and ONE wallet. Both sides come
+     straight from the chain: ERC20 Transfer logs filtered on the wallet, and the
+     pool's slot0 for the current price.
+
+     Transfers, not pool Swap events. Swap carries a `recipient`, but on the first
+     PONSR pool the router is the recipient in 23 of 42 swaps -- counting swaps by
+     recipient silently misses every trade routed through it. Transfers cannot
+     miss: received minus sent equals the balance by definition, and that identity
+     is asserted below before any figure is shown.
+
+     Denominated in ETH. There is no price oracle on this chain, so a dollar figure
+     would be invented -- the same reason the board hides USD everywhere else.
+     --------------------------------------------------------------------------- */
+
+  var ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+  function topicAddr(a) { return '0x' + '0'.repeat(24) + a.replace(/^0x/, '').toLowerCase(); }
+
+  function sumLogValues(logs) {
+    var total = 0n;
+    for (var i = 0; i < logs.length; i++) total += BigInt(logs[i].data);
+    return total;
+  }
+
+  /** One token's current price in ETH, from the pool's slot0. Null if unreadable. */
+  function poolPriceEth(pool, tokenAddress) {
+    return Promise.all([
+      rpcCall('eth_call', [{ to: pool, data: '0x0dfe1681' }, 'latest']),
+      rpcCall('eth_call', [{ to: pool, data: '0x3850c7bd' }, 'latest'])
+    ]).then(function (r) {
+      var token0 = '0x' + String(r[0]).slice(-40);
+      var sqrtP = BigInt(word(r[1], 0));
+      if (sqrtP === 0n) return null;
+      var Q96 = 2n ** 96n;
+      // (sqrtPriceX96 / 2^96)^2 is token1 per token0. Both sides are 18 decimals
+      // here, so no decimal adjustment applies. Squared as integers first, so the
+      // ratio stays exact until the single float division at the end.
+      var price1per0 = Number(sqrtP * sqrtP) / Number(Q96 * Q96);
+      if (!isFinite(price1per0) || price1per0 <= 0) return null;
+      return token0.toLowerCase() === tokenAddress.toLowerCase() ? price1per0 : 1 / price1per0;
+    }).catch(function () { return null; });
+  }
+
+  function fmtTokens(v) {
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(2) + 'K';
+    return v.toFixed(2);
+  }
+
+  function setWalletNote(msg) {
+    var note = document.getElementById('tp-wallet-note');
+    if (note) note.textContent = msg;
+  }
+
   document.getElementById('tp-connect').addEventListener('click', function () {
     var t = currentToken;
     if (!t) return;
-    // This used to reveal a full set of figures generated for the preview
-    // dataset, presented as "what your position would be worth" for a wallet
-    // that was never connected. The calculation needs per-wallet trade history
-    // from an indexer (Part 3 §9 / Phase 6), and until that exists the honest
-    // answer is that there is nothing to show.
-    var note = document.querySelector('.tp-demo-note');
-    if (note) {
-      note.textContent = 'Not available yet — this needs the per-wallet trade indexer, which is not built.';
-      note.classList.add('tp-demo-note-strong');
+    var btn = this;
+    var label = btn.querySelector('span');
+
+    function unlock(msg) {
+      setWalletNote(msg);
+      label.textContent = 'Connect wallet';
+      btn.disabled = false;
     }
+
+    if (!window.ethereum) {
+      setWalletNote('No wallet found in this browser. Open ponsr.fun inside a wallet app, or install a browser wallet.');
+      return;
+    }
+
+    label.textContent = 'Connecting…';
+    btn.disabled = true;
+
+    window.ethereum.request({ method: 'eth_requestAccounts' }).then(function (accounts) {
+      var wallet = accounts && accounts[0];
+      if (!wallet) throw new Error('no account returned');
+      label.textContent = 'Reading the chain…';
+
+      return Promise.all([
+        rpcCall('eth_getLogs', [{ address: t.address, fromBlock: '0x0', toBlock: 'latest',
+          topics: [ERC20_TRANSFER_TOPIC, null, topicAddr(wallet)] }]),
+        rpcCall('eth_getLogs', [{ address: t.address, fromBlock: '0x0', toBlock: 'latest',
+          topics: [ERC20_TRANSFER_TOPIC, topicAddr(wallet), null] }]),
+        erc20BalanceOf(t.address, wallet),
+        t.pool ? poolPriceEth(t.pool, t.address) : Promise.resolve(null)
+      ]).then(function (r) {
+        var received = sumLogValues(r[0]);
+        var sent = sumLogValues(r[1]);
+        var balance = r[2];
+        var priceEth = r[3];
+
+        if (received === 0n) {
+          unlock('This wallet has never held ' + t.symbol + ', so there is nothing to show.');
+          return;
+        }
+
+        // The identity that makes these figures trustworthy. If it fails, something
+        // was missed -- and a wrong number here is a claim about someone's money,
+        // so it is refused rather than displayed.
+        if (received - sent !== balance) {
+          unlock('This wallet’s history did not reconcile against its balance, so no figure is shown rather than one that might be wrong.');
+          return;
+        }
+
+        var receivedF = Number(received) / 1e18;
+        var balanceF = Number(balance) / 1e18;
+        var leftF = Number(sent) / 1e18;
+
+        document.getElementById('tp-bought').textContent = fmtTokens(receivedF) + ' ' + t.symbol;
+        document.getElementById('tp-actual').textContent = fmtTokens(balanceF) + ' ' + t.symbol;
+        document.getElementById('tp-delta').textContent = fmtTokens(leftF) + ' ' + t.symbol;
+
+        if (priceEth) {
+          document.getElementById('tp-neversold').textContent = fmtEth(receivedF * priceEth);
+          document.getElementById('tp-heldvalue').textContent = fmtEth(balanceF * priceEth);
+        } else {
+          document.getElementById('tp-neversold').textContent = '—';
+          document.getElementById('tp-heldvalue').textContent = '—';
+        }
+
+        document.getElementById('tp-whatif-foot').textContent =
+          'Valued at the pool price right now, in ETH — this chain has no price oracle, so no dollar figure is shown. ' +
+          'Tokens that arrived by transfer count the same as tokens bought: this is what the wallet received, not what it paid.';
+
+        document.getElementById('tp-locked').hidden = true;
+        document.getElementById('tp-figures').hidden = false;
+      });
+    }).catch(function (err) {
+      unlock(err && err.code === 4001
+        ? 'Connection refused in the wallet.'
+        : 'Could not read this wallet: ' + ((err && err.message) || 'unknown error'));
+    });
   });
 
   document.getElementById('tp-share').addEventListener('click', function () {

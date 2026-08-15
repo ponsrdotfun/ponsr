@@ -169,9 +169,19 @@ async function run() {
   // The indexer that would make it real is not built.
   checks.push(['connecting does NOT reveal invented what-if figures',
     doc.getElementById('tp-figures').hidden === true, String(doc.getElementById('tp-figures').hidden)]);
-  checks.push(['connecting says plainly that the feature is not built',
-    /not (available|built)/i.test(doc.querySelector('.tp-demo-note').textContent),
-    doc.querySelector('.tp-demo-note').textContent]);
+  // The feature is built now (it reads ERC20 Transfer logs and the pool price), so
+  // the old check that it announced itself as unbuilt has gone. What replaces it is
+  // the property that still matters in an environment with no wallet: say why
+  // nothing appeared, rather than showing figures or failing silently.
+  checks.push(['with no wallet available, connecting explains why instead of showing figures',
+    /wallet/i.test(doc.getElementById('tp-wallet-note').textContent),
+    doc.getElementById('tp-wallet-note').textContent]);
+
+  // No dollar figure anywhere in this panel. There is no price oracle on this chain,
+  // so a USD number could only be invented -- the mistake this panel already made once.
+  checks.push(['what-if panel quotes no dollar figure',
+    doc.getElementById('tp-whatif').textContent.indexOf('$') === -1,
+    'no $ in panel']);
 
   // Back returns to the explore board (where you came from), not the landing page.
   doc.getElementById('tp-back').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
