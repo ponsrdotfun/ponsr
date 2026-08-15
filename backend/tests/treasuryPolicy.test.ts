@@ -200,11 +200,17 @@ describe('operator instructions', () => {
     expect(describeTopUp(a, { hot: HOT, cold: null })).toContain('TREASURY_COLD_ADDRESS');
   });
 
-  it('a sweep message names the destination and the excess', () => {
+  // This used to assert the message named the cold wallet as a destination. It was
+  // asserting an impossible instruction: the Turnkey policy permits the pons factory
+  // and contract creation and refuses every other destination, so nothing can be
+  // transferred out of the hot wallet at all. Someone would have found that out
+  // while following the alert during an incident.
+  it('an over-funded message states the excess and does not tell anyone to move it', () => {
     const a = assessHotWallet(DAILY_CAP * 3n, FEE, POLICY);
     const msg = describeSweep(a, { hot: HOT, cold: COLD });
-    expect(msg).toContain(COLD);
     expect(msg).toContain(formatEth(a.sweepWei));
+    expect(msg).toMatch(/cannot be swept/i);
+    expect(msg).not.toContain(COLD);
   });
 });
 

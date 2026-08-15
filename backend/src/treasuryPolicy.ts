@@ -189,15 +189,34 @@ export function describeTopUp(
 }
 
 /** Operator-facing instruction for the opposite problem. */
+/**
+ * What to do about an overfunded hot wallet -- which is NOT "sweep it to cold".
+ *
+ * The Turnkey policy that guards this wallet permits transactions to the pons
+ * factory and contract creation, and refuses every other destination. That is what
+ * makes a leaked signing key cost launches rather than the treasury -- and it
+ * applies just as firmly to a transfer out to cold storage. Funds in the hot wallet
+ * can only leave as launch fees.
+ *
+ * So the hot wallet is a one-way valve, and cold storage is its SOURCE, not its
+ * drain. Overfunding is corrected by not topping up again until the balance falls,
+ * never by moving money back.
+ *
+ * This function used to instruct the operator to move the excess to cold. That was
+ * impossible under the policy the same project had deliberately installed, and it
+ * would have been discovered by someone trying to follow it during an incident.
+ */
 export function describeSweep(
   assessment: HotWalletAssessment,
   addresses: { hot: string; cold?: string | null }
 ): string {
-  const to = addresses.cold && addresses.cold.length > 0 ? addresses.cold : '(cold wallet -- TREASURY_COLD_ADDRESS is not set)';
   return (
-    `Move ${formatEth(assessment.sweepWei)} ETH from the hot wallet ${addresses.hot} to ${to}. ` +
-    `The circuit breaker caps spend at ${formatEth(assessment.ceilingWei)} ETH across the ceiling window, ` +
-    'so the excess cannot be spent by the bot -- it is exposure with no operational benefit.'
+    `The hot wallet ${addresses.hot} holds ${formatEth(assessment.balanceWei)} ETH, about ` +
+    `${formatEth(assessment.sweepWei)} ETH more than the circuit breaker can ever spend ` +
+    `(ceiling ${formatEth(assessment.ceilingWei)} ETH). ` +
+    'This cannot be swept: the Turnkey policy allows only the pons factory and contract ' +
+    'creation, so nothing can be transferred out. Stop topping this wallet up and let the ' +
+    'balance fall, and keep the reserve in cold storage rather than sending it here.'
   );
 }
 

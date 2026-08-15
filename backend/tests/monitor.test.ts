@@ -236,7 +236,10 @@ describe('TreasuryMonitor -- hot/cold treasury split (Part 5 mitigation #7)', ()
     // excess no matter what happens. An attacker can still take all of it.
     await makeMonitor().checkTreasuryBalance(DAILY_CAP * 3n, FEE);
     expect(notifier.kinds()).toEqual(['TREASURY_OVERFUNDED']);
-    expect(notifier.sent[0].message).toContain(COLD);
+    // Deliberately NOT the cold address. The Turnkey policy permits the pons factory
+    // and contract creation and refuses every other destination, so the balance cannot
+    // be moved there -- naming it would send the operator after an impossible action.
+    expect(notifier.sent[0].message).toMatch(/cannot be swept/i);
   });
 
   it('alerts on state changes, not on every reading', async () => {

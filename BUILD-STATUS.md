@@ -16,9 +16,15 @@
 > live service; the backend runs on Fly.io.
 >
 > What remains is not code. The Turnkey **root** key is still a plaintext file on the
-> operator's machine, the treasury is **100% in the hot wallet** with nothing in cold, the X
-> account carries no "Automated" label, and Part 4's legal review has not happened. See
-> `docs/action-checklist.md`.
+> operator's machine, the X account carries no "Automated" label, and Part 4's legal review
+> has not happened. See `docs/action-checklist.md`.
+>
+> **On the treasury:** everything sits in the hot wallet, and it cannot be moved out. The
+> Turnkey policy permits the pons factory and contract creation and refuses every other
+> destination — which is what makes a leaked signing key cost launches rather than the
+> treasury, and applies equally to a transfer to cold storage. The hot wallet is a one-way
+> valve; cold storage is its **source**, not its drain. Fund it in small amounts, and keep the
+> reserve in cold rather than sending it here.
 
 Read this before anything else. Every component below is marked exactly as it stands — real
 and tested, or a clearly-marked stub. Nothing here is overstated.
