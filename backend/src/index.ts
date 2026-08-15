@@ -16,6 +16,7 @@ import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
+import { buildStatus, statusHttpCode } from './statusReport';
 
 const app = express();
 app.use(express.json());
@@ -166,9 +167,57 @@ app.post('/webhook/mention', async (req, res) => {
   }
 });
 
+/**
+ * Deliberately shallow, and it must stay that way.
+ *
+ * This is Fly's health check, and Fly restarts the machine when it fails. A
+ * restart fixes a crashed process; it does nothing about an RPC outage, an
+ * exhausted parser balance or a launchpad pons has switched off, so checking
+ * those here would convert somebody else's downtime into a crash loop of ours.
+ * `/status` is where the real state is reported.
+ */
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', env: config.NODE_ENV });
 });
+
+/**
+ * The real state, for a person or an uptime monitor that cannot restart anything.
+ *
+ * Unauthenticated on purpose: everything below is already public on chain, and
+ * the only way to authenticate a URL somebody opens in a browser is to put a
+ * secret in a query string, which writes it into every proxy log in between.
+ */
+app.get('/status', async (_req, res) => {
+  try {
+    const report = await buildStatus({
+      expectedChainId: config.CHAIN_ID,
+      getChainId: async () => Number((await provider.getNetwork()).chainId),
+      getBlockNumber: () => provider.getBlockNumber(),
+      getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
+      getLiveFeeWei: deps.getLiveFeeWei,
+      getLaunchReadiness: deps.getLaunchReadiness,
+      // The same window the circuit breaker counts, so the page cannot disagree
+      // with the thing actually refusing launches.
+      spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
+      dailyCapWei: config.DAILY_SPEND_CAP_WEI,
+      launchesToday: () => db.countLaunchesBetween(startOfUtcDay(), new Date().toISOString()),
+      coldAddressSet: !!config.TREASURY_COLD_ADDRESS,
+      parserRoute: config.ANTHROPIC_API_KEY ? 'Anthropic (direct)' : 'OpenRouter',
+      alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
+      crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
+    });
+    res.status(statusHttpCode(report)).json(report);
+  } catch (err) {
+    // buildStatus is written not to throw; if it does, saying so beats a 500 with
+    // no body, which is indistinguishable from the process being gone.
+    res.status(503).json({ state: 'down', error: String((err as Error)?.message ?? err) });
+  }
+});
+
+function startOfUtcDay(): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+}
 
 /**
  * Part 7 §5. The webhook above is the primary path; this is the safety net for
