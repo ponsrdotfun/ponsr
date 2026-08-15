@@ -2269,25 +2269,38 @@
     canvasToBlob(canvas).then(function (blob) {
       var file = blob ? new File([blob], t.symbol.toLowerCase() + '-ponsr.png', { type: 'image/png' }) : null;
 
-      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], text: text, url: url }).catch(function () {});
+      // Download the card, then open the composer for the person to attach it. X
+      // will not take an image by URL, so this is the only route on a desktop.
+      function downloadAndCompose() {
+        if (blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = t.symbol.toLowerCase() + '-ponsr.png';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+        }
+        window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) +
+          '&url=' + encodeURIComponent(url), '_blank', 'noopener');
+        say('Card saved');
+      }
+
+      // The share sheet is only used on touch devices. Chrome on Windows reports
+      // canShare({files}) as true and then opens an OS dialog that fails with
+      // "We couldn't show you all the ways you could share" -- a dead end, because
+      // a rejected share used to be swallowed and nothing happened next.
+      var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      if (touch && file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], text: text, url: url }).catch(function (err) {
+          // AbortError means the person closed the sheet on purpose; anything else
+          // means it failed, and then they still deserve a way to share.
+          if (!err || err.name !== 'AbortError') downloadAndCompose();
+        });
         return;
       }
 
-      // Desktop: hand over the image and open the composer. X does not accept an
-      // image by URL, so the picture has to be attached by the person sharing.
-      if (blob) {
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = t.symbol.toLowerCase() + '-ponsr.png';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-      }
-      window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) +
-        '&url=' + encodeURIComponent(url), '_blank', 'noopener');
-      say('Card saved');
+      downloadAndCompose();
     });
   });
 
