@@ -2183,6 +2183,15 @@
      Ponsr's at a glance, before anyone reads a word of it. Preloaded once, and the
      card still renders without it if the image fails -- a missing robot is a
      plainer card, not a broken share. */
+  /* Canvas draws with whatever is loaded at that moment -- a webfont that has not
+     been fetched falls back silently, and the card ends up in Georgia while the
+     site is in Fraunces. Warming them at startup avoids that. */
+  if (document.fonts && document.fonts.load) {
+    document.fonts.load('600 96px Fraunces');
+    document.fonts.load('500 60px Fraunces');
+    document.fonts.load('500 24px "JetBrains Mono"');
+  }
+
   var mascot = null;      // full art, eyes included
   var mascotBase = null;  // eyes erased, so expressions can be drawn on
   (function () {
@@ -2467,25 +2476,45 @@
    * stable per token; this one is about a person's own history and changes every
    * time, because the joke is the point. Only chain-derived figures appear on it.
    */
-  /** Bold text with a heavy outline -- the meme caption look, and the only reason
-   *  words stay readable over a busy background. */
-  function memeText(x, text, cx, y, size, align) {
-    x.font = '900 ' + size + 'px Impact, "Arial Black", Haettenschweiler, sans-serif';
-    x.textAlign = align || 'center';
+  /**
+   * Card typography.
+   *
+   * The first version used Impact with a thick black stroke -- the 2010 image-macro
+   * look. It reads as cheap, and it fought every background it sat on. This uses the
+   * site's own faces (Fraunces for display, JetBrains Mono for labels) and buys
+   * legibility with a soft shadow instead of an outline, which is the difference
+   * between a caption and a sticker.
+   */
+  function cardText(x, text, cx, y, opts) {
+    var o = opts || {};
+    x.font = (o.weight || 600) + ' ' + o.size + 'px ' + (o.mono ? '"JetBrains Mono", ui-monospace, monospace' : 'Fraunces, Georgia, serif');
+    x.textAlign = o.align || 'left';
     x.textBaseline = 'alphabetic';
-    x.lineJoin = 'round';
-    x.miterLimit = 2;
-    x.strokeStyle = '#000000';
-    x.lineWidth = Math.max(4, size * 0.14);
-    x.strokeText(text, cx, y);
-    x.fillStyle = '#ffffff';
-    x.fillText(text, cx, y);
+    if (o.track) {
+      // Canvas has no letter-spacing, so tracked labels are drawn glyph by glyph.
+      var cursor = cx;
+      for (var i = 0; i < text.length; i++) {
+        drawWithShadow(x, text[i], cursor, y, o);
+        cursor += x.measureText(text[i]).width + o.track;
+      }
+      return;
+    }
+    drawWithShadow(x, text, cx, y, o);
   }
 
-  /** Wraps to a width using the meme font, so long roasts stack instead of running
-   *  off the card. */
-  function memeLines(x, text, size, maxWidth) {
-    x.font = '900 ' + size + 'px Impact, "Arial Black", Haettenschweiler, sans-serif';
+  function drawWithShadow(x, text, cx, y, o) {
+    x.save();
+    x.shadowColor = 'rgba(0,0,0,' + (o.shadow == null ? 0.45 : o.shadow) + ')';
+    x.shadowBlur = o.blur == null ? 18 : o.blur;
+    x.shadowOffsetY = o.offsetY == null ? 3 : o.offsetY;
+    x.fillStyle = o.color || '#ffffff';
+    x.fillText(text, cx, y);
+    x.restore();
+  }
+
+  /** Wraps to a width in the display face. */
+  function cardLines(x, text, size, maxWidth, weight) {
+    x.font = (weight || 600) + ' ' + size + 'px Fraunces, Georgia, serif';
     var words = text.split(' '), line = '', out = [];
     for (var i = 0; i < words.length; i++) {
       var trial = line ? line + ' ' + words[i] : words[i];
@@ -2504,76 +2533,49 @@
     var kind = roastKind(wi.received, wi.sold, wi.balance);
     var hue = kind === 'diamond' ? 148 : (kind === 'moved' ? 34 : 6);
 
-    // Layout is a two-column grid with a fixed rhythm rather than hand-placed
-    // offsets. The first attempt put everything at guessed coordinates and the
-    // speech bubble's tail cut straight through the caption underneath it.
-    var PAD = 64;
-    var COL = 620;            // text column width
-    var mascotCx = W - 260;
-    var mascotCy = H / 2 + 20;
+    var PAD = 72;
+    var COL = 640;
+    var mascotCx = W - 250;
+    var mascotCy = H / 2 + 10;
 
-    x.fillStyle = 'hsl(' + hue + ' 52% 24%)';
+    // Deep, low-saturation ground with a single soft light behind the character,
+    // rather than a flat slab with rays over it. The sunburst and halftone are
+    // gone: they were the loudest thing on a card whose loudest thing should be
+    // one sentence.
+    var g = x.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, 'hsl(' + hue + ' 46% 17%)');
+    g.addColorStop(1, 'hsl(' + hue + ' 42% 8%)');
+    x.fillStyle = g;
     x.fillRect(0, 0, W, H);
 
-    // Sunburst, quieter than before: it sat at 0.20 alpha and fought the words.
-    x.save();
-    x.translate(mascotCx, mascotCy);
-    for (var i = 0; i < 24; i++) {
-      x.rotate(Math.PI * 2 / 24);
-      x.fillStyle = i % 2 ? 'hsla(' + hue + ', 68%, 56%, 0.11)' : 'hsla(' + hue + ', 68%, 62%, 0.04)';
-      x.beginPath(); x.moveTo(0, 0); x.lineTo(1500, -120); x.lineTo(1500, 120); x.closePath(); x.fill();
-    }
-    x.restore();
-
-    x.fillStyle = 'rgba(0,0,0,0.13)';
-    for (var gy = 0; gy < H; gy += 20) {
-      for (var gx = 0; gx < W; gx += 20) {
-        var dd = Math.hypot(gx - mascotCx, gy - mascotCy) / 820;
-        var rr = Math.max(0, 3.4 - dd * 3.4);
-        if (rr > 0.3) { x.beginPath(); x.arc(gx, gy, rr, 0, Math.PI * 2); x.fill(); }
-      }
-    }
+    var glow = x.createRadialGradient(mascotCx, mascotCy, 40, mascotCx, mascotCy, 520);
+    glow.addColorStop(0, 'hsla(' + hue + ', 70%, 60%, 0.30)');
+    glow.addColorStop(1, 'hsla(' + hue + ', 70%, 60%, 0)');
+    x.fillStyle = glow;
+    x.fillRect(0, 0, W, H);
 
     var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
-    drawMascot(x, mascotCx, mascotCy, 430, mood, kind === 'diamond' ? -7 : 9);
+    drawMascot(x, mascotCx, mascotCy, 440, mood, kind === 'diamond' ? -6 : 7);
 
-    // --- speech bubble, top of the column ---
-    var roast = pickRandom(ROAST[kind]).toUpperCase();
-    var lines = memeLines(x, roast, 52, COL - 76);
-    var bh = 52 + lines.length * 58;
-    var by = PAD;
-    x.fillStyle = '#ffffff'; x.strokeStyle = '#000000'; x.lineWidth = 7;
-    x.beginPath();
-    if (x.roundRect) x.roundRect(PAD, by, COL, bh, 26); else x.rect(PAD, by, COL, bh);
-    x.fill(); x.stroke();
-    // Tail leaves from the RIGHT edge toward the mascot, so it never crosses the
-    // text that sits below the bubble.
-    x.beginPath();
-    x.moveTo(PAD + COL - 6, by + bh * 0.42);
-    x.lineTo(PAD + COL + 92, by + bh * 0.60);
-    x.lineTo(PAD + COL - 6, by + bh * 0.78);
-    x.closePath();
-    x.fill();
-    x.beginPath();
-    x.moveTo(PAD + COL - 6, by + bh * 0.42);
-    x.lineTo(PAD + COL + 92, by + bh * 0.60);
-    x.lineTo(PAD + COL - 6, by + bh * 0.78);
-    x.stroke();
-
-    x.fillStyle = '#0b0c0e'; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+    // The roast, set as a line of display type rather than shouted in a bubble.
+    var roast = pickRandom(ROAST[kind]);
+    var lines = cardLines(x, roast, 62, COL, 600);
+    var y = PAD + 96;
     for (var j = 0; j < lines.length; j++) {
-      x.font = '900 52px Impact, "Arial Black", Haettenschweiler, sans-serif';
-      x.fillText(lines[j], PAD + 32, by + 60 + j * 58);
+      cardText(x, lines[j], PAD, y + j * 74, { size: 62, weight: 600, blur: 22, shadow: 0.5 });
     }
+    y += lines.length * 74 + 54;
 
-    // --- the number, given room to be the hero ---
-    var y = by + bh + 84;
-    memeText(x, 'IF YOU NEVER SOLD $' + t.symbol, PAD, y, 28, 'left');
-    y += 96;
-    memeText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', PAD, y, 104, 'left');
+    cardText(x, 'IF YOU NEVER SOLD $' + t.symbol, PAD, y, {
+      size: 17, weight: 500, mono: true, track: 2.4, color: 'rgba(255,255,255,0.62)', blur: 8, shadow: 0.35
+    });
 
-    // --- stats row, evenly spaced across the column ---
-    y += 78;
+    y += 92;
+    cardText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', PAD, y, {
+      size: 92, weight: 600, blur: 26, shadow: 0.5
+    });
+
+    y += 76;
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
       ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
@@ -2581,12 +2583,21 @@
     ];
     var step = COL / 3;
     for (var k = 0; k < stats.length; k++) {
-      memeText(x, stats[k][0], PAD + k * step, y, 21, 'left');
-      memeText(x, stats[k][1], PAD + k * step, y + 40, 36, 'left');
+      cardText(x, stats[k][0], PAD + k * step, y, {
+        size: 13, weight: 500, mono: true, track: 1.8, color: 'rgba(255,255,255,0.50)', blur: 6, shadow: 0.3
+      });
+      cardText(x, stats[k][1], PAD + k * step, y + 40, { size: 34, weight: 500, blur: 14, shadow: 0.4 });
     }
 
-    memeText(x, 'PONSR.FUN', PAD, H - 40, 28, 'left');
-    return { canvas: c, kind: kind, layout: { bubbleBottom: by + bh, statsBottom: y + 40 } };
+    // Hairline above the wordmark, the same device the site uses in its footer.
+    x.fillStyle = 'rgba(255,255,255,0.22)';
+    x.fillRect(PAD, H - 96, 40, 1);
+    cardText(x, 'Ponsr', PAD, H - 52, { size: 30, weight: 600, blur: 12, shadow: 0.4 });
+    cardText(x, 'ponsr.fun', PAD + 104, H - 53, {
+      size: 17, weight: 500, mono: true, color: 'rgba(255,255,255,0.55)', blur: 6, shadow: 0.3
+    });
+
+    return { canvas: c, kind: kind, layout: { statsBottom: y + 40 } };
   }
 
   function canvasToBlob(canvas) {
