@@ -459,6 +459,17 @@ async function run() {
   const fx = doc.querySelector('.footer-x');
   checks.push(['footer links to the @ponsrdotfun X account',
     !!(fx && /x\.com\/ponsrdotfun/.test(fx.getAttribute('href') || ''))]);
+  // Every asset path must be absolute. On /token/0x… a relative src resolves to
+  // /token/logo.png, which the SPA rewrite answers with index.html at status 200 --
+  // so the browser is handed HTML where it expected an image and simply shows a
+  // broken one. No 404, no console error, nothing to notice. That is exactly how
+  // the header logo broke on every token page.
+  const relAssets = Array.from(doc.querySelectorAll('img[src], link[rel*="icon"][href]'))
+    .map((el) => el.getAttribute('src') || el.getAttribute('href'))
+    .filter((v) => v && !/^(https?:)?\/\//.test(v) && v[0] !== '/' && !v.startsWith('data:'));
+  checks.push(['every asset path is absolute, so deep routes do not break them',
+    relAssets.length === 0, relAssets.join(', ') || 'all absolute']);
+
   // Part 4 asks for the disclaimer to be live on a public surface, not filed in the repo.
   // A page nothing links to is filed in the repo.
   const termsLink = doc.querySelector('footer a[href="/terms"], footer a[href$="terms.html"]');
