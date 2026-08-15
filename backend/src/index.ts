@@ -315,7 +315,14 @@ const launchpadWatch = startLaunchpadWatch(
   15
 );
 
+// Checked at boot as well as on the timer. The alternative is a fifteen-minute
+// blind spot after every deploy, and the state at boot is the one an operator is
+// most likely to be asking about -- they just deployed. The cost is that a deploy
+// while the launchpad is closed re-alerts, since the process starts with no memory
+// of having said it. Deploys are rare and the condition is critical; a duplicate
+// is the right side to err on.
 const server = app.listen(config.PORT, () => {
+  void launchpadWatch.check();
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log(`Mention sweep every ${config.MENTION_POLL_SECONDS}s. Treasury balance watch every 15 minutes.`);
   console.log(
