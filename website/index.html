@@ -2057,18 +2057,176 @@
     });
   });
 
+  /* ---------------------------------------------------------------------------
+     Share card.
+
+     A launch is a thing that happened, so the card carries only what the chain
+     says: name, symbol, liquidity in ETH, holders, and whether it has graduated.
+     No price, no percentage, no dollar figure -- none of that is knowable here,
+     and a share card is exactly where an invented number would travel furthest.
+
+     The art is seeded from the contract ADDRESS, not from a random number and not
+     from the symbol. Random would give the same token a different face every time
+     it was shared, which makes it unrecognisable; the symbol is not unique, so two
+     different tokens called PONSR would otherwise be issued the same card.
+
+     The caption line is drawn from a fixed set, also seeded, so it is stable per
+     token. They are deliberately dry. "100x incoming" on a card carrying the Ponsr
+     watermark is promotional framing attached to the brand, which Part 4 warns
+     against for good reason -- and it would be a claim about a token nobody vetted.
+     --------------------------------------------------------------------------- */
+
+  var SHARE_LINES = [
+    'launched by a tweet',
+    'it exists now',
+    'someone typed this into X',
+    'permanent, for better or worse',
+    'the chain remembers',
+    'on the record'
+  ];
+
+  function seedFrom(str) {
+    var seed = 0;
+    for (var i = 0; i < str.length; i++) seed = (seed * 31 + str.charCodeAt(i)) >>> 0;
+    return seed;
+  }
+
+  function buildShareCard(t) {
+    var W = 1200, H = 675;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var x = c.getContext('2d');
+    var seed = seedFrom((t.address || t.symbol).toLowerCase());
+    var hue = seed % 360;
+    var hue2 = (hue + 40 + (seed % 60)) % 360;
+
+    var g = x.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, 'hsl(' + hue + ' 42% 20%)');
+    g.addColorStop(1, 'hsl(' + hue2 + ' 38% 7%)');
+    x.fillStyle = g;
+    x.fillRect(0, 0, W, H);
+
+    x.globalAlpha = 0.16;
+    x.fillStyle = 'hsl(' + hue + ' 60% 62%)';
+    x.beginPath();
+    x.arc(180 + (seed % 700), 120 + (seed % 380), 150 + (seed % 190), 0, Math.PI * 2);
+    x.fill();
+    x.globalAlpha = 1;
+
+    // Ghost monogram, the same letter the board and token page already use.
+    x.globalAlpha = 0.07;
+    x.fillStyle = '#ffffff';
+    x.font = '700 460px Fraunces, Georgia, serif';
+    x.textAlign = 'right';
+    x.textBaseline = 'alphabetic';
+    x.fillText(monogram(t.name), W - 60, H - 40);
+    x.globalAlpha = 1;
+
+    x.textAlign = 'left';
+    x.fillStyle = 'rgba(255,255,255,0.62)';
+    x.font = '500 22px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText(SHARE_LINES[seed % SHARE_LINES.length].toUpperCase(), 72, 96);
+
+    x.fillStyle = '#ffffff';
+    var name = t.name.length > 22 ? t.name.slice(0, 21) + '…' : t.name;
+    x.font = '600 92px Fraunces, Georgia, serif';
+    x.fillText(name, 72, 210);
+
+    x.fillStyle = 'rgba(255,255,255,0.78)';
+    x.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText('$' + t.symbol, 72, 272);
+
+    // Only figures that came off the chain. A missing one is omitted, never zeroed.
+    var stats = [['LIQUIDITY', fmtEth(t.liquidityEth)]];
+    if (typeof t.holders === 'number') stats.push(['HOLDERS', String(t.holders)]);
+    stats.push(['STATUS', t.status === 'graduated' ? 'Graduated' : 'On curve']);
+
+    var sx = 72;
+    for (var i = 0; i < stats.length; i++) {
+      x.fillStyle = 'rgba(255,255,255,0.5)';
+      x.font = '500 19px ui-monospace, SFMono-Regular, Menlo, monospace';
+      x.fillText(stats[i][0], sx, 430);
+      x.fillStyle = '#ffffff';
+      x.font = '600 44px Fraunces, Georgia, serif';
+      x.fillText(stats[i][1], sx, 486);
+      sx += Math.max(260, x.measureText(stats[i][1]).width + 90);
+    }
+
+    // Watermark. The point of the whole card: a share should be identifiable as
+    // Ponsr's without reading the caption.
+    x.fillStyle = 'rgba(255,255,255,0.30)';
+    x.fillRect(72, 566, 44, 2);
+    x.fillStyle = 'rgba(255,255,255,0.92)';
+    x.font = '600 30px Fraunces, Georgia, serif';
+    x.fillText('Ponsr', 72, 616);
+    x.fillStyle = 'rgba(255,255,255,0.55)';
+    x.font = '500 21px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText('ponsr.fun', 176, 615);
+
+    x.textAlign = 'right';
+    x.fillStyle = 'rgba(255,255,255,0.42)';
+    x.font = '500 19px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText('Launched on Robinhood Chain', W - 72, 615);
+
+    return c;
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise(function (resolve) {
+      if (canvas.toBlob) canvas.toBlob(resolve, 'image/png');
+      else resolve(null);
+    });
+  }
+
   document.getElementById('tp-share').addEventListener('click', function () {
     var t = currentToken;
     if (!t) return;
     var url = new URL(urlForToken(t.address), location.href).href;
     var label = this.querySelector('span');
-    if (navigator.share) {
-      navigator.share({ title: t.name + ' ($' + t.symbol + ') on Ponsr', url: url }).catch(function () {});
-    } else if (navigator.clipboard) {
-      navigator.clipboard.writeText(url);
-      label.textContent = 'Link copied';
-      setTimeout(function () { label.textContent = 'Share'; }, 1500);
+    var text = t.name + ' ($' + t.symbol + ') is live on Ponsr.';
+
+    function say(msg) {
+      label.textContent = msg;
+      setTimeout(function () { label.textContent = 'Share'; }, 1800);
     }
+
+    var canvas;
+    try {
+      canvas = buildShareCard(t);
+    } catch (e) {
+      canvas = null;
+    }
+
+    // No card is still a share. Falling back to the link keeps the button honest
+    // if canvas is unavailable or throws on an unusual token.
+    if (!canvas) {
+      if (navigator.clipboard) { navigator.clipboard.writeText(url); say('Link copied'); }
+      return;
+    }
+
+    canvasToBlob(canvas).then(function (blob) {
+      var file = blob ? new File([blob], t.symbol.toLowerCase() + '-ponsr.png', { type: 'image/png' }) : null;
+
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], text: text, url: url }).catch(function () {});
+        return;
+      }
+
+      // Desktop: hand over the image and open the composer. X does not accept an
+      // image by URL, so the picture has to be attached by the person sharing.
+      if (blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = t.symbol.toLowerCase() + '-ponsr.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      }
+      window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) +
+        '&url=' + encodeURIComponent(url), '_blank', 'noopener');
+      say('Card saved');
+    });
   });
 
   // ============================================================

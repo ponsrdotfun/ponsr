@@ -183,6 +183,21 @@ async function run() {
     doc.getElementById('tp-whatif').textContent.indexOf('$') === -1,
     'no $ in panel']);
 
+  // The share button builds a PNG card on canvas. Where canvas is unavailable -- as
+  // here, and in any browser that blocks it -- it must still share, by falling back
+  // to the link. A share button that silently does nothing is worse than a plain one.
+  const shareBtn = doc.getElementById('tp-share');
+  let copied = null;
+  window.navigator.clipboard = { writeText: (v) => { copied = v; return Promise.resolve(); } };
+  shareBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  checks.push(['share falls back to the link when canvas is unavailable',
+    typeof copied === 'string' && copied.indexOf('/token/') !== -1, String(copied)]);
+  // The link it shares is the address form, so it cannot land on another token that
+  // happens to share the symbol.
+  checks.push(['the shared link is keyed on the contract address',
+    typeof copied === 'string' && /\/token\/0x[0-9a-fA-F]{40}/.test(copied), String(copied)]);
+
   // Back returns to the explore board (where you came from), not the landing page.
   doc.getElementById('tp-back').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 60));
