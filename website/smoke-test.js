@@ -39,6 +39,53 @@ async function run() {
       };
       window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 
+      // jsdom has no canvas: getContext returns null, so every card builder threw
+      // and the whole share path -- wrapping, the shrink-to-fit loop, which story a
+      // wallet is told -- was covered by nothing but opening a browser and looking.
+      // Two shipped bugs lived in that arithmetic. This records the calls instead of
+      // painting, and measureText is proportional to the size in the font string, so
+      // wrapping behaves like a real face rather than returning a constant that would
+      // make every layout assertion vacuous.
+      window.HTMLCanvasElement.prototype.getContext = function () {
+        // One context per canvas, as a real browser does. Handing back a fresh
+        // recorder each call loses everything already drawn, and a test reading
+        // the calls afterwards would see an empty card and pass or fail for a
+        // reason that has nothing to do with the page.
+        if (this.__ctx) return this.__ctx;
+        const calls = [];
+        const rec = (name) => (...args) => { calls.push([name, ...args]); };
+        const ctx = {
+          __calls: calls,
+          canvas: this,
+          font: '', fillStyle: '', strokeStyle: '', lineWidth: 0, lineCap: '',
+          lineJoin: '', textAlign: '', textBaseline: '', globalAlpha: 1,
+          globalCompositeOperation: '', filter: '',
+          shadowColor: '', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
+          save: rec('save'), restore: rec('restore'), translate: rec('translate'),
+          rotate: rec('rotate'), scale: rec('scale'), setTransform: rec('setTransform'),
+          beginPath: rec('beginPath'), closePath: rec('closePath'),
+          moveTo: rec('moveTo'), lineTo: rec('lineTo'), arc: rec('arc'),
+          arcTo: rec('arcTo'), ellipse: rec('ellipse'), rect: rec('rect'),
+          roundRect: rec('roundRect'), quadraticCurveTo: rec('quadraticCurveTo'),
+          bezierCurveTo: rec('bezierCurveTo'), clip: rec('clip'),
+          fill: rec('fill'), stroke: rec('stroke'),
+          fillRect: rec('fillRect'), strokeRect: rec('strokeRect'),
+          clearRect: rec('clearRect'), drawImage: rec('drawImage'),
+          fillText(text, x, y) { calls.push(['fillText', String(text), x, y]); },
+          strokeText(text, x, y) { calls.push(['strokeText', String(text), x, y]); },
+          measureText(t) {
+            const m = /(\d+(?:\.\d+)?)px/.exec(ctx.font || '16px');
+            const size = m ? parseFloat(m[1]) : 16;
+            return { width: String(t).length * size * 0.5 };
+          },
+          createLinearGradient: () => ({ addColorStop() {} }),
+          createRadialGradient: () => ({ addColorStop() {} }),
+          createPattern: () => null,
+        };
+        this.__ctx = ctx;
+        return ctx;
+      };
+
       // The board reads the chain now, and jsdom has no network. This fixture is
       // the seam fetchLedger() checks first, so the UI logic below -- sorting,
       // search, pagination, routing -- is still exercised against enough rows to
@@ -211,20 +258,41 @@ async function run() {
       doc.querySelector('#tp-connect span').textContent === 'Connect wallet',
     doc.querySelector('#tp-connect span').textContent]);
 
-  // The share button builds a PNG card on canvas. Where canvas is unavailable -- as
-  // here, and in any browser that blocks it -- it must still share, by falling back
-  // to the link. A share button that silently does nothing is worse than a plain one.
+  // The share button builds a PNG card on canvas, and has two paths worth testing.
+  //
+  // Path 1: canvas is unavailable -- it is blocked in some browsers, and it used to
+  // be unavailable here too. It must still share, by falling back to the link; a
+  // share button that silently does nothing is worse than a plain one. The suite now
+  // provides a working canvas, so this takes it away again for one click rather than
+  // relying on jsdom's absence, which is what this check was really testing before.
   const shareBtn = doc.getElementById('tp-share');
   let copied = null;
   window.navigator.clipboard = { writeText: (v) => { copied = v; return Promise.resolve(); } };
+  const realGetContext = window.HTMLCanvasElement.prototype.getContext;
+  window.HTMLCanvasElement.prototype.getContext = function () { return null; };
   shareBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 60));
+  window.HTMLCanvasElement.prototype.getContext = realGetContext;
   checks.push(['share falls back to the link when canvas is unavailable',
     typeof copied === 'string' && copied.indexOf('/token/') !== -1, String(copied)]);
   // The link it shares is the address form, so it cannot land on another token that
   // happens to share the symbol.
   checks.push(['the shared link is keyed on the contract address',
     typeof copied === 'string' && /\/token\/0x[0-9a-fA-F]{40}/.test(copied), String(copied)]);
+
+  // Path 2: the card builds, so the button must reach X's composer carrying the same
+  // address-keyed link. Neither jsdom nor the recording context can encode a real
+  // PNG, so the blob is empty here -- what is asserted is that the click ends at the
+  // composer rather than dying quietly somewhere in the clipboard branch.
+  let opened = null;
+  window.open = (u) => { opened = String(u); return null; };
+  window.HTMLCanvasElement.prototype.toBlob = function (cb) { cb(null); };
+  shareBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  checks.push(['share opens the composer when the card builds',
+    typeof opened === 'string' && opened.includes('x.com/intent/post') &&
+      /%2Ftoken%2F0x[0-9a-fA-F]{40}/.test(opened),
+    String(opened).slice(0, 110)]);
 
   // Back returns to the explore board (where you came from), not the landing page.
   doc.getElementById('tp-back').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -513,6 +581,138 @@ async function run() {
 
   checks.push(['X link opens in a new tab safely (noopener)',
     !!(fx && (fx.getAttribute('rel') || '').includes('noopener'))]);
+
+  // ---------------------------------------------------------------------------
+  // Share cards
+  //
+  // These are permanent images people put on their timeline under this project's
+  // name, and until now nothing tested them. Every assertion below corresponds to
+  // something that actually went wrong or could only be seen by eye.
+  // ---------------------------------------------------------------------------
+  const CARD = dom.window.__PONSR_CARD__;
+  checks.push(['card builders are reachable from the suite', !!CARD,
+    CARD ? '' : 'window.__PONSR_CARD__ missing']);
+
+  if (CARD) {
+    const B = (n) => BigInt(n) * 10n ** 18n;
+    const T = {
+      symbol: 'FIX00', name: 'Fixture 0',
+      address: '0x' + '00'.repeat(20),
+      liquidityEth: 1.2, launchedAt: Date.now() - 3600e3,
+    };
+    const WORDMARK_TOP = 675 - 96;   // the hairline the card draws above 'Ponsr'
+
+    // Which story a wallet is told. `moved` exists because a card once called a
+    // wallet a diamond hand directly above STILL HOLD 0.00 -- it had transferred
+    // the lot away, which is neither selling nor holding.
+    const stories = [
+      ['never sold, still holds', [B(100), 0n, B(100)], 'diamond'],
+      ['sold the whole bag', [B(100), B(100), 0n], 'sold_all'],
+      ['sold part of it', [B(100), B(40), B(60)], 'sold_some'],
+      ['transferred out without selling', [B(100), 0n, 0n], 'moved'],
+    ];
+    const wrongStory = stories
+      .map(([label, args, want]) => [label, CARD.roastKind(...args), want])
+      .filter(([, got, want]) => got !== want);
+    checks.push(['the card tells the story the chain supports',
+      wrongStory.length === 0,
+      wrongStory.map(([l, g, w]) => `${l}: ${g} not ${w}`).join('; ') || 'all four correct']);
+
+    // A story with no copy renders the word `undefined` onto a permanent image.
+    const kindNames = Object.keys(CARD.ROAST);
+    const missingCopy = kindNames.filter((k) =>
+      !Array.isArray(CARD.ROAST[k]) || CARD.ROAST[k].length === 0 ||
+      CARD.ROAST[k].some((s) => !s || !String(s).trim()) ||
+      !Array.isArray(CARD.ROAST_TWEET[k]) || CARD.ROAST_TWEET[k].length === 0 ||
+      CARD.ROAST_TWEET[k].some((s) => !s || !String(s).trim()));
+    checks.push(['every story has both card copy and tweet copy',
+      kindNames.length === 4 && missingCopy.length === 0,
+      missingCopy.join(', ') || kindNames.join('/')]);
+
+    // Build the real card for each story at its real size. `statsBottom` is the
+    // lowest text the builder places; anything at or below the hairline is text
+    // sitting on top of the wordmark.
+    const cardFaults = [];
+    for (const [, args, want] of stories) {
+      const wi = { received: args[0], sold: args[1], balance: args[2], priceEth: 0.0000012 };
+      let built = null;
+      try { built = CARD.buildWhatIfCard(T, wi); }
+      catch (e) { cardFaults.push(`${want}: threw ${(e && e.message) || e}`); continue; }
+      if (built.canvas.width !== 1200 || built.canvas.height !== 675) {
+        cardFaults.push(`${want}: ${built.canvas.width}x${built.canvas.height}`);
+      }
+      if (built.kind !== want) cardFaults.push(`${want}: built as ${built.kind}`);
+      if (built.layout.statsBottom >= WORDMARK_TOP) {
+        cardFaults.push(`${want}: text reaches ${built.layout.statsBottom}, wordmark at ${WORDMARK_TOP}`);
+      }
+    }
+    checks.push(['every story builds a card that clears the wordmark',
+      cardFaults.length === 0, cardFaults.join('; ') || 'all four fit']);
+
+    // The roast is set at the largest size whose wrapped block still clears the
+    // footer, and at 62px the two-line cases fitted by a single pixel. Force a
+    // roast far longer than any real one and the loop must actually react --
+    // otherwise a future third line runs straight through the wordmark.
+    const realDiamond = CARD.ROAST.diamond;
+    CARD.ROAST.diamond = ['this is a deliberately enormous roast written for no ' +
+      'reason other than to force the block onto several lines so the shrink loop ' +
+      'has to react to it rather than sitting at its starting size'];
+    let longCard = null, longErr = '';
+    try {
+      longCard = CARD.buildWhatIfCard(T,
+        { received: B(100), sold: 0n, balance: B(100), priceEth: 0.0000012 });
+    } catch (e) { longErr = String((e && e.message) || e); }
+    CARD.ROAST.diamond = realDiamond;
+    checks.push(['an over-long roast shrinks rather than overrunning the card',
+      !!longCard && longCard.layout.roastLines > 1 && longCard.layout.roastSize < 62 &&
+        longCard.layout.statsBottom < WORDMARK_TOP,
+      longCard
+        ? `${longCard.layout.roastLines} lines at ${longCard.layout.roastSize}px, bottom ${longCard.layout.statsBottom}`
+        : `threw ${longErr}`]);
+
+    // Wrapping must respect the column. Nothing clips the text, so a line wider
+    // than the column is a line that runs off the edge of a published image.
+    const probe = doc.createElement('canvas').getContext('2d');
+    const wrapped = CARD.cardLines(probe,
+      'the quick brown fox jumps over the lazy dog and then keeps running well past the edge',
+      62, 640, 600);
+    probe.font = '600 62px Fraunces, Georgia, serif';
+    // A single word longer than the column cannot be broken, so only multi-word
+    // lines are a wrapping fault.
+    const overWide = wrapped.filter((l) => l.split(' ').length > 1 && probe.measureText(l).width > 640);
+    checks.push(['card text wraps inside its column',
+      wrapped.length > 1 && overWide.length === 0,
+      `${wrapped.length} lines, ${overWide.length} too wide`]);
+
+    // The token card is a separate builder on a separate path; asserting the
+    // what-if card says nothing about it.
+    let shareCanvas = null, shareErr = '';
+    try { shareCanvas = CARD.buildShareCard(T); }
+    catch (e) { shareErr = String((e && e.message) || e); }
+    checks.push(['the token share card builds at card size',
+      !!shareCanvas && shareCanvas.width === 1200 && shareCanvas.height === 675,
+      shareCanvas ? `${shareCanvas.width}x${shareCanvas.height}` : `threw ${shareErr}`]);
+
+    // Both cards must carry the mark, or a share is an anonymous picture of a
+    // number. Asserted on the text actually drawn, not on the source.
+    const drawn = (c) => (c.getContext('2d').__calls || [])
+      .filter((k) => k[0] === 'fillText').map((k) => k[1]).join(' | ');
+    const whatIfCard = CARD.buildWhatIfCard(T,
+      { received: B(100), sold: B(100), balance: 0n, priceEth: 0.0000012 });
+    checks.push(['both cards carry the Ponsr wordmark',
+      /Ponsr/.test(drawn(whatIfCard.canvas)) && /ponsr\.fun/.test(drawn(whatIfCard.canvas)) &&
+        /Ponsr/.test(drawn(shareCanvas)),
+      'what-if and token card both signed']);
+
+    // The card must never state a figure the chain did not give it. With no price
+    // it shows an em dash; inventing a number here would be a permanent image
+    // making a claim nobody can check.
+    const priceless = CARD.buildWhatIfCard(T,
+      { received: B(100), sold: 0n, balance: B(100), priceEth: null });
+    checks.push(['with no price the card shows a dash, not an invented value',
+      drawn(priceless.canvas).includes('—'),
+      'no price -> em dash']);
+  }
 
   let failCount = 0;
   for (const [name, pass, detail] of checks) {

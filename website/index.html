@@ -2572,6 +2572,20 @@
       size -= 6; lh = Math.round(size * 1.2);
     }
 
+    // The loop has a floor, because type small enough to always fit is type nobody
+    // can read on a timeline. That floor means a long enough roast still does not
+    // fit, and the loop as written simply drew it anyway: a six-line roast ran
+    // through the wordmark and off the bottom edge of the image. Dropping the
+    // overflow is the only outcome that keeps the card intact, and the ellipsis
+    // says plainly that something was cut rather than pretending the sentence
+    // ended there. No roast is this long today -- the point is that adding one
+    // must not silently produce a broken picture.
+    var maxLines = Math.max(1, Math.floor((budget - FIXED) / lh));
+    if (lines.length > maxLines) {
+      lines = lines.slice(0, maxLines);
+      lines[maxLines - 1] = lines[maxLines - 1].replace(/[\s.,;:]+$/, '') + '…';
+    }
+
     var y = y0;
     for (var j = 0; j < lines.length; j++) {
       cardText(x, lines[j], PAD, y + j * lh, { size: size, weight: 600, blur: 22, shadow: 0.5 });
@@ -3195,6 +3209,28 @@
   initStepStagger();
   initParticles();
   startRealtime();
+
+  // Test seam for the card builders.
+  //
+  // The cards are drawn on a canvas, and the suite runs in jsdom, which has no
+  // canvas at all. That left every line of card code -- the wrapping, the size
+  // that shrinks until the block clears the wordmark, which story a wallet gets
+  // told -- covered by nothing but looking at it in a browser. Two of the bugs
+  // that shipped were in exactly that arithmetic. Handing the functions out lets
+  // the suite drive them against a recording context and assert on the geometry;
+  // the page itself never reads this object.
+  if (typeof window !== 'undefined') {
+    window.__PONSR_CARD__ = {
+      roastKind: roastKind,
+      cardLines: cardLines,
+      buildWhatIfCard: buildWhatIfCard,
+      buildShareCard: buildShareCard,
+      ROAST: ROAST,
+      ROAST_TWEET: ROAST_TWEET,
+      fmtTokens: fmtTokens,
+      fmtEth: fmtEth
+    };
+  }
 })();
 </script>
 </body>
