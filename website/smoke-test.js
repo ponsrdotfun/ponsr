@@ -162,7 +162,10 @@ async function run() {
   // recorded in the master doc), then reveal for that token.
   checks.push(['what-if is gated until a wallet is connected', !doc.getElementById('tp-locked').hidden && doc.getElementById('tp-figures').hidden, '']);
   doc.getElementById('tp-connect').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  // Wallet discovery is deliberately asynchronous: EIP-6963 asks every installed
+  // wallet to announce itself and waits ~120ms so a slow extension is not missed.
+  // Anything shorter here tests the moment before the answer arrives.
+  await new Promise((resolve) => setTimeout(resolve, 300));
   // CRITICAL: connecting must NOT reveal figures. It used to unlock a full
   // statement -- "value today, had you held everything" -- computed from numbers
   // generated for the preview dataset, for a wallet that was never connected.

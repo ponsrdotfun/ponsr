@@ -1976,6 +1976,44 @@
     if (note) note.textContent = msg;
   }
 
+  /**
+   * Finds a wallet, preferring MetaMask.
+   *
+   * `window.ethereum` is a single slot that every extension writes to, so with more
+   * than one installed the last to load wins -- someone with MetaMask and Phantom
+   * side by side can press Connect and be asked by the wrong one. EIP-6963 exists
+   * for this: each wallet announces itself, and we choose.
+   *
+   * Falls back to `window.ethereum` for wallets that never adopted the standard,
+   * including older MetaMask builds and most in-app browsers.
+   */
+  function findWallet() {
+    return new Promise(function (resolve) {
+      var announced = [];
+      function onAnnounce(e) {
+        if (e && e.detail && e.detail.provider) announced.push(e.detail);
+      }
+      window.addEventListener('eip6963:announceProvider', onAnnounce);
+      try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
+      // Announcements are synchronous in practice; the wait is only so a slow
+      // extension is not missed, and it is short enough not to feel like a delay.
+      setTimeout(function () {
+        window.removeEventListener('eip6963:announceProvider', onAnnounce);
+        if (announced.length) {
+          var mm = null;
+          for (var i = 0; i < announced.length; i++) {
+            var rdns = announced[i].info && announced[i].info.rdns;
+            if (rdns === 'io.metamask') { mm = announced[i]; break; }
+          }
+          var chosen = mm || announced[0];
+          resolve({ provider: chosen.provider, name: (chosen.info && chosen.info.name) || 'your wallet' });
+          return;
+        }
+        resolve(window.ethereum ? { provider: window.ethereum, name: 'your wallet' } : null);
+      }, 120);
+    });
+  }
+
   document.getElementById('tp-connect').addEventListener('click', function () {
     var t = currentToken;
     if (!t) return;
@@ -1988,15 +2026,20 @@
       btn.disabled = false;
     }
 
-    if (!window.ethereum) {
-      setWalletNote('No wallet found in this browser. Open ponsr.fun inside a wallet app, or install a browser wallet.');
-      return;
-    }
-
     label.textContent = 'Connecting…';
     btn.disabled = true;
 
-    window.ethereum.request({ method: 'eth_requestAccounts' }).then(function (accounts) {
+    findWallet().then(function (found) {
+      if (!found) {
+        unlock('No wallet found in this browser. Install MetaMask, or open ponsr.fun inside a wallet app.');
+        return null;
+      }
+      // Read-only: the wallet is asked for an address and nothing else. Every figure
+      // below comes from Robinhood Chain through this site's own RPC, so there is no
+      // need to add or switch networks in the wallet for this to work.
+      return found.provider.request({ method: 'eth_requestAccounts' });
+    }).then(function (accounts) {
+      if (!accounts) return;
       var wallet = accounts && accounts[0];
       if (!wallet) throw new Error('no account returned');
       label.textContent = 'Reading the chain…';
