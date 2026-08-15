@@ -633,6 +633,7 @@
     box-shadow: var(--lift-3); }
   .tp-whatif-lead { color: var(--mute); font-size: 15px; line-height: 1.65; max-width: 62ch; }
   .tp-whatif-foot { color: var(--mute); font-size: 12.5px; line-height: 1.6; margin: 14px 0 0; max-width: 62ch; }
+  .tp-whatif-share { float: right; margin: -6px 0 0 16px; }
   /* A class selector beats the browser's own [hidden] { display: none }, so any
      element given a display here stays visible when hidden is set. .tp-locked did
      exactly that: the figures appeared and the Connect button stayed on screen
@@ -1030,6 +1031,7 @@
       </div>
 
       <div class="tp-figures" id="tp-figures" hidden>
+        <button class="btn btn-primary tp-whatif-share" id="tp-whatif-share"><span>Share this</span></button>
         <div class="tp-figure">
           <div class="tp-k">Value today, had you kept everything</div>
           <div class="tp-figure-v" id="tp-neversold">—</div>
@@ -1877,6 +1879,7 @@
    * chain…" from the token before it.
    */
   function resetWhatIf() {
+    lastWhatIf = null;
     document.getElementById('tp-locked').hidden = false;
     document.getElementById('tp-figures').hidden = true;
     var connectBtn = document.getElementById('tp-connect');
@@ -2128,6 +2131,7 @@
           'Valued at the pool price right now, in ETH — this chain has no price oracle, so no dollar figure is shown. ' +
           'Tokens that arrived by transfer count the same as tokens bought: this is what the wallet received, not what it paid.';
 
+        lastWhatIf = { received: received, sent: sent, balance: balance, priceEth: priceEth };
         document.getElementById('tp-locked').hidden = true;
         document.getElementById('tp-figures').hidden = false;
       });
@@ -2167,6 +2171,72 @@
     img.onload = function () { mascot = img; };
     img.src = '/logo-transparent.png';
   })();
+
+  /* ---------------------------------------------------------------------------
+     What-if share: the roast.
+
+     This is the share people will actually post, so it is about the RESULT, not
+     about the tool. The outcome decides the tone, and the tone is teasing --
+     selling early and watching it run is the joke crypto tells about itself, and a
+     card that says it out loud travels further than a neutral one.
+
+     Every line is picked at random per share rather than seeded, so posting twice
+     does not produce the same card. That is the opposite of the token card, where
+     stability is what makes it recognisable; here the variation IS the joke.
+
+     What none of them do is imply a forecast. "You would hold X ETH if you had not
+     sold" is a statement about what already happened, which is the only kind this
+     project makes -- Part 4's warning about promotional framing applies hardest to
+     the thing designed to be reposted.
+     --------------------------------------------------------------------------- */
+  var lastWhatIf = null;
+
+  var ROAST = {
+    sold_all: [
+      'sold the whole bag. it is still here.',
+      'paper hands, confirmed on-chain.',
+      'exited early. the chain kept the receipt.',
+      'sold everything. bold. permanent.',
+      'zero left. the ledger noticed.'
+    ],
+    sold_some: [
+      'trimmed the bag. the chain remembers.',
+      'took some off the table. some.',
+      'half diamond, half paper.',
+      'sold a bit. only a bit. sure.'
+    ],
+    diamond: [
+      'never sold a single one.',
+      'still holding. no notes.',
+      'diamond hands, verified on-chain.',
+      'sold nothing. respect.'
+    ]
+  };
+
+  var ROAST_TWEET = {
+    sold_all: [
+      'I sold every last one. Ponsr did the maths anyway.',
+      'Paper hands, receipts on-chain. Thanks Ponsr.',
+      'Sold the lot. Ponsr worked out what that cost me.',
+      'Ponsr just told me exactly how early I sold.'
+    ],
+    sold_some: [
+      'Sold some. Ponsr counted the rest.',
+      'Trimmed the bag and Ponsr did the maths.',
+      'Half of me held. Ponsr priced the other half.'
+    ],
+    diamond: [
+      'Sold nothing. Ponsr checked.',
+      'Diamond hands, and the chain agrees.',
+      'Still holding every one. Ponsr has the receipts.'
+    ]
+  };
+
+  function roastKind(received, sent) {
+    if (sent === 0n) return 'diamond';
+    return sent >= received ? 'sold_all' : 'sold_some';
+  }
+  function pickRandom(list) { return list[Math.floor(Math.random() * list.length)]; }
 
   var SHARE_LINES = [
     'launched by a tweet',
@@ -2279,12 +2349,163 @@
     return c;
   }
 
+  /**
+   * The what-if card: the roast, the number, and the mascot.
+   *
+   * Deliberately different from the token card. That one is an announcement and is
+   * stable per token; this one is about a person's own history and changes every
+   * time, because the joke is the point. Only chain-derived figures appear on it.
+   */
+  function buildWhatIfCard(t, wi) {
+    var W = 1200, H = 675;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var x = c.getContext('2d');
+    var kind = roastKind(wi.received, wi.sent);
+    var seed = seedFrom((t.address || t.symbol).toLowerCase());
+    var hue = kind === 'diamond' ? 150 : 8;
+
+    var g = x.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, 'hsl(' + hue + ' 40% 18%)');
+    g.addColorStop(1, '#07080a');
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+
+    x.globalAlpha = 0.15;
+    x.fillStyle = 'hsl(' + hue + ' 62% 58%)';
+    x.beginPath(); x.arc(250, 150, 300 + (seed % 90), 0, Math.PI * 2); x.fill();
+    x.globalAlpha = 1;
+
+    if (mascot) {
+      var mh = 360, mw = mh * (mascot.width / mascot.height);
+      x.save();
+      x.translate(W - mw / 2 - 80, H - mh / 2 - 70);
+      x.rotate((kind === 'diamond' ? -6 : 8) * Math.PI / 180);
+      x.shadowColor = 'rgba(0,0,0,0.45)'; x.shadowBlur = 40; x.shadowOffsetY = 12;
+      x.drawImage(mascot, -mw / 2, -mh / 2, mw, mh);
+      x.restore();
+    }
+
+    x.textAlign = 'left';
+    x.textBaseline = 'alphabetic';
+
+    var roast = pickRandom(ROAST[kind]);
+    x.fillStyle = '#ffffff';
+    x.font = '600 62px Fraunces, Georgia, serif';
+    // Wrapped by hand: the roast lines are short, but a long one must not run off
+    // the card and take the number with it.
+    var words = roast.split(' '), lineText = '', lines = [];
+    for (var i = 0; i < words.length; i++) {
+      var trial = lineText ? lineText + ' ' + words[i] : words[i];
+      if (x.measureText(trial).width > 620 && lineText) { lines.push(lineText); lineText = words[i]; }
+      else { lineText = trial; }
+    }
+    lines.push(lineText);
+    for (var j = 0; j < lines.length; j++) x.fillText(lines[j], 72, 150 + j * 70);
+
+    var afterRoast = 150 + lines.length * 70;
+
+    x.fillStyle = 'rgba(255,255,255,0.55)';
+    x.font = '600 22px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText('IF YOU NEVER SOLD  ·  $' + t.symbol, 72, afterRoast + 40);
+
+    x.fillStyle = '#ffffff';
+    x.font = '600 96px Fraunces, Georgia, serif';
+    x.fillText(wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', 72, afterRoast + 140);
+
+    var stats = [
+      ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
+      ['SOLD', fmtTokens(Number(wi.sent) / 1e18)],
+      ['STILL HOLD', fmtTokens(Number(wi.balance) / 1e18)]
+    ];
+    var sx = 72;
+    for (var k = 0; k < stats.length; k++) {
+      x.fillStyle = 'rgba(255,255,255,0.5)';
+      x.font = '500 18px ui-monospace, SFMono-Regular, Menlo, monospace';
+      x.fillText(stats[k][0], sx, afterRoast + 200);
+      x.fillStyle = 'rgba(255,255,255,0.92)';
+      x.font = '600 32px Fraunces, Georgia, serif';
+      x.fillText(stats[k][1], sx, afterRoast + 240);
+      sx += 210;
+    }
+
+    x.fillStyle = 'rgba(255,255,255,0.30)';
+    x.fillRect(72, H - 108, 44, 2);
+    x.fillStyle = 'rgba(255,255,255,0.92)';
+    x.font = '600 30px Fraunces, Georgia, serif';
+    x.fillText('Ponsr', 72, H - 58);
+    x.fillStyle = 'rgba(255,255,255,0.55)';
+    x.font = '500 21px ui-monospace, SFMono-Regular, Menlo, monospace';
+    x.fillText('ponsr.fun', 176, H - 59);
+
+    return { canvas: c, kind: kind };
+  }
+
   function canvasToBlob(canvas) {
     return new Promise(function (resolve) {
       if (canvas.toBlob) canvas.toBlob(resolve, 'image/png');
       else resolve(null);
     });
   }
+
+  document.getElementById('tp-whatif-share').addEventListener('click', function () {
+    var t = currentToken;
+    if (!t || !lastWhatIf) return;
+    var btn = this, label = btn.querySelector('span');
+    function say(msg) {
+      label.textContent = msg;
+      setTimeout(function () { label.textContent = 'Share this'; }, 1800);
+    }
+
+    var built;
+    try { built = buildWhatIfCard(t, lastWhatIf); } catch (e) { built = null; }
+    if (!built) { say('Could not build the card'); return; }
+
+    var url = new URL(urlForToken(t.address), location.href).href;
+    var text = pickRandom(ROAST_TWEET[built.kind]);
+    var composeUrl = 'https://x.com/intent/post?text=' + encodeURIComponent(text) +
+      '&url=' + encodeURIComponent(url);
+    var fileName = t.symbol.toLowerCase() + '-whatif-ponsr.png';
+    var blobPromise = canvasToBlob(built.canvas);
+
+    function downloadAndCompose(blob) {
+      if (blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      }
+      window.open(composeUrl, '_blank', 'noopener');
+      say('Card saved');
+    }
+
+    var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (touch && navigator.canShare) {
+      blobPromise.then(function (blob) {
+        var file = blob ? new File([blob], fileName, { type: 'image/png' }) : null;
+        if (file && navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file], text: text, url: url }).catch(function (err) {
+            if (!err || err.name !== 'AbortError') downloadAndCompose(blob);
+          });
+        } else { downloadAndCompose(blob); }
+      });
+      return;
+    }
+
+    if (navigator.clipboard && window.ClipboardItem && navigator.clipboard.write) {
+      try {
+        navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blobPromise })])
+          .then(function () {
+            window.open(composeUrl, '_blank', 'noopener');
+            say('Copied — paste it');
+          })
+          .catch(function () { blobPromise.then(downloadAndCompose); });
+        return;
+      } catch (e) { /* older ClipboardItem cannot take a promise */ }
+    }
+
+    blobPromise.then(downloadAndCompose);
+  });
 
   document.getElementById('tp-share').addEventListener('click', function () {
     var t = currentToken;
