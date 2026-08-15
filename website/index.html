@@ -2098,6 +2098,19 @@
         var balance = r[2];
         var priceEth = r[3];
 
+        // A sale is a transfer INTO the pool. Everything else that left the wallet
+        // went somewhere else -- most often the person's own second wallet. The
+        // roast calls people paper hands, so it has to be counting sales and not
+        // house-keeping.
+        var soldToPool = 0n;
+        if (t.pool) {
+          var poolLower = t.pool.toLowerCase();
+          for (var li = 0; li < r[1].length; li++) {
+            var toAddr = '0x' + String(r[1][li].topics[2]).slice(-40);
+            if (toAddr.toLowerCase() === poolLower) soldToPool += BigInt(r[1][li].data);
+          }
+        }
+
         if (received === 0n) {
           unlock('This wallet has never held ' + t.symbol + ', so there is nothing to show.');
           return;
@@ -2131,7 +2144,7 @@
           'Valued at the pool price right now, in ETH — this chain has no price oracle, so no dollar figure is shown. ' +
           'Tokens that arrived by transfer count the same as tokens bought: this is what the wallet received, not what it paid.';
 
-        lastWhatIf = { received: received, sent: sent, balance: balance, priceEth: priceEth };
+        lastWhatIf = { received: received, sent: sent, sold: soldToPool, balance: balance, priceEth: priceEth };
         document.getElementById('tp-locked').hidden = true;
         document.getElementById('tp-figures').hidden = false;
       });
@@ -2361,7 +2374,7 @@
     var c = document.createElement('canvas');
     c.width = W; c.height = H;
     var x = c.getContext('2d');
-    var kind = roastKind(wi.received, wi.sent);
+    var kind = roastKind(wi.received, wi.sold);
     var seed = seedFrom((t.address || t.symbol).toLowerCase());
     var hue = kind === 'diamond' ? 150 : 8;
 
@@ -2414,7 +2427,7 @@
 
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
-      ['SOLD', fmtTokens(Number(wi.sent) / 1e18)],
+      ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
       ['STILL HOLD', fmtTokens(Number(wi.balance) / 1e18)]
     ];
     var sx = 72;
