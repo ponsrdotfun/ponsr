@@ -1977,6 +1977,7 @@
      would be invented -- the same reason the board hides USD everywhere else.
      --------------------------------------------------------------------------- */
 
+  var POOL_SWAP_TOPIC = '0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67';
   var ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
   function topicAddr(a) { return '0x' + '0'.repeat(24) + a.replace(/^0x/, '').toLowerCase(); }
@@ -2091,24 +2092,28 @@
         rpcCall('eth_getLogs', [{ address: t.address, fromBlock: '0x0', toBlock: 'latest',
           topics: [ERC20_TRANSFER_TOPIC, topicAddr(wallet), null] }]),
         erc20BalanceOf(t.address, wallet),
-        t.pool ? poolPriceEth(t.pool, t.address) : Promise.resolve(null)
+        t.pool ? poolPriceEth(t.pool, t.address) : Promise.resolve(null),
+        t.pool ? rpcCall('eth_getLogs', [{ address: t.pool, fromBlock: '0x0', toBlock: 'latest',
+          topics: [POOL_SWAP_TOPIC] }]).catch(function () { return []; }) : Promise.resolve([])
       ]).then(function (r) {
         var received = sumLogValues(r[0]);
         var sent = sumLogValues(r[1]);
         var balance = r[2];
         var priceEth = r[3];
 
-        // A sale is a transfer INTO the pool. Everything else that left the wallet
-        // went somewhere else -- most often the person's own second wallet. The
-        // roast calls people paper hands, so it has to be counting sales and not
-        // house-keeping.
+        // A transfer out is a SALE if its transaction also swapped on this token's
+        // pool. Checking the destination instead was the obvious idea and it was
+        // wrong: a router takes the tokens first, so a real sale can leave the
+        // wallet heading somewhere that is not the pool at all. One wallet sold
+        // 7.17M through a router and was told it had sold nothing.
+        //
+        // Matching on the transaction covers both routes, and cannot mistake a
+        // plain transfer for a sale, because a plain transfer swaps nothing.
+        var swapTxs = {};
+        for (var si = 0; si < r[4].length; si++) swapTxs[String(r[4][si].transactionHash).toLowerCase()] = 1;
         var soldToPool = 0n;
-        if (t.pool) {
-          var poolLower = t.pool.toLowerCase();
-          for (var li = 0; li < r[1].length; li++) {
-            var toAddr = '0x' + String(r[1][li].topics[2]).slice(-40);
-            if (toAddr.toLowerCase() === poolLower) soldToPool += BigInt(r[1][li].data);
-          }
+        for (var li = 0; li < r[1].length; li++) {
+          if (swapTxs[String(r[1][li].transactionHash).toLowerCase()]) soldToPool += BigInt(r[1][li].data);
         }
 
         if (received === 0n) {
