@@ -2564,7 +2564,7 @@
     var roast = pickRandom(ROAST[kind]);
     var y0 = PAD + 92;
     var budget = (H - 96) - 26 - y0;   // wordmark hairline sits at H-96
-    var FIXED = 40 + 78 + 64 + 38;     // label, number, stats label, stats value
+    var FIXED = 66 + 86 + 72 + 38;     // label, number, stats label, stats value
     var size = 62, lh = 74, lines;
     while (true) {
       lines = cardLines(x, roast, size, COL, 600);
@@ -2576,18 +2576,18 @@
     for (var j = 0; j < lines.length; j++) {
       cardText(x, lines[j], PAD, y + j * lh, { size: size, weight: 600, blur: 22, shadow: 0.5 });
     }
-    y += (lines.length - 1) * lh + 40;
+    y += (lines.length - 1) * lh + 66;
 
     cardText(x, 'IF YOU NEVER SOLD $' + t.symbol, PAD, y, {
       size: 17, weight: 500, mono: true, track: 2.4, color: 'rgba(255,255,255,0.62)', blur: 8, shadow: 0.35
     });
 
-    y += 78;
+    y += 86;
     cardText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', PAD, y, {
       size: 92, weight: 600, blur: 26, shadow: 0.5
     });
 
-    y += 64;
+    y += 72;
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
       ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
