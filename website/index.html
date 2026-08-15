@@ -2557,25 +2557,37 @@
     var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
     drawMascot(x, mascotCx, mascotCy, 440, mood, kind === 'diamond' ? -6 : 7);
 
-    // The roast, set as a line of display type rather than shouted in a bubble.
+    // The roast is set at the largest size whose wrapped block still clears the
+    // wordmark. Fixed at 62px it fitted the two-line lines by a single pixel, and
+    // any three-line roast -- there are several -- would have run straight through
+    // the footer. Measured rather than assumed, because the text varies per share.
     var roast = pickRandom(ROAST[kind]);
-    var lines = cardLines(x, roast, 62, COL, 600);
-    var y = PAD + 96;
-    for (var j = 0; j < lines.length; j++) {
-      cardText(x, lines[j], PAD, y + j * 74, { size: 62, weight: 600, blur: 22, shadow: 0.5 });
+    var y0 = PAD + 92;
+    var budget = (H - 96) - 26 - y0;   // wordmark hairline sits at H-96
+    var FIXED = 40 + 78 + 64 + 38;     // label, number, stats label, stats value
+    var size = 62, lh = 74, lines;
+    while (true) {
+      lines = cardLines(x, roast, size, COL, 600);
+      if (lines.length * lh + FIXED <= budget || size <= 40) break;
+      size -= 6; lh = Math.round(size * 1.2);
     }
-    y += lines.length * 74 + 54;
+
+    var y = y0;
+    for (var j = 0; j < lines.length; j++) {
+      cardText(x, lines[j], PAD, y + j * lh, { size: size, weight: 600, blur: 22, shadow: 0.5 });
+    }
+    y += (lines.length - 1) * lh + 40;
 
     cardText(x, 'IF YOU NEVER SOLD $' + t.symbol, PAD, y, {
       size: 17, weight: 500, mono: true, track: 2.4, color: 'rgba(255,255,255,0.62)', blur: 8, shadow: 0.35
     });
 
-    y += 92;
+    y += 78;
     cardText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', PAD, y, {
       size: 92, weight: 600, blur: 26, shadow: 0.5
     });
 
-    y += 76;
+    y += 64;
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
       ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
@@ -2586,7 +2598,7 @@
       cardText(x, stats[k][0], PAD + k * step, y, {
         size: 13, weight: 500, mono: true, track: 1.8, color: 'rgba(255,255,255,0.50)', blur: 6, shadow: 0.3
       });
-      cardText(x, stats[k][1], PAD + k * step, y + 40, { size: 34, weight: 500, blur: 14, shadow: 0.4 });
+      cardText(x, stats[k][1], PAD + k * step, y + 38, { size: 34, weight: 500, blur: 14, shadow: 0.4 });
     }
 
     // Hairline above the wordmark, the same device the site uses in its footer.
@@ -2597,7 +2609,7 @@
       size: 17, weight: 500, mono: true, color: 'rgba(255,255,255,0.55)', blur: 6, shadow: 0.3
     });
 
-    return { canvas: c, kind: kind, layout: { statsBottom: y + 40 } };
+    return { canvas: c, kind: kind, layout: { statsBottom: y + 38, roastSize: size, roastLines: lines.length } };
   }
 
   function canvasToBlob(canvas) {
