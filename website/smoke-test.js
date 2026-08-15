@@ -484,6 +484,16 @@ async function run() {
   const fx = doc.querySelector('.footer-x');
   checks.push(['footer links to the @ponsrdotfun X account',
     !!(fx && /x\.com\/ponsrdotfun/.test(fx.getAttribute('href') || ''))]);
+  // A shared link is how a launch travels. Without these tags X renders a bare URL
+  // with no preview and nothing that says Ponsr.
+  const og = (prop) => {
+    const el = doc.querySelector('meta[property="' + prop + '"], meta[name="' + prop + '"]');
+    return el && el.getAttribute('content');
+  };
+  checks.push(['link previews carry an image and a card type',
+    !!og('og:image') && og('twitter:card') === 'summary_large_image',
+    (og('og:image') || 'no og:image') + ' / ' + (og('twitter:card') || 'no card')]);
+
   // Every asset path must be absolute. On /token/0x… a relative src resolves to
   // /token/logo.png, which the SPA rewrite answers with index.html at status 200 --
   // so the browser is handed HTML where it expected an image and simply shows a
