@@ -365,10 +365,11 @@ describe("X's 7-day crypto-address rule", () => {
     jest.restoreAllMocks();
   });
 
-  function run(postReply: (id: string, text: string) => Promise<any>) {
+  function run(postReply: (id: string, text: string) => Promise<any>, extra: Record<string, unknown> = {}) {
     const mention = makeMention();
     (xClient as any).postReply = postReply;
     return handleMention(mention, {
+      ...extra,
       db,
       parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
       walletResolver: new MockWalletResolver(db),
@@ -400,6 +401,62 @@ describe("X's 7-day crypto-address rule", () => {
     expect(sent[1]).not.toContain('Token: 0x');
     expect(sent[1]).not.toContain('Tx: 0x');
     expect(sent[1]).toMatch(/\/token\/0x[0-9a-fA-F]+$/m);
+  });
+
+  // A degraded reply is a quiet, partial success, which is the kind that stays
+  // unnoticed for weeks. It was a console.warn: nothing reached the operator, so
+  // nothing distinguished "X still refuses addresses" from "the restriction lifted
+  // and everything is fine now". The absence of this alert is the signal.
+  /** The orchestrator calls the monitor at several points in a launch, so a mock
+   *  carrying only the method under test throws partway through and the mention
+   *  never reaches the reply at all -- a green-looking test of nothing. Everything
+   *  not named here is an async no-op. */
+  function recordingMonitor(record: Record<string, string[]>) {
+    return new Proxy({} as any, {
+      get: (_t, prop: string) => async (...args: unknown[]) => {
+        if (record[prop]) record[prop].push(String(args[0]));
+      },
+    });
+  }
+
+  it('alerts that the reply went out without the address', async () => {
+    const degraded: string[] = [];
+    const failed: string[] = [];
+    await run(
+      // X objects to a bare address, not to a link that happens to contain one --
+      // the address-free reply still carries /token/0x..., which is the whole reason
+      // it is useful. A fake that refused any '0x' would refuse the retry too and
+      // test the failure path while appearing to test this one.
+      async (_id, text) => {
+        if (/(Token|Tx): 0x/.test(text)) {
+          throw new Error(
+            'X API 403 posting reply: {"detail":"Crypto addresses are prohibited for the first 7 days after authentication."}'
+          );
+        }
+        return { tweetId: 'ok' };
+      },
+      {
+        monitor: recordingMonitor({ onReplyDegraded: degraded, onReplyFailed: failed }),
+      }
+    );
+    // Alerts are fire-and-forget by design, so that a dead notifier can never fail a
+    // launch. That means they land a tick after the launch returns.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(degraded).toHaveLength(1);
+    // The reply succeeded, so this is not a failure and must not be reported as one:
+    // REPLY_FAILED is critical and means somebody has to answer a person by hand.
+    expect(failed).toHaveLength(0);
+  });
+
+  // A reply that went out intact must be silent. An alert on every successful launch
+  // is an alert everyone learns to ignore, including on the day it matters.
+  it('stays silent when the full reply is accepted', async () => {
+    const degraded: string[] = [];
+    await run(async () => ({ tweetId: 'ok' }), {
+      monitor: recordingMonitor({ onReplyDegraded: degraded }),
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(degraded).toHaveLength(0);
   });
 
   // The retry is for this rule only. Any other failure must not silently drop the addresses.

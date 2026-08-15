@@ -96,6 +96,10 @@ async function replySafely(
       try {
         await deps.xClient.postReply(inReplyToTweetId, withoutAddresses());
         console.warn(`[reply] ${inReplyToTweetId}: addresses refused by X, answered without them`);
+        // Alerted, not just logged. This is the only signal that the reply people
+        // actually want is still not being delivered, and the way we find out the
+        // restriction has lifted is that these stop arriving.
+        notify(deps, (m) => m.onReplyDegraded(inReplyToTweetId, detail));
         return;
       } catch (second: any) {
         console.error(`[reply] address-free retry also failed: ${second?.message ?? second}`);

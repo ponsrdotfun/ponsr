@@ -36,6 +36,10 @@ export type AlertKind =
   /** A launch completed but the person who asked for it could not be told. The token exists
    *  and the fee is spent, so this needs a human to answer them by hand. */
   | 'REPLY_FAILED'
+  /** The reply went out without the token address or the transaction hash, because X
+   *  refuses crypto addresses from a newly authenticated account. Expected at first;
+   *  the way we learn the restriction has lifted is that these stop arriving. */
+  | 'REPLY_DEGRADED'
   /** X's own timeline shows mentions the bot never handled. The sweep is succeeding
    *  and returning nothing, which is indistinguishable from silence without a second
    *  source -- so this is the only alert that can catch a bot gone deaf. */
@@ -429,6 +433,28 @@ export class TreasuryMonitor {
    * system will retry it, so it needs a human. For a rejection the stakes are lower -- nobody
    * is owed a token -- but it still means someone was ignored.
    */
+  /**
+   * The reply went out, but stripped of the token address and the transaction hash.
+   *
+   * X blocks crypto addresses for the first seven days after an account
+   * authenticates, so this is expected at first and then should stop. It is worth
+   * an alert rather than a log line for exactly that reason: the reply people
+   * actually want has never once been delivered, and the only way to learn that
+   * the window has closed is to notice this alert no longer arriving.
+   */
+  async onReplyDegraded(tweetId: string, detail: string, now: Date = new Date()): Promise<void> {
+    await this.notifier.send({
+      kind: 'REPLY_DEGRADED',
+      severity: 'warning',
+      message:
+        'X refused the reply for containing a crypto address, so it was answered without the ' +
+        'token address or the transaction hash. The person was told their token exists but not ' +
+        'where to find it. This stops once X lifts the new-account restriction.',
+      detail: { tweetId, error: detail.slice(0, 300) },
+      at: now.toISOString(),
+    });
+  }
+
   async onReplyFailed(
     tweetId: string,
     detail: string,
