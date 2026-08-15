@@ -15,6 +15,7 @@ import { startReconciliation } from './reconciler';
 import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from './treasuryPolicy';
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
+import { startMentionCrossCheck } from './mentionCrossCheck';
 
 const app = express();
 app.use(express.json());
@@ -224,9 +225,33 @@ async function reportTreasurySetup(): Promise<void> {
   }
 }
 
+/**
+ * The one failure that looks exactly like nobody tweeting.
+ *
+ * The sweep hears through twitterapi.io. When their search stops indexing this
+ * account -- observed on 2026-08-12, and documented by them for new accounts -- it
+ * keeps succeeding and keeps returning nothing, which no amount of error handling
+ * can distinguish from a quiet day. A second source is the only way to know.
+ *
+ * Off unless a bearer token exists, since the check is billed per post read.
+ */
+const crossCheck =
+  config.X_BEARER_TOKEN && config.MENTION_CROSSCHECK_HOURS > 0
+    ? startMentionCrossCheck(
+        { db, bearerToken: config.X_BEARER_TOKEN, botHandle: config.BOT_X_HANDLE },
+        notifier,
+        config.MENTION_CROSSCHECK_HOURS
+      )
+    : null;
+
 const server = app.listen(config.PORT, () => {
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log(`Mention sweep every ${config.MENTION_POLL_SECONDS}s. Treasury balance watch every 15 minutes.`);
+  console.log(
+    crossCheck
+      ? `Cross-checking against X's own mentions every ${config.MENTION_CROSSCHECK_HOURS}h.`
+      : '[crosscheck/warn] disabled -- without it, a mention search that silently stops indexing this account is undetectable.'
+  );
   // Say this at boot rather than leaving it to be discovered when a webhook silently 401s.
   if (!config.WEBHOOK_SECRET) {
     console.error(
@@ -247,6 +272,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\n${signal} received, shutting down.`);
     reconciler.stop();
     treasuryWatch.stop();
+    if (crossCheck) crossCheck.stop();
     server.close(() => {
       db.close();
       process.exit(0);

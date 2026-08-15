@@ -43,6 +43,14 @@ const ConfigSchema = z.object({
   // account, which needs user context. It exists because /2/usage/tweets refuses OAuth 1.0a
   // and is the only way to read the project's post quota.
   X_BEARER_TOKEN: z.string().optional(),
+  /**
+   * How often to check the bot's mention sweep against X's own timeline, in hours.
+   *
+   * Billed per post read and capped at five posts a check, so six-hourly costs
+   * roughly $0.10 a day. Widening it spends less and finds a deaf bot later.
+   * Setting it to 0 turns the check off entirely.
+   */
+  MENTION_CROSSCHECK_HOURS: z.coerce.number().min(0).default(6),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('anthropic/claude-haiku-4.5'),

@@ -36,6 +36,10 @@ export type AlertKind =
   /** A launch completed but the person who asked for it could not be told. The token exists
    *  and the fee is spent, so this needs a human to answer them by hand. */
   | 'REPLY_FAILED'
+  /** X's own timeline shows mentions the bot never handled. The sweep is succeeding
+   *  and returning nothing, which is indistinguishable from silence without a second
+   *  source -- so this is the only alert that can catch a bot gone deaf. */
+  | 'MENTION_MISSED'
   /** The mention sweep has failed repeatedly. Nothing else reports this: the process stays
    *  up, /health keeps returning 200, and the bot simply stops hearing anyone. Running out of
    *  twitterapi.io credit looks exactly like this. */
