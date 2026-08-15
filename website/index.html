@@ -2307,6 +2307,12 @@
       'still holding. no notes.',
       'diamond hands, verified on-chain.',
       'sold nothing. respect.'
+    ],
+    moved: [
+      'sold nothing. holds nothing. impressive.',
+      'the bag walked out on its own.',
+      'moved it all somewhere else. brave.',
+      'not sold. not held. schrodinger hands.'
     ]
   };
 
@@ -2326,12 +2332,26 @@
       'Sold nothing. Ponsr checked.',
       'Diamond hands, and the chain agrees.',
       'Still holding every one. Ponsr has the receipts.'
+    ],
+    moved: [
+      'Sold nothing, hold nothing. Ponsr noticed.',
+      'My bag left without selling. Ponsr has the receipts.',
+      'Ponsr says I moved the lot. It is not wrong.'
     ]
   };
 
-  function roastKind(received, sent) {
-    if (sent === 0n) return 'diamond';
-    return sent >= received ? 'sold_all' : 'sold_some';
+  /**
+   * Which story the card tells.
+   *
+   * Selling is not the only way a bag leaves a wallet. Someone who moved their
+   * tokens to another address sold nothing, and calling them a diamond hand while
+   * they hold zero is a card that contradicts its own figures -- which is exactly
+   * what shipped first, on a wallet that had transferred the lot away.
+   */
+  function roastKind(received, sold, balance) {
+    if (sold > 0n) return sold >= received ? 'sold_all' : 'sold_some';
+    if (balance === 0n) return 'moved';
+    return 'diamond';
   }
   function pickRandom(list) { return list[Math.floor(Math.random() * list.length)]; }
 
@@ -2442,83 +2462,120 @@
    * stable per token; this one is about a person's own history and changes every
    * time, because the joke is the point. Only chain-derived figures appear on it.
    */
+  /** Bold text with a heavy outline -- the meme caption look, and the only reason
+   *  words stay readable over a busy background. */
+  function memeText(x, text, cx, y, size, align) {
+    x.font = '900 ' + size + 'px Impact, "Arial Black", Haettenschweiler, sans-serif';
+    x.textAlign = align || 'center';
+    x.textBaseline = 'alphabetic';
+    x.lineJoin = 'round';
+    x.miterLimit = 2;
+    x.strokeStyle = '#000000';
+    x.lineWidth = Math.max(4, size * 0.14);
+    x.strokeText(text, cx, y);
+    x.fillStyle = '#ffffff';
+    x.fillText(text, cx, y);
+  }
+
+  /** Wraps to a width using the meme font, so long roasts stack instead of running
+   *  off the card. */
+  function memeLines(x, text, size, maxWidth) {
+    x.font = '900 ' + size + 'px Impact, "Arial Black", Haettenschweiler, sans-serif';
+    var words = text.split(' '), line = '', out = [];
+    for (var i = 0; i < words.length; i++) {
+      var trial = line ? line + ' ' + words[i] : words[i];
+      if (x.measureText(trial).width > maxWidth && line) { out.push(line); line = words[i]; }
+      else line = trial;
+    }
+    out.push(line);
+    return out;
+  }
+
   function buildWhatIfCard(t, wi) {
     var W = 1200, H = 675;
     var c = document.createElement('canvas');
     c.width = W; c.height = H;
     var x = c.getContext('2d');
-    var kind = roastKind(wi.received, wi.sold);
-    var seed = seedFrom((t.address || t.symbol).toLowerCase());
-    var hue = kind === 'diamond' ? 150 : 8;
+    var kind = roastKind(wi.received, wi.sold, wi.balance);
+    var hue = kind === 'diamond' ? 148 : (kind === 'moved' ? 38 : 6);
 
-    var g = x.createLinearGradient(0, 0, W, H);
-    g.addColorStop(0, 'hsl(' + hue + ' 40% 18%)');
-    g.addColorStop(1, '#07080a');
-    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    // Flat, saturated ground. The old card used a soft gradient that read as a
+    // dashboard; a meme wants one loud colour and high contrast.
+    x.fillStyle = 'hsl(' + hue + ' 55% 22%)';
+    x.fillRect(0, 0, W, H);
 
-    x.globalAlpha = 0.15;
-    x.fillStyle = 'hsl(' + hue + ' 62% 58%)';
-    x.beginPath(); x.arc(250, 150, 300 + (seed % 90), 0, Math.PI * 2); x.fill();
-    x.globalAlpha = 1;
-
-    // The face does the teasing. Selling the lot gets the tongue, selling some gets
-    // dead eyes, holding gets money eyes -- the picture carries the joke, so the
-    // card still reads at thumbnail size where nobody reads the words.
-    var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
-    drawMascot(x, W - 250, H - 250, 380, mood, kind === 'diamond' ? -6 : 8);
-
-    x.textAlign = 'left';
-    x.textBaseline = 'alphabetic';
-
-    var roast = pickRandom(ROAST[kind]);
-    x.fillStyle = '#ffffff';
-    x.font = '600 62px Fraunces, Georgia, serif';
-    // Wrapped by hand: the roast lines are short, but a long one must not run off
-    // the card and take the number with it.
-    var words = roast.split(' '), lineText = '', lines = [];
-    for (var i = 0; i < words.length; i++) {
-      var trial = lineText ? lineText + ' ' + words[i] : words[i];
-      if (x.measureText(trial).width > 620 && lineText) { lines.push(lineText); lineText = words[i]; }
-      else { lineText = trial; }
+    // Sunburst behind the mascot.
+    var bx = W - 300, by = H / 2;
+    x.save();
+    x.translate(bx, by);
+    for (var i = 0; i < 24; i++) {
+      x.rotate(Math.PI * 2 / 24);
+      x.fillStyle = i % 2 ? 'hsla(' + hue + ', 70%, 55%, 0.20)' : 'hsla(' + hue + ', 70%, 62%, 0.07)';
+      x.beginPath();
+      x.moveTo(0, 0);
+      x.lineTo(1500, -120);
+      x.lineTo(1500, 120);
+      x.closePath();
+      x.fill();
     }
-    lines.push(lineText);
-    for (var j = 0; j < lines.length; j++) x.fillText(lines[j], 72, 150 + j * 70);
+    x.restore();
 
-    var afterRoast = 150 + lines.length * 70;
+    // Halftone, the comic-print texture that makes flat colour look printed.
+    x.fillStyle = 'rgba(0,0,0,0.16)';
+    for (var gy = 0; gy < H; gy += 18) {
+      for (var gx = 0; gx < W; gx += 18) {
+        var d = Math.hypot(gx - bx, gy - by) / 900;
+        var r = Math.max(0, 3.6 - d * 3.6);
+        if (r > 0.3) { x.beginPath(); x.arc(gx, gy, r, 0, Math.PI * 2); x.fill(); }
+      }
+    }
 
-    x.fillStyle = 'rgba(255,255,255,0.55)';
-    x.font = '600 22px ui-monospace, SFMono-Regular, Menlo, monospace';
-    x.fillText('IF YOU NEVER SOLD  ·  $' + t.symbol, 72, afterRoast + 40);
+    var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
+    drawMascot(x, bx + 40, by + 60, 460, mood, kind === 'diamond' ? -7 : 9);
 
+    // Speech bubble, so the roast comes OUT of the character rather than sitting
+    // in a corner next to it.
+    var roast = pickRandom(ROAST[kind]).toUpperCase();
+    var lines = memeLines(x, roast, 58, 470);
+    var bw = 540, bh = 70 + lines.length * 62, bxx = 60, byy = 90;
     x.fillStyle = '#ffffff';
-    x.font = '600 96px Fraunces, Georgia, serif';
-    x.fillText(wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', 72, afterRoast + 140);
+    x.strokeStyle = '#000000';
+    x.lineWidth = 7;
+    x.beginPath();
+    if (x.roundRect) x.roundRect(bxx, byy, bw, bh, 26); else x.rect(bxx, byy, bw, bh);
+    x.fill(); x.stroke();
+    x.beginPath();
+    x.moveTo(bxx + bw - 90, byy + bh - 8);
+    x.lineTo(bxx + bw + 70, byy + bh + 66);
+    x.lineTo(bxx + bw - 150, byy + bh - 8);
+    x.closePath();
+    x.fill(); x.stroke();
+
+    x.fillStyle = '#0b0c0e';
+    x.textAlign = 'left';
+    for (var j = 0; j < lines.length; j++) {
+      x.font = '900 58px Impact, "Arial Black", Haettenschweiler, sans-serif';
+      x.fillText(lines[j], bxx + 34, byy + 74 + j * 62);
+    }
+
+    // The number, in meme caption style rather than dashboard style.
+    var valueY = byy + bh + 150;
+    memeText(x, 'IF YOU NEVER SOLD $' + t.symbol, 60, valueY - 74, 30, 'left');
+    memeText(x, wi.priceEth ? fmtEth(Number(wi.received) / 1e18 * wi.priceEth) : '—', 60, valueY, 96, 'left');
 
     var stats = [
       ['EVER HELD', fmtTokens(Number(wi.received) / 1e18)],
       ['SOLD', fmtTokens(Number(wi.sold) / 1e18)],
       ['STILL HOLD', fmtTokens(Number(wi.balance) / 1e18)]
     ];
-    var sx = 72;
+    var sx = 60;
     for (var k = 0; k < stats.length; k++) {
-      x.fillStyle = 'rgba(255,255,255,0.5)';
-      x.font = '500 18px ui-monospace, SFMono-Regular, Menlo, monospace';
-      x.fillText(stats[k][0], sx, afterRoast + 200);
-      x.fillStyle = 'rgba(255,255,255,0.92)';
-      x.font = '600 32px Fraunces, Georgia, serif';
-      x.fillText(stats[k][1], sx, afterRoast + 240);
-      sx += 210;
+      memeText(x, stats[k][0], sx, valueY + 56, 22, 'left');
+      memeText(x, stats[k][1], sx, valueY + 96, 34, 'left');
+      sx += 200;
     }
 
-    x.fillStyle = 'rgba(255,255,255,0.30)';
-    x.fillRect(72, H - 108, 44, 2);
-    x.fillStyle = 'rgba(255,255,255,0.92)';
-    x.font = '600 30px Fraunces, Georgia, serif';
-    x.fillText('Ponsr', 72, H - 58);
-    x.fillStyle = 'rgba(255,255,255,0.55)';
-    x.font = '500 21px ui-monospace, SFMono-Regular, Menlo, monospace';
-    x.fillText('ponsr.fun', 176, H - 59);
-
+    memeText(x, 'PONSR.FUN', 60, H - 40, 30, 'left');
     return { canvas: c, kind: kind };
   }
 
