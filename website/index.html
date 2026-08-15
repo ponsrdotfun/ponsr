@@ -614,6 +614,12 @@
     box-shadow: var(--lift-3); }
   .tp-whatif-lead { color: var(--mute); font-size: 15px; line-height: 1.65; max-width: 62ch; }
   .tp-whatif-foot { color: var(--mute); font-size: 12.5px; line-height: 1.6; margin: 14px 0 0; max-width: 62ch; }
+  /* A class selector beats the browser's own [hidden] { display: none }, so any
+     element given a display here stays visible when hidden is set. .tp-locked did
+     exactly that: the figures appeared and the Connect button stayed on screen
+     underneath them, frozen on "Reading the chain…". Declared once, globally, so
+     the next element with a display rule does not repeat it. */
+  [hidden] { display: none !important; }
   .tp-locked { display: flex; align-items: center; gap: 16px; margin-top: 24px; flex-wrap: wrap; }
   .tp-demo-note { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
   .tp-figures { margin-top: 26px; animation: tpIn 0.45s var(--ease-expo-out) both; }
@@ -1842,8 +1848,27 @@
     return (t && t.address) ? t.address : '';
   }
 
+  /**
+   * Re-locks the what-if panel for a newly opened token.
+   *
+   * Called once at the top of renderTokenPage, before any branch. It used to be
+   * duplicated at two exits, and the copy that ran in production -- the early
+   * return taken whenever a token has no price history, which is every token --
+   * only re-locked the panel and left the button disabled and reading "Reading the
+   * chain…" from the token before it.
+   */
+  function resetWhatIf() {
+    document.getElementById('tp-locked').hidden = false;
+    document.getElementById('tp-figures').hidden = true;
+    var connectBtn = document.getElementById('tp-connect');
+    connectBtn.disabled = false;
+    connectBtn.querySelector('span').textContent = 'Connect wallet';
+    setWalletNote('Read-only. Nothing is signed and no transaction is sent.');
+  }
+
   function renderTokenPage(t) {
     currentToken = t;
+    resetWhatIf();
     var art = document.getElementById('tp-art');
     art.style.viewTransitionName = 'token-hero'; // morph target for the card's art
     art.innerHTML = coverArt(t, 'tp');
@@ -1878,8 +1903,6 @@
       // Same reasoning as the change chip: a flat line is a picture of a claim.
       if (chartEl) chartEl.innerHTML = '';
       if (chartWrap) chartWrap.hidden = true;
-      document.getElementById('tp-locked').hidden = false;
-      document.getElementById('tp-figures').hidden = true;
       return;
     }
     if (chartWrap) chartWrap.hidden = false;
@@ -1909,10 +1932,6 @@
       requestAnimationFrame(function () { svg.classList.add('drawn'); });
     }
 
-    // The what-if figures re-lock for every token: they are per-wallet data and
-    // must not carry over from the previously viewed token.
-    document.getElementById('tp-locked').hidden = false;
-    document.getElementById('tp-figures').hidden = true;
   }
 
   document.getElementById('tp-back').addEventListener('click', function (e) { e.preventDefault(); goToExplore(); });

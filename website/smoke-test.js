@@ -186,6 +186,31 @@ async function run() {
     doc.getElementById('tp-whatif').textContent.indexOf('$') === -1,
     'no $ in panel']);
 
+  // Two bugs the panel shipped with, both invisible to a passing test that only
+  // checked the figures appeared.
+  //
+  // 1. `.tp-locked { display: flex }` outranks the browser's [hidden] rule, so
+  //    setting hidden left the Connect button on screen underneath the results,
+  //    frozen mid-flight.
+  const lockedEl = doc.getElementById('tp-locked');
+  lockedEl.hidden = true;
+  const lockedDisplay = window.getComputedStyle(lockedEl).display;
+  checks.push(['[hidden] actually hides the connect panel',
+    lockedDisplay === 'none', 'computed display: ' + lockedDisplay]);
+  lockedEl.hidden = false;
+
+  // 2. Opening another token re-locks the panel, but the button kept the previous
+  //    token's disabled state and label, so it read "Reading the chain…" forever.
+  doc.getElementById('tp-connect').disabled = true;
+  doc.querySelector('#tp-connect span').textContent = 'Reading the chain…';
+  window.history.replaceState({}, '', '/token/0x' + 'bb'.repeat(20));
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  checks.push(['opening another token resets the connect button',
+    doc.getElementById('tp-connect').disabled === false &&
+      doc.querySelector('#tp-connect span').textContent === 'Connect wallet',
+    doc.querySelector('#tp-connect span').textContent]);
+
   // The share button builds a PNG card on canvas. Where canvas is unavailable -- as
   // here, and in any browser that blocks it -- it must still share, by falling back
   // to the link. A share button that silently does nothing is worse than a plain one.
