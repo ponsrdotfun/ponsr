@@ -40,6 +40,11 @@ export type AlertKind =
    *  refuses crypto addresses from a newly authenticated account. Expected at first;
    *  the way we learn the restriction has lifted is that these stop arriving. */
   | 'REPLY_DEGRADED'
+  /** pons has switched launching off on their factory, so no launch can succeed. It is
+   *  their switch, not ours, and nothing else reports it: the process stays up, /health
+   *  answers ok, and a bot with no mentions looks identical to a bot that cannot launch. */
+  | 'LAUNCHPAD_CLOSED'
+  | 'LAUNCHPAD_REOPENED'
   /** X's own timeline shows mentions the bot never handled. The sweep is succeeding
    *  and returning nothing, which is indistinguishable from silence without a second
    *  source -- so this is the only alert that can catch a bot gone deaf. */

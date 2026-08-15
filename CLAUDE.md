@@ -61,9 +61,23 @@ The v1 factory and locker are **verified with full source** on
 `api.blockscout.com`, the Pro aggregator, which does — that one wrong URL is why this looked
 blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi/`.
 
-- **Target v1.** `launchEnabled()` is `true`, one launch config is live (WETH pair, 4.2 ETH
-  graduation), and no whitelisting is needed — the whitelist only applies when launching is
-  globally off. v2 is deployed but closed. Open question #17 closed.
+- **Target v1.** One launch config is live (WETH pair, 4.2 ETH graduation). Open question
+  #17 closed.
+
+  **`launchEnabled()` is `false` as of 2026-08-15, on v1 AND v2.** It was `true` when this
+  was written, and both real launches happened while it was. pons switched it off at
+  **2026-08-12 19:42 UTC** — recorded on-chain by `LaunchEnabledUpdated(false)` on the
+  factory — and **nobody has launched anything through pons since**, so this is a
+  platform-wide pause, not something aimed at Ponsr. No whitelist has been granted to
+  anyone in that window either.
+
+  Consequences, none of which are fixable in this codebase: **the bot cannot launch until
+  pons flips it back**, or until this treasury is whitelisted, which needs pons to act.
+  The bot handles it correctly — `validator.ts` reads readiness live, refuses with
+  `LAUNCHPAD_UNAVAILABLE` before any money moves, and tells the person the cause is
+  upstream — so nothing is at risk; it simply cannot do its job. `launchpadWatch.ts` now
+  alerts when this flips either way, because for three days nothing did, and a closed
+  launchpad with no traffic looks exactly like an open one with no traffic.
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
   But they arrive as **ERC20** (the launched token + WETH), and the old splitter handled only

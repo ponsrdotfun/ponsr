@@ -17,6 +17,7 @@ import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
 import { buildStatus, statusHttpCode } from './statusReport';
+import { startLaunchpadWatch } from './launchpadWatch';
 
 const app = express();
 app.use(express.json());
@@ -293,6 +294,27 @@ const crossCheck =
       )
     : null;
 
+/**
+ * The switch that is not ours to hold.
+ *
+ * pons turned launching off on 2026-08-12 at 19:42 UTC, on both factories, and
+ * nothing here noticed for three days. The bot behaved correctly throughout --
+ * the readiness check refuses before any money moves, and the person is told the
+ * cause is upstream -- but a closed launchpad with no traffic is indistinguishable
+ * from an open one with no traffic, so nobody found out. It runs on a timer for
+ * exactly that reason: waiting for a mention would mean waiting for the failure.
+ */
+const launchpadWatch = startLaunchpadWatch(
+  {
+    getLaunchReadiness: async () => {
+      const r = await deps.getLaunchReadiness();
+      return { launchEnabled: r.launchEnabled, whitelisted: r.whitelisted };
+    },
+  },
+  notifier,
+  15
+);
+
 const server = app.listen(config.PORT, () => {
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log(`Mention sweep every ${config.MENTION_POLL_SECONDS}s. Treasury balance watch every 15 minutes.`);
@@ -321,6 +343,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\n${signal} received, shutting down.`);
     reconciler.stop();
     treasuryWatch.stop();
+    launchpadWatch.stop();
     if (crossCheck) crossCheck.stop();
     server.close(() => {
       db.close();
