@@ -2178,12 +2178,96 @@
      Ponsr's at a glance, before anyone reads a word of it. Preloaded once, and the
      card still renders without it if the image fails -- a missing robot is a
      plainer card, not a broken share. */
-  var mascot = null;
+  var mascot = null;      // full art, eyes included
+  var mascotBase = null;  // eyes erased, so expressions can be drawn on
   (function () {
-    var img = new Image();
-    img.onload = function () { mascot = img; };
-    img.src = '/logo-transparent.png';
+    var a = new Image();
+    a.onload = function () { mascot = a; };
+    a.src = '/logo-transparent.png';
+    var b = new Image();
+    b.onload = function () { mascotBase = b; };
+    b.src = '/logo-noeyes.png';
   })();
+
+  /* Eye geometry measured from the original art and already used by the hero bot's
+     CSS (.eye-l / .eye-r). Reused here so a drawn expression sits exactly where the
+     erased eyes were, rather than being eyeballed a second time. */
+  var EYE = { lx: 0.345, rx: 0.654, y: 0.559, w: 0.087, h: 0.142 };
+
+  /**
+   * Draws the mascot with an expression.
+   *
+   * The face comes from logo-noeyes.png -- the art with its eyes erased -- so the
+   * eyes are ours to draw, which is what makes a set of moods possible from one
+   * asset. Everything here is original: pasting the mascot's face onto a known meme
+   * would be someone else's photograph carrying this project's watermark, which is
+   * a copyright problem wearing a joke's clothes.
+   */
+  function drawMascot(x, cx, cy, h, mood, tilt) {
+    var img = mascotBase || mascot;
+    if (!img) return;
+    var w = h * (img.width / img.height);
+    x.save();
+    x.translate(cx, cy);
+    x.rotate((tilt || 0) * Math.PI / 180);
+    x.shadowColor = 'rgba(0,0,0,0.45)';
+    x.shadowBlur = 40;
+    x.shadowOffsetY = 12;
+    x.drawImage(img, -w / 2, -h / 2, w, h);
+    x.shadowColor = 'transparent';
+    x.shadowBlur = 0;
+    x.shadowOffsetY = 0;
+
+    if (mascotBase) {
+      var ew = w * EYE.w, eh = h * EYE.h;
+      var ey = -h / 2 + h * EYE.y;
+      var eyes = [[-w / 2 + w * EYE.lx, ey], [-w / 2 + w * EYE.rx, ey]];
+      x.lineCap = 'round';
+      for (var i = 0; i < 2; i++) {
+        var px = eyes[i][0], py = eyes[i][1];
+        if (mood === 'dead') {
+          x.strokeStyle = '#5FE0A2'; x.lineWidth = Math.max(3, ew * 0.34);
+          var r = ew * 0.75;
+          x.beginPath();
+          x.moveTo(px - r, py - r); x.lineTo(px + r, py + r);
+          x.moveTo(px + r, py - r); x.lineTo(px - r, py + r);
+          x.stroke();
+        } else if (mood === 'happy') {
+          x.strokeStyle = '#5FE0A2'; x.lineWidth = Math.max(3, ew * 0.34);
+          x.beginPath();
+          x.arc(px, py + eh * 0.18, ew * 0.78, Math.PI * 1.15, Math.PI * 1.85);
+          x.stroke();
+        } else if (mood === 'money') {
+          x.fillStyle = '#5FE0A2';
+          x.font = '700 ' + Math.round(eh * 1.15) + 'px ui-monospace, Menlo, monospace';
+          x.textAlign = 'center'; x.textBaseline = 'middle';
+          x.fillText('$', px, py);
+        } else {
+          // The default: the same rounded pill the site animates, plus its
+          // specular pixel, so a card and the live bot look like one character.
+          x.fillStyle = '#43C98C';
+          var rr = ew * 0.5;
+          x.beginPath();
+          if (x.roundRect) x.roundRect(px - ew / 2, py - eh / 2, ew, eh, rr);
+          else x.rect(px - ew / 2, py - eh / 2, ew, eh);
+          x.fill();
+          x.fillStyle = 'rgba(255,255,255,0.92)';
+          x.fillRect(px - ew * 0.3, py - eh * 0.36, ew * 0.26, eh * 0.17);
+        }
+      }
+      // Tongue out. The cheapest way to make a robot look like it is taunting you.
+      if (mood === 'tongue') {
+        x.fillStyle = '#ff5f7a';
+        var tw = w * 0.16, th = h * 0.10;
+        var tx = -tw / 2, ty = -h / 2 + h * 0.70;
+        x.beginPath();
+        if (x.roundRect) x.roundRect(tx, ty, tw, th, [0, 0, tw * 0.5, tw * 0.5]);
+        else x.rect(tx, ty, tw, th);
+        x.fill();
+      }
+    }
+    x.restore();
+  }
 
   /* ---------------------------------------------------------------------------
      What-if share: the roast.
@@ -2300,18 +2384,7 @@
     // The mascot, large and to the right, tilted a little so it reads as a
     // character rather than a logo dropped into a corner. The tilt is seeded, so
     // each token's card is its own without ever being a different card.
-    if (mascot) {
-      var mh = 430;
-      var mw = mh * (mascot.width / mascot.height);
-      x.save();
-      x.translate(W - mw / 2 - 70, H / 2 + 40);
-      x.rotate(((seed % 14) - 7) * Math.PI / 180);
-      x.shadowColor = 'rgba(0,0,0,0.45)';
-      x.shadowBlur = 40;
-      x.shadowOffsetY = 12;
-      x.drawImage(mascot, -mw / 2, -mh / 2, mw, mh);
-      x.restore();
-    }
+    drawMascot(x, W - 290, H / 2 + 40, 430, 'normal', (seed % 14) - 7);
 
     x.textAlign = 'left';
     x.fillStyle = 'rgba(255,255,255,0.72)';
@@ -2388,15 +2461,11 @@
     x.beginPath(); x.arc(250, 150, 300 + (seed % 90), 0, Math.PI * 2); x.fill();
     x.globalAlpha = 1;
 
-    if (mascot) {
-      var mh = 360, mw = mh * (mascot.width / mascot.height);
-      x.save();
-      x.translate(W - mw / 2 - 80, H - mh / 2 - 70);
-      x.rotate((kind === 'diamond' ? -6 : 8) * Math.PI / 180);
-      x.shadowColor = 'rgba(0,0,0,0.45)'; x.shadowBlur = 40; x.shadowOffsetY = 12;
-      x.drawImage(mascot, -mw / 2, -mh / 2, mw, mh);
-      x.restore();
-    }
+    // The face does the teasing. Selling the lot gets the tongue, selling some gets
+    // dead eyes, holding gets money eyes -- the picture carries the joke, so the
+    // card still reads at thumbnail size where nobody reads the words.
+    var mood = kind === 'diamond' ? 'money' : (kind === 'sold_all' ? 'tongue' : 'dead');
+    drawMascot(x, W - 250, H - 250, 380, mood, kind === 'diamond' ? -6 : 8);
 
     x.textAlign = 'left';
     x.textBaseline = 'alphabetic';
