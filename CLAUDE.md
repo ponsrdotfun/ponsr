@@ -9,9 +9,12 @@ survives in historical notes.
 
 ## Read these first, in this order
 
-1. **`docs/pons-v2-findings.md` — start at §9.** Sections 1–8 are what was believed from
-   documentation; §9 onward is what the verified contracts and two real mainnet launches
-   actually showed. Where they disagree, §9 wins. §9.10 is an incident report worth reading
+1. **`docs/pons-v2-findings.md` — start at §10, then §9.** Sections 1–8 are what was believed
+   from documentation; §9 onward is what the verified contracts and two real mainnet launches
+   actually showed, and **§10 (2026-08-15) supersedes §7 outright** — v2 now approves eight
+   pairing assets, six of them tokenised stocks, and both the ETH exemption and the whitelist
+   bypass are settled from source rather than inferred. Where they disagree, the later section
+   wins. §9.10 is an incident report worth reading
    before touching the deploy path.
 2. `BUILD-STATUS.md` — what's real/tested vs. a clearly-marked stub right now.
 3. `docs/action-checklist.md` — everything that requires the owner's direct action (account
