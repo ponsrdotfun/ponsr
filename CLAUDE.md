@@ -87,8 +87,14 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   wallet all still denied — a leak of the bot's key costs launches, not the treasury.
 
   **Before opening v2 to users, run one self-dealt launch through `phase-b-launch.ts` first.**
-  `FeeSplitterV2` has never met a real fee; it passes 12 tests against a mock built from the
-  escrow's own source, which is not the same thing. See §10.7 of the findings.
+  `FeeSplitterV2` has never met a real fee on mainnet. It does pass a full rehearsal on a
+  forked mainnet — `FORK=1 … npx hardhat run --no-compile scripts/fork-rehearsal.js` launches
+  against the real factory paired with AAPL, buys with real AAPL, and claims the fee back out
+  95/5 — so the path is proven against the actual contracts. That fork also settles three
+  things: the chain is on **Cancun**, fees are credited to the escrow per trade rather than
+  swept, and the split reads 94.99/5.00 because the creator's share is floored. But
+  impersonation is what mainnet will not allow, so the rehearsal de-risks the first launch
+  rather than replacing it. See §10.7 of the findings.
 
   **`launchEnabled()` is `false` as of 2026-08-18, on v1 AND v2.** It was `true` when this
   was written, and both real launches happened while it was. pons switched it off at
