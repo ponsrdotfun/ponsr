@@ -98,6 +98,33 @@ const ConfigSchema = z.object({
   PONS_LAUNCH_CONFIG_ID: z.coerce.bigint().default(0n),
   PONS_DEX_ID: z.coerce.bigint().default(0n),
 
+  /**
+   * Which factory to launch through.
+   *
+   * v1 is what both real launches used and what the fee path was proven against. v2
+   * adds the thing v1 cannot do at all: a launch priced, funded and graduated in an
+   * approved asset other than ETH -- eight of them today, six tokenised stocks.
+   *
+   * `launchToken` is a DIFFERENT function on v2, not v1 with an argument added, so
+   * this is not a cosmetic switch: it selects a different encoder, a different ABI
+   * and a different readiness check. Both factories have launching switched off
+   * right now, so neither works until pons acts either way.
+   */
+  PONS_FACTORY_VERSION: z.enum(['v1', 'v2']).default('v1'),
+  PONS_V2_FACTORY_ADDRESS: z.string().default('0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8'),
+  /**
+   * Where to begin scanning for `PairTokenApprovalUpdated`.
+   *
+   * The approvals sit around block 23.58M, so this is a little below them. Set it
+   * too high and an approval is missed, which shows up as the bot quietly refusing
+   * an asset pons does support -- indistinguishable from never having approved it.
+   * Set it to 0 and every refresh scans 370 windows for nothing.
+   */
+  PONS_V2_APPROVALS_FROM_BLOCK: z.coerce.number().default(23_400_000),
+  /** What a launch pairs against when the person did not ask for anything. ETH keeps
+   *  today's behaviour, and is the only pairing that needs no approval. */
+  DEFAULT_PAIR_ASSET: z.string().default('ETH'),
+
   // -- Wallet-per-user (Privy). @privy-io/node -- server-auth is deprecated. --
   PRIVY_APP_ID: z.string().optional(),
   PRIVY_APP_SECRET: z.string().optional(),

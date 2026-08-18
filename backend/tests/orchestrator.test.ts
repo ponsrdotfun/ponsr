@@ -470,3 +470,142 @@ describe("X's 7-day crypto-address rule", () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+/**
+ * Pairing a launch against something other than ETH.
+ *
+ * The asset decides what every buyer spends, what the graduation target is counted
+ * in, and what the creator and treasury are paid in. It is fixed at launch and
+ * nobody can change it afterwards, so the behaviour that matters most here is what
+ * happens when we cannot honour the request: it must be a refusal, never a quiet
+ * substitution.
+ */
+describe('launching paired against an approved asset', () => {
+  const AAPL = {
+    address: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
+    symbol: 'AAPL',
+    name: 'Apple • Robinhood Token',
+    decimals: 18,
+    graduationThreshold: 242n * 10n ** 17n,
+  };
+  const ETH_ASSET = {
+    address: '0x0000000000000000000000000000000000000000',
+    symbol: 'ETH', name: 'Ether', decimals: 18, graduationThreshold: null,
+  };
+
+  let db: Db;
+  let xClient: MockXClient;
+  let treasurySigner: FakeTreasurySigner;
+
+  beforeEach(() => {
+    db = freshDb();
+    xClient = new MockXClient();
+    treasurySigner = new FakeTreasurySigner();
+  });
+  afterEach(() => db.close());
+
+  /** Records what it was asked to build, so the assertions are about the request the
+   *  orchestrator made rather than about calldata bytes tested elsewhere. */
+  function recordingTarget(supportsPairing = true) {
+    const built: any[] = [];
+    return {
+      built,
+      target: {
+        version: 'v2' as const,
+        factoryAddress: '0x' + '77'.repeat(20),
+        supportsPairing,
+        // Real v1-shaped calldata, because FakeTreasurySigner decodes what it is
+        // given to synthesise a receipt. What is under test here is the request the
+        // orchestrator makes, not the encoding -- that has its own tests -- so the
+        // bytes only need to be decodable.
+        build: async (req: any, fee: bigint) => {
+          built.push(req);
+          const data = new ethers.Interface(PONS_FACTORY_ABI).encodeFunctionData('launchToken', [
+            { name: req.tokenName, symbol: req.tokenSymbol, logo: '', description: '',
+              socials: { twitter: '', telegram: '', discord: '', website: '', farcaster: '' },
+              feeWallet: req.splitterAddress },
+            0n, 0n, '0x' + '00'.repeat(32),
+          ]);
+          return { to: '0x' + '77'.repeat(20), data, value: fee };
+        },
+        extractToken: () => '0x' + '44'.repeat(20),
+      },
+    };
+  }
+
+  function run(pairWith: string | null, extra: Record<string, unknown> = {}) {
+    const mention = makeMention();
+    const intent = { ...HIGH_CONFIDENCE_MOON, pairWith };
+    return handleMention(mention, {
+      db,
+      parser: new MockParser(new Map([[mention.text, intent]])),
+      walletResolver: new MockWalletResolver(db),
+      xClient,
+      treasurySigner,
+      provider: {} as any,
+      getLiveFeeWei: async () => 500_000_000_000_000n,
+      getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+      ...extra,
+    } as any);
+  }
+
+  it('launches against the asset that was asked for', async () => {
+    const { built, target } = recordingTarget();
+    const outcome = await run('AAPL', {
+      launchTarget: target,
+      pairAssets: { resolve: async () => ({ ok: true, asset: AAPL }) },
+    });
+    expect(outcome.kind).toBe('launched');
+    expect(built).toHaveLength(1);
+    expect(built[0].pairAsset.symbol).toBe('AAPL');
+  });
+
+  // Silence here would be the worst outcome: the person gets a token priced in
+  // something they did not choose, permanently, and is told it went fine.
+  it('refuses an unapproved asset instead of falling back to ETH', async () => {
+    const { built, target } = recordingTarget();
+    const outcome = await run('MSFT', {
+      launchTarget: target,
+      pairAssets: {
+        resolve: async () => ({ ok: false, reason: 'UNKNOWN', detail: 'MSFT is not an approved pairing asset (available: AAPL, TSLA)' }),
+      },
+    });
+    expect(outcome).toMatchObject({ kind: 'rejected', reason: 'PAIR_ASSET_UNAVAILABLE' });
+    expect(built).toHaveLength(0);
+    expect(treasurySigner.sentTransactions).toHaveLength(0); // not even the splitter
+    expect(xClient.sentReplies[0].text).toContain('AAPL');
+  });
+
+  // v1 takes its pairing from the launch config, so "pair it with AAPL" has no
+  // honest answer there except no.
+  it('refuses a pairing the factory cannot honour', async () => {
+    const { target } = recordingTarget(false);
+    const outcome = await run('AAPL', {
+      launchTarget: target,
+      pairAssets: { resolve: async () => ({ ok: true, asset: AAPL }) },
+    });
+    expect(outcome).toMatchObject({ kind: 'rejected', reason: 'PAIR_ASSET_UNAVAILABLE' });
+    expect(treasurySigner.sentTransactions).toHaveLength(0);
+  });
+
+  // The ordinary case, and the one that must not regress: no pairing asked for is
+  // ETH, which is exactly what happened before any of this existed.
+  it('defaults to ETH when nothing was asked for', async () => {
+    const { built, target } = recordingTarget();
+    const outcome = await run(null, {
+      launchTarget: target,
+      pairAssets: { resolve: async () => { throw new Error('must not be consulted'); } },
+    });
+    expect(outcome.kind).toBe('launched');
+    expect(built[0].pairAsset).toMatchObject({ address: ETH_ASSET.address, symbol: 'ETH' });
+  });
+
+  // A deployment with no registry configured must still launch, against ETH.
+  it('launches against ETH when no registry is wired at all', async () => {
+    const { built, target } = recordingTarget();
+    const outcome = await run('AAPL', { launchTarget: target });
+    expect(outcome.kind).toBe('launched');
+    expect(built[0].pairAsset.symbol).toBe('ETH');
+  });
+});

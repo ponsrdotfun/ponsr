@@ -24,6 +24,7 @@ function deps(over: Partial<StatusDeps> = {}): StatusDeps {
     parserRoute: 'OpenRouter',
     alertsRoute: 'Telegram',
     crossCheckHours: 6,
+    factoryVersion: 'v1',
     ...over,
   };
 }
@@ -134,6 +135,36 @@ describe('buildStatus', () => {
       deps({ coldAddressSet: false, getChainId: async () => { throw new Error('x'); } })
     );
     expect(r.state).toBe('down');
+  });
+
+  // "AAPL is not approved" and "the bot never managed to read the approved set"
+  // produce exactly the same refusal to a user, so they must not look the same here.
+  it('lists the assets a launch can be paired against on v2', async () => {
+    const r = await buildStatus(deps({ factoryVersion: 'v2', listPairAssets: async () => ['AAPL', 'TSLA'] }));
+    expect(find(r, 'pair-assets').detail).toBe('AAPL, TSLA');
+    expect(find(r, 'pair-assets').state).toBe('ok');
+  });
+
+  it('flags an approved set that could not be read, without calling it an outage', async () => {
+    const r = await buildStatus(
+      deps({ factoryVersion: 'v2', listPairAssets: async () => { throw new Error('ECONNREFUSED'); } })
+    );
+    expect(find(r, 'pair-assets').state).toBe('degraded');
+    expect(r.state).not.toBe('down');
+  });
+
+  // pons approving nothing is a real state, not a fault -- but every pairing request
+  // will be refused, which is worth seeing before investigating it as a bug.
+  it('distinguishes an empty approved set from a failure', async () => {
+    const r = await buildStatus(deps({ factoryVersion: 'v2', listPairAssets: async () => [] }));
+    expect(find(r, 'pair-assets').state).toBe('degraded');
+    expect(find(r, 'pair-assets').detail).toContain('none approved');
+  });
+
+  it('says plainly that v1 prices everything in ETH', async () => {
+    const r = await buildStatus(deps({ factoryVersion: 'v1' }));
+    expect(find(r, 'pair-assets').detail).toContain('ETH');
+    expect(find(r, 'pair-assets').state).toBe('ok');
   });
 
   // Calling the parser would bill on every poll, so it is reported as configured

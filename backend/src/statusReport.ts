@@ -54,6 +54,12 @@ export interface StatusDeps {
   parserRoute: string;
   alertsRoute: string;
   crossCheckHours: number;
+  /** Which factory launches are built for. v1 prices every launch in ETH. */
+  factoryVersion: 'v1' | 'v2';
+  /** Symbols a launch can be paired against. Absent on v1, where there is nothing
+   *  to discover. Reported because "AAPL is not approved" and "the bot never
+   *  managed to read the approved set" produce the same refusal to a user. */
+  listPairAssets?: () => Promise<string[]>;
 }
 
 const RANK: Record<CheckState, number> = { ok: 0, degraded: 1, down: 2 };
@@ -180,6 +186,28 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
       ? 'cold address configured'
       : 'no cold address set -- the hot/cold split is configuration, not protection',
   });
+
+  if (deps.factoryVersion === 'v2' && deps.listPairAssets) {
+    try {
+      const symbols = await within(deps.listPairAssets(), timeoutMs, 'pair assets');
+      checks.push({
+        name: 'pair-assets',
+        // An empty set is not an outage -- it is pons having approved nothing -- but
+        // it does mean every stock-paired request will be refused, which is worth
+        // seeing before spending an afternoon on why.
+        state: symbols.length > 0 ? 'ok' : 'degraded',
+        detail: symbols.length > 0 ? symbols.join(', ') : 'none approved -- every pairing request will be refused',
+      });
+    } catch (err) {
+      checks.push({ name: 'pair-assets', state: 'degraded', detail: reason(err) });
+    }
+  } else {
+    checks.push({
+      name: 'pair-assets',
+      state: 'ok',
+      detail: deps.factoryVersion === 'v1' ? 'v1: every launch is priced in ETH' : 'no registry configured',
+    });
+  }
 
   checks.push({ name: 'parser', state: 'ok', detail: `${deps.parserRoute} (not called: a live parse is billed)` });
   checks.push({ name: 'alerts', state: 'ok', detail: deps.alertsRoute });

@@ -98,6 +98,14 @@ export function composeRejectionReply(reason: RejectionReason, detail?: string):
       // The cause is on pons's side, so promising a specific timeframe would be a promise we
       // cannot keep. Say what is true: not your request, not chargeable, try later.
       return "The launchpad isn't accepting new launches right now. Nothing was charged to you -- this is upstream of us, so try again later.";
+    case 'PAIR_ASSET_UNAVAILABLE':
+      // Names what went wrong and what is available, because the alternative is
+      // someone retrying the same asset and getting the same refusal. `detail`
+      // carries the approved list, built from the chain rather than a copy here
+      // that would go stale the moment pons approves anything.
+      return detail
+        ? `Can't pair a launch with that -- ${detail} Nothing was charged to you.`
+        : "That pairing asset isn't available for launches. Nothing was charged to you.";
     case 'DUPLICATE_TWEET':
       return ''; // Silent -- this is a retry/duplicate delivery, not a new user-facing event.
     default:

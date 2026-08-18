@@ -8,6 +8,8 @@ import { XClient } from './xClient';
 import { TreasurySigner } from './treasurySigner';
 import { deploySplitter } from './splitterDeployer';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
+import { LaunchTarget, createLaunchTarget } from './launchTarget';
+import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
 import { composeSuccessReply, composeRejectionReply, composeOnChainFailureReply } from './replyComposer';
 import { TreasuryMonitor } from './monitor';
 import { config } from './config';
@@ -46,6 +48,12 @@ export interface OrchestratorDeps {
    *  production deployment must pass one -- the guards below stop an attack
    *  silently otherwise, and nobody learns it happened. */
   monitor?: TreasuryMonitor;
+  /** Resolves what the person asked to pair against, against the set pons has
+   *  actually approved. Optional: with no registry every launch is against ETH,
+   *  which is v1's only behaviour and remains v2's default. */
+  pairAssets?: { resolve(typed: string | null | undefined): Promise<PairResolution> };
+  /** Which factory to build for. Defaults from config; injected in tests. */
+  launchTarget?: LaunchTarget;
 }
 
 /** Alerting must never change a launch outcome. If the notifier is down, that is
@@ -113,6 +121,16 @@ async function replySafely(
   }
 }
 
+/** What a launch pairs against when nobody asked for anything else. ETH needs no
+ *  approval and is v1's only option, so this keeps today's behaviour exactly. */
+const NATIVE_ETH_ASSET: PairAsset = {
+  address: NATIVE_ETH,
+  symbol: 'ETH',
+  name: 'Ether',
+  decimals: 18,
+  graduationThreshold: null,
+};
+
 export type OrchestratorOutcome =
   | { kind: 'duplicate' }
   | { kind: 'rejected'; reason: string }
@@ -148,6 +166,46 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   }
 
   const { tokenName, tokenSymbol, description } = validation.sanitized!;
+
+  // --- Step 2b: what the launch will be priced and traded in ---
+  //
+  // Resolved BEFORE the splitter is deployed, because deploying costs gas and
+  // refusing afterwards would have spent it for nothing.
+  //
+  // The pairing decides what every buyer spends to buy in, what the graduation
+  // target is counted in, and what the creator and the treasury are paid in. It is
+  // fixed at launch and nobody can change it afterwards -- so an asset we cannot
+  // honour is a refusal, never a substitution. Launching against ETH because AAPL
+  // was unavailable would be a permanent decision made on somebody's behalf.
+  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
+  let pairAsset: PairAsset = NATIVE_ETH_ASSET;
+
+  if (intent.pairWith && deps.pairAssets) {
+    const resolved = await deps.pairAssets.resolve(intent.pairWith);
+    if (!resolved.ok) {
+      notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, 'PAIR_ASSET_UNAVAILABLE'));
+      const replyText = composeRejectionReply('PAIR_ASSET_UNAVAILABLE', resolved.detail);
+      await replySafely(deps, mention.tweetId, replyText, {
+        stage: 'pair_asset',
+        requested: intent.pairWith,
+      });
+      return { kind: 'rejected', reason: 'PAIR_ASSET_UNAVAILABLE' };
+    }
+    pairAsset = resolved.asset;
+  }
+
+  // Asking for a pairing this factory cannot honour is the same refusal. v1 takes
+  // its pairing from the launch config, so on v1 the only honest answer to "pair it
+  // with AAPL" is no.
+  if (pairAsset.address.toLowerCase() !== NATIVE_ETH && !launchTarget.supportsPairing) {
+    notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, 'PAIR_ASSET_UNAVAILABLE'));
+    const replyText = composeRejectionReply(
+      'PAIR_ASSET_UNAVAILABLE',
+      'launches here are priced in ETH right now.'
+    );
+    await replySafely(deps, mention.tweetId, replyText, { stage: 'pair_asset', requested: pairAsset.symbol });
+    return { kind: 'rejected', reason: 'PAIR_ASSET_UNAVAILABLE' };
+  }
 
   // --- Step 3: resolve the user's wallet, deploy the splitter, launch ---
   const wallet = await deps.walletResolver.resolve(mention.authorXUserId, mention.authorHandle);
@@ -197,30 +255,21 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
 
     // `value` is exactly the live fee. The factory treats anything above it as an initial
     // buy, so overpaying would make the treasury buy into the user's own token.
-    const { data, value } = buildLaunchCalldata(
+    // One wallet, not two: the factory writes the splitter to the locker as this
+    // token's fee redirect, and the locker pays trading fees to it.
+    const { to, data, value } = await launchTarget.build(
       {
         tokenName,
         tokenSymbol,
-        logo: '',
-        description: description ?? '',
-        socials: EMPTY_SOCIALS,
-        // One wallet, not two: the factory writes this to the locker as the fee redirect for
-        // this token, and the locker pays trading fees to it.
-        feeWallet: splitterAddress,
-        launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
-        dexId: config.PONS_DEX_ID,
-        // Derived from the tweet, so a retry predicts the same token address and reverts
-        // rather than quietly deploying a second token for one request.
-        salt: saltForTweet(mention.tweetId),
+        description,
+        splitterAddress,
+        tweetId: mention.tweetId,
+        pairAsset,
       },
       liveFee
     );
 
-    const sent = await deps.treasurySigner.sendTransaction({
-      to: config.PONS_FACTORY_ADDRESS,
-      data,
-      value,
-    });
+    const sent = await deps.treasurySigner.sendTransaction({ to, data, value });
 
     const receipt = await sent.wait();
     if (!receipt || receipt.status !== 1) {
@@ -230,7 +279,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       return { kind: 'onchain_failure', detail: 'transaction reverted' };
     }
 
-    const tokenAddress = extractLaunchedTokenAddress(receipt.logs);
+    const tokenAddress = launchTarget.extractToken(receipt.logs);
     if (!tokenAddress) {
       // Transaction succeeded but we couldn't find the expected event -- this should not
       // happen against the REAL Pons ABI once verified (see ponsEncoder.ts's warning about

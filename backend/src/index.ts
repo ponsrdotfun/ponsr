@@ -18,6 +18,9 @@ import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
 import { buildStatus, statusHttpCode } from './statusReport';
 import { startLaunchpadWatch } from './launchpadWatch';
+import { PairAssetRegistry } from './pairTokens';
+import { ChainPairTokenSource } from './pairTokenSource';
+import { createLaunchTarget } from './launchTarget';
 
 const app = express();
 app.use(express.json());
@@ -95,7 +98,29 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
 
 // Real dependencies -- see each module's TODO comments for what's still stubbed pending
 // account signups (Privy, Turnkey, twitterapi.io) per Phase 0 of the implementation roadmap.
+/**
+ * Which assets a launch may be priced in.
+ *
+ * Only v2 can pair against anything but ETH, so there is nothing to discover on v1
+ * and no reason to spend a log scan finding that out. Discovery is lazy: the first
+ * mention asking for a pairing pays for it, and an hourly TTL covers the rest.
+ */
+const pairAssets =
+  config.PONS_FACTORY_VERSION === 'v2'
+    ? new PairAssetRegistry(
+        new ChainPairTokenSource({
+          provider,
+          factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
+          fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
+        })
+      )
+    : undefined;
+
+const launchTarget = createLaunchTarget(provider);
+
 const deps = {
+  pairAssets,
+  launchTarget,
   db,
   parser: (() => {
     const p = createParser();
@@ -206,6 +231,8 @@ app.get('/status', async (_req, res) => {
       parserRoute: config.ANTHROPIC_API_KEY ? 'Anthropic (direct)' : 'OpenRouter',
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
+      factoryVersion: config.PONS_FACTORY_VERSION,
+      listPairAssets: pairAssets ? async () => (await pairAssets.list()).map((a) => a.symbol) : undefined,
     });
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {

@@ -45,6 +45,12 @@ export type RejectionReason =
    *  whitelisted launcher, or the configured launch config is disabled. Nothing to do with
    *  us -- but sending anyway costs gas on a transaction that must revert. */
   | 'LAUNCHPAD_UNAVAILABLE'
+  /** They asked to pair the launch against an asset pons has not approved, or one this
+   *  factory cannot honour. Refused rather than substituted: the pairing decides what
+   *  every buyer spends and what the creator is paid in, it is fixed forever at launch,
+   *  and quietly launching against something else would be a permanent decision made on
+   *  somebody's behalf. */
+  | 'PAIR_ASSET_UNAVAILABLE'
   | 'DUPLICATE_TWEET';
 
 export interface ValidationResult {
