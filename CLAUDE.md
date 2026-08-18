@@ -149,9 +149,10 @@ problem would otherwise surface as a parse failure and send you to the system pr
 Still blocked on the owner:
 
 1. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
-2. Move the Turnkey root key from `~/ponsr-turnkey-root-key.txt` into a password manager and
-   delete the file. A fresh root API key can be minted from the dashboard with a passkey, so
-   deleting it loses nothing.
+2. ~~Move the Turnkey root key out of `~/ponsr-turnkey-root-key.txt`~~ — **done 2026-08-19**,
+   along with the dashboard's original `.json` download in `~/Downloads` holding the same key,
+   which was found by searching rather than by remembering. The bot never needed root: it runs
+   on a scoped key that can reach the pons factories and nothing else.
 3. Backend hosting, for the listener to run 24/7.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
