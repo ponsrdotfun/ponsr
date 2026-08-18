@@ -8,7 +8,7 @@ import { createParser } from './parser';
 import { PrivyWalletResolver } from './walletResolver';
 import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
-import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from './chainClient';
+import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation } from './reconciler';
@@ -331,15 +331,21 @@ const crossCheck =
  * from an open one with no traffic, so nobody found out. It runs on a timer for
  * exactly that reason: waiting for a mention would mean waiting for the failure.
  */
-const launchpadWatch = startLaunchpadWatch(
-  {
-    getLaunchReadiness: async () => {
-      const r = await deps.getLaunchReadiness();
-      return { launchEnabled: r.launchEnabled, whitelisted: r.whitelisted };
-    },
-  },
-  notifier,
-  15
+// Both factories are watched, not just the one the bot launches through. The
+// whitelist actually being waited on is a **v2** grant while the bot still runs v1,
+// so a watch that only read v1 would miss the exact event it exists to catch. Each
+// alert names its factory: two watches sending identical text would send somebody
+// to check the wrong contract.
+const launchpadWatches = [
+  { label: 'the v1 factory', address: config.PONS_FACTORY_ADDRESS },
+  { label: 'the v2 factory', address: config.PONS_V2_FACTORY_ADDRESS },
+].map(({ label, address }) =>
+  startLaunchpadWatch(
+    { getLaunchReadiness: async () => getSwitchState(provider, address, await treasurySigner.address()) },
+    notifier,
+    15,
+    label
+  )
 );
 
 // Checked at boot as well as on the timer. The alternative is a fifteen-minute
@@ -349,7 +355,7 @@ const launchpadWatch = startLaunchpadWatch(
 // of having said it. Deploys are rare and the condition is critical; a duplicate
 // is the right side to err on.
 const server = app.listen(config.PORT, () => {
-  void launchpadWatch.check();
+  launchpadWatches.forEach((w) => void w.check());
   console.log(`Ponsr backend listening on port ${config.PORT} (${config.NODE_ENV})`);
   console.log(`Mention sweep every ${config.MENTION_POLL_SECONDS}s. Treasury balance watch every 15 minutes.`);
   console.log(
@@ -377,7 +383,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\n${signal} received, shutting down.`);
     reconciler.stop();
     treasuryWatch.stop();
-    launchpadWatch.stop();
+    launchpadWatches.forEach((w) => w.stop());
     if (crossCheck) crossCheck.stop();
     server.close(() => {
       db.close();

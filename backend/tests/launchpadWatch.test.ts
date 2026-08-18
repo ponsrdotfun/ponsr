@@ -96,3 +96,51 @@ describe('startLaunchpadWatch', () => {
     w.stop();
   });
 });
+
+/**
+ * Two factories are watched, because the whitelist actually being waited on is a v2
+ * grant while the bot still runs v1. A watch that only read v1 would miss the exact
+ * event it was put there to catch.
+ */
+describe('watching more than one factory', () => {
+  function harnessLabelled(readiness: { launchEnabled: boolean; whitelisted: boolean }, label: string) {
+    const sent: Array<{ kind: string; message: string }> = [];
+    const w = startLaunchpadWatch(
+      { getLaunchReadiness: async () => readiness },
+      { send: async (a: any) => { sent.push({ kind: a.kind, message: a.message }); } } as any,
+      999,
+      label
+    );
+    return { w, sent };
+  }
+
+  it('names the factory in the alert, so nobody checks the wrong contract', async () => {
+    const a = harnessLabelled({ launchEnabled: false, whitelisted: false }, 'the v1 factory');
+    const b = harnessLabelled({ launchEnabled: false, whitelisted: false }, 'the v2 factory');
+    await a.w.check();
+    await b.w.check();
+    a.w.stop(); b.w.stop();
+    expect(a.sent[0].message).toContain('the v1 factory');
+    expect(b.sent[0].message).toContain('the v2 factory');
+  });
+
+  // The grant we asked for arrives while launching stays globally off, so it must be
+  // recognisable as the thing that was requested rather than a generic recovery.
+  it('recognises a whitelist grant as the answer to the request', async () => {
+    let state = { launchEnabled: false, whitelisted: false };
+    const sent: Array<{ kind: string; message: string }> = [];
+    const w = startLaunchpadWatch(
+      { getLaunchReadiness: async () => state },
+      { send: async (a: any) => { sent.push({ kind: a.kind, message: a.message }); } } as any,
+      999,
+      'the v2 factory'
+    );
+    await w.check();
+    state = { launchEnabled: false, whitelisted: true };
+    await w.check();
+    w.stop();
+    expect(sent.map((s) => s.kind)).toEqual(['LAUNCHPAD_CLOSED', 'LAUNCHPAD_REOPENED']);
+    expect(sent[1].message).toContain('whitelisted on the v2 factory');
+    expect(sent[1].message).toContain('grant that was asked for');
+  });
+});

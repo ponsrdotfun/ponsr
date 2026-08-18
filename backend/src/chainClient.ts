@@ -130,3 +130,35 @@ export async function getLaunchReadiness(
     reason,
   };
 }
+
+/**
+ * Just the switch and the whitelist, on whichever factory is asked about.
+ *
+ * `getLaunchReadiness` above cannot be pointed at v2: it reads `dexConfigCount`,
+ * which v2 does not have, so it would throw rather than report. Both factories do
+ * have `launchEnabled` and `whitelistedLaunchers`, and those two are the whole
+ * question when what you are watching for is permission to launch at all.
+ *
+ * This exists because the whitelist we are actually waiting on is a v2 grant while
+ * the bot still runs v1 — so a watch that only read v1 would miss the exact event
+ * it was put there to catch.
+ */
+export async function getSwitchState(
+  provider: ethers.Provider,
+  factoryAddress: string,
+  launcherAddress: string
+): Promise<{ launchEnabled: boolean; whitelisted: boolean }> {
+  const f = new ethers.Contract(
+    factoryAddress,
+    [
+      'function launchEnabled() view returns (bool)',
+      'function whitelistedLaunchers(address) view returns (bool)',
+    ],
+    provider
+  );
+  const [enabled, whitelisted] = await Promise.all([
+    f.launchEnabled() as Promise<boolean>,
+    f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,
+  ]);
+  return { launchEnabled: Boolean(enabled), whitelisted: Boolean(whitelisted) };
+}

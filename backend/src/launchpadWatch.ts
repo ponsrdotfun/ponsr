@@ -33,7 +33,11 @@ export interface LaunchpadWatchHandle {
 export function startLaunchpadWatch(
   deps: LaunchpadWatchDeps,
   notifier: Notifier,
-  intervalMinutes = 15
+  intervalMinutes = 15,
+  /** Named in the alert. Two factories are watched -- the one the bot launches
+   *  through and the one a whitelist is being requested on -- and an alert that
+   *  did not say which would send someone to check the wrong contract. */
+  label = 'the launchpad'
 ): LaunchpadWatchHandle {
   let closed = false;
   let running = false;
@@ -54,10 +58,10 @@ export function startLaunchpadWatch(
           kind: 'LAUNCHPAD_CLOSED',
           severity: 'critical',
           message:
-            'pons has switched launching off and this treasury is not whitelisted, so no launch ' +
-            'can succeed. Requests are refused before any money moves and the person is told the ' +
-            'cause is upstream -- but the bot cannot launch anything until this changes, and ' +
-            'nothing else would have reported it.',
+            `pons has switched launching off on ${label} and this treasury is not whitelisted, so ` +
+            'no launch can succeed there. Requests are refused before any money moves and the ' +
+            'person is told the cause is upstream -- but the bot cannot launch anything until ' +
+            'this changes, and nothing else would have reported it.',
           at: new Date().toISOString(),
         });
       } else if (!blocked && closed) {
@@ -66,8 +70,9 @@ export function startLaunchpadWatch(
           kind: 'LAUNCHPAD_REOPENED',
           severity: 'info',
           message: r.launchEnabled
-            ? 'pons has switched launching back on. The bot can launch again.'
-            : 'This treasury is now whitelisted, so it can launch even with launching globally off.',
+            ? `pons has switched launching back on for ${label}. The bot can launch again there.`
+            : `This treasury is now whitelisted on ${label}, so it can launch there even with ` +
+              'launching globally off. This is the grant that was asked for.',
           at: new Date().toISOString(),
         });
       }
