@@ -111,7 +111,12 @@ contract FeeSplitter {
     ///      reduced balance and split it a second time -- paying the first recipient again out
     ///      of the second recipient's money, and leaving a queued claim the contract no longer
     ///      holds the funds to honour. A test caught exactly that before this guard existed.
-    uint256 private _entered;
+    ///      Declared `internal` rather than `private` so FeeSplitterV2 can inherit this
+    ///      guard instead of restating it. The split logic below cost an incident to get
+    ///      right (see the header), and a second copy of it is a second thing to keep in
+    ///      step -- which is the failure mode this project has already paid for once, with
+    ///      a hand-maintained artifact that went stale.
+    uint256 internal _entered;
 
     modifier nonReentrant() {
         if (_entered == 1) revert Reentrant();

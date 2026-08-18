@@ -41,6 +41,27 @@ contract MockERC20 {
         emit Transfer(msg.sender, to, amount);
         return true;
     }
+
+    /// @dev Added for the v2 escrow tests: the real `PonsV2FeeEscrow.creditToken` pulls with
+    ///      `safeTransferFrom`, so crediting a splitter the way a real launch does needs the
+    ///      approve/transferFrom pair. A mock that could only be credited by minting straight
+    ///      into the escrow would test a path the escrow does not have.
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(!blocked[to], "recipient blocked");
+        require(balanceOf[from] >= amount, "insufficient");
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= amount, "insufficient allowance");
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+        return true;
+    }
 }
 
 /// @notice An ERC20 whose `transfer` returns no data at all -- the USDT-style non-compliance

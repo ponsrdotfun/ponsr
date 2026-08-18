@@ -121,6 +121,10 @@ const ConfigSchema = z.object({
    * Set it to 0 and every refresh scans 370 windows for nothing.
    */
   PONS_V2_APPROVALS_FROM_BLOCK: z.coerce.number().default(23_400_000),
+  /** `PonsV2FeeEscrow`. v2 credits creator fees here and they are collected by calling
+   *  `claimToken`, which pays `msg.sender` -- so this address is baked immutably into
+   *  every v2 splitter at deployment. Verified source, read 2026-08-18. */
+  PONS_V2_FEE_ESCROW_ADDRESS: z.string().default('0xbc39B6502E1a6Ab36E4A5c5026A35F08342A0A9c'),
   /** What a launch pairs against when the person did not ask for anything. ETH keeps
    *  today's behaviour, and is the only pairing that needs no approval. */
   DEFAULT_PAIR_ASSET: z.string().default('ETH'),

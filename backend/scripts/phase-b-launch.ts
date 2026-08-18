@@ -154,6 +154,23 @@ async function main() {
     process.exit(1);
   }
   line('splitERC20 in code', 'present ✅');
+
+  // The same check, for the failure v2 introduces. On v2 fees are not pushed here at
+  // all -- they are credited to pons's escrow and collected by calling `claimToken`,
+  // which pays msg.sender. A splitter without `claimAndSplit` would therefore be
+  // credited correctly and forever with no transaction able to move the money: the
+  // 2026-08-04 loss again, by a different route, and just as permanent.
+  if (config.PONS_FACTORY_VERSION === 'v2') {
+    const claimSelector = ethers.id('claimAndSplit(address)').slice(2, 10);
+    if (!deployedCode.includes(claimSelector)) {
+      console.error('\nABORTING: the deployed splitter has no claimAndSplit(address).');
+      console.error('That is the v1 splitter. On v2 it can be credited fees it can never claim.');
+      console.error('Run `node ../compile-all.js` from the repo root and try again.');
+      console.error(`(The splitter at ${splitterAddress} is already deployed but will not be used.)`);
+      process.exit(1);
+    }
+    line('claimAndSplit in code', 'present ✅');
+  }
   console.log();
 
   console.log('2/2  Launching...');

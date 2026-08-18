@@ -10,8 +10,10 @@ const input = {
   language: 'Solidity',
   sources: {
     'FeeSplitter.sol': { content: readSource('contracts/FeeSplitter.sol') },
+    'FeeSplitterV2.sol': { content: readSource('contracts/FeeSplitterV2.sol') },
     'test-helpers/Malicious.sol': { content: readSource('contracts/test-helpers/Malicious.sol') },
     'test-helpers/MockERC20.sol': { content: readSource('contracts/test-helpers/MockERC20.sol') },
+    'test-helpers/MockEscrow.sol': { content: readSource('contracts/test-helpers/MockEscrow.sol') },
   },
   settings: {
     outputSelection: {
@@ -22,7 +24,13 @@ const input = {
 };
 
 function findImports(importPath) {
-  // Resolve "../FeeSplitter.sol" from test-helpers/Malicious.sol
+  // Two shapes reach here: "../FeeSplitter.sol" from test-helpers/Malicious.sol, and
+  // "./FeeSplitter.sol" from FeeSplitterV2.sol. Try the plain path first so a
+  // top-level import does not have to pretend it lives in test-helpers.
+  const direct = path.normalize(importPath.replace(/^\.\//, ''));
+  try {
+    return { contents: readSource(path.join('contracts', direct)) };
+  } catch (e) { /* fall through */ }
   const resolved = path.normalize(path.join('test-helpers', importPath));
   try {
     return { contents: readSource(path.join('contracts', resolved)) };
@@ -72,7 +80,15 @@ fs.writeFileSync(
 // stay in step if nobody has to remember to make them.
 fs.writeFileSync(
   path.join(__dirname, 'backend', 'src', 'feeSplitterArtifact.json'),
-  JSON.stringify({ FeeSplitter: artifacts.FeeSplitter }, null, 2)
+  // Both splitters, for exactly the same reason. v2 launches need FeeSplitterV2 (the
+  // escrow on v2 pays msg.sender, so a splitter that cannot call it strands every fee),
+  // and a version emitted from anywhere but this compile is a second copy waiting to
+  // go stale.
+  JSON.stringify(
+    { FeeSplitter: artifacts.FeeSplitter, FeeSplitterV2: artifacts.FeeSplitterV2 },
+    null,
+    2
+  )
 );
 
 console.log('✅ Compiled contracts:', Object.keys(artifacts).join(', '));
