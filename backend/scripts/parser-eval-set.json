@@ -18,20 +18,20 @@
     {
       "id": "002",
       "category": "clear_structured",
-      "tweet_text": "@ponsrdotfun deploy token\nnama: Kucing Terbang\nsimbol: KTF\ndeskripsi: token buat komunitas pecinta kucing",
+      "tweet_text": "@ponsrdotfun deploy token\nname: Flying Cat\nsymbol: FCAT\ndescription: a token for the cat lovers community",
       "expected": {
         "is_launch_intent": true,
-        "token_name": "Kucing Terbang",
-        "token_symbol": "KTF",
-        "description": "token buat komunitas pecinta kucing",
+        "token_name": "Flying Cat",
+        "token_symbol": "FCAT",
+        "description": "a token for the cat lovers community",
         "confidence": "high"
       },
-      "notes": "Structured format but in Indonesian field labels."
+      "notes": "Labelled fields on separate lines. The structured format, which should be trivial."
     },
     {
       "id": "003",
       "category": "natural_flexible",
-      "tweet_text": "@ponsrdotfun gue mau launch token namanya Moon Coin simbolnya MOON dong bro",
+      "tweet_text": "@ponsrdotfun yo i wanna launch a token called Moon Coin, symbol MOON, lets go",
       "expected": {
         "is_launch_intent": true,
         "token_name": "Moon Coin",
@@ -39,7 +39,7 @@
         "description": null,
         "confidence": "high"
       },
-      "notes": "The exact example the user gave — free-flowing sentence, field order embedded naturally."
+      "notes": "Casual, unpunctuated, with filler either side of the content."
     },
     {
       "id": "004",
@@ -83,15 +83,15 @@
     {
       "id": "007",
       "category": "natural_flexible",
-      "tweet_text": "@ponsrdotfun bikinin token dong buat proyek gue, namanya Nusantara Finance, tickernya NUSA, ini buat komunitas web3 lokal",
+      "tweet_text": "@ponsrdotfun could you spin up a token for my project, it's called Harbour Finance, ticker HARB, it's for our local web3 community",
       "expected": {
         "is_launch_intent": true,
-        "token_name": "Nusantara Finance",
-        "token_symbol": "NUSA",
-        "description": "ini buat komunitas web3 lokal",
+        "token_name": "Harbour Finance",
+        "token_symbol": "HARB",
+        "description": "it's for our local web3 community",
         "confidence": "high"
       },
-      "notes": "Long, conversational Indonesian sentence with description embedded mid-sentence."
+      "notes": "Polite and long-winded, with a real description at the end."
     },
     {
       "id": "008",
@@ -109,7 +109,7 @@
     {
       "id": "009",
       "category": "ambiguous_missing_field",
-      "tweet_text": "@ponsrdotfun launch token dong namanya Moon Coin",
+      "tweet_text": "@ponsrdotfun launch a token called Moon Coin please",
       "expected": {
         "is_launch_intent": true,
         "token_name": "Moon Coin",
@@ -117,7 +117,7 @@
         "description": null,
         "confidence": "low"
       },
-      "notes": "No symbol given at all. Bot should ask for clarification, NOT guess a symbol from the name."
+      "notes": "Name given, symbol absent. The symbol must stay null -- deriving MOON from 'Moon Coin' is the guess the rules forbid."
     },
     {
       "id": "010",
@@ -148,7 +148,7 @@
     {
       "id": "012",
       "category": "ambiguous_missing_field",
-      "tweet_text": "@ponsrdotfun token gue keren banget nanti deh gue kasih tau detailnya",
+      "tweet_text": "@ponsrdotfun my token is gonna be so sick, i'll share the details later",
       "expected": {
         "is_launch_intent": false,
         "token_name": null,
@@ -156,7 +156,7 @@
         "description": null,
         "confidence": "low"
       },
-      "notes": "Mentions a token but explicitly defers details — no actionable intent yet."
+      "notes": "Anticipation, not a request. 'Later' is the word doing the work: nothing is being asked for yet."
     },
     {
       "id": "013",
@@ -199,34 +199,34 @@
     },
     {
       "id": "016",
-      "category": "bilingual_mixed",
-      "tweet_text": "@ponsrdotfun woy launch token gue dong, name: Sunda Empire, $SUNDA, buat NFT komunitas gitu, cepetan bro",
+      "category": "non_english",
+      "tweet_text": "@ponsrdotfun oye lanza mi token porfa, name: Sol Imperio, $SOLI, para la comunidad NFT",
       "expected": {
         "is_launch_intent": true,
-        "token_name": "Sunda Empire",
-        "token_symbol": "SUNDA",
-        "description": "buat NFT komunitas gitu",
+        "token_name": "Sol Imperio",
+        "token_symbol": "SOLI",
+        "description": "para la comunidad NFT",
         "confidence": "high"
       },
-      "notes": "Heavy Indo/English code-switching mid-sentence, still fully parseable."
+      "notes": "Spanish with English field labels. An international audience is not an English-only one -- the fields are recognisable, the sentence around them is not."
     },
     {
       "id": "017",
-      "category": "bilingual_mixed",
-      "tweet_text": "@ponsrdotfun please launch token bernama Warteg Coin simbol WRTG buat jajan warteg santai aja",
+      "category": "non_english",
+      "tweet_text": "@ponsrdotfun por favor lanca um token chamado Cafezinho, simbolo CAFE, pra galera do bairro",
       "expected": {
         "is_launch_intent": true,
-        "token_name": "Warteg Coin",
-        "token_symbol": "WRTG",
-        "description": "buat jajan warteg santai aja",
+        "token_name": "Cafezinho",
+        "token_symbol": "CAFE",
+        "description": "pra galera do bairro",
         "confidence": "high"
       },
-      "notes": "English opener, Indonesian body, casual/joke framing but still a genuine well-formed request."
+      "notes": "Portuguese, no English labels at all. 'simbolo' has to be read as meaning, not matched as a keyword."
     },
     {
       "id": "018",
       "category": "bilingual_mixed",
-      "tweet_text": "@ponsrdotfun eh bikin token ya, Batik Finance ($BATIK), representing indonesian textile culture onchain",
+      "tweet_text": "@ponsrdotfun hey make a token please, Batik Finance ($BATIK), representing indonesian textile culture onchain",
       "expected": {
         "is_launch_intent": true,
         "token_name": "Batik Finance",
@@ -234,7 +234,7 @@
         "description": "representing indonesian textile culture onchain",
         "confidence": "high"
       },
-      "notes": "Mixed language with description in English, name/symbol in the middle of the sentence."
+      "notes": "English throughout, with a non-English subject. The theme's language says nothing about the tweet's."
     },
     {
       "id": "019",
@@ -402,7 +402,7 @@
     {
       "id": "031",
       "category": "pairing_theme_is_not_pairing",
-      "tweet_text": "@ponsrdotfun bikin token GameStop nostalgia dong, namanya Loot Box, ticker LOOT",
+      "tweet_text": "@ponsrdotfun make me a GameStop nostalgia token, call it Loot Box, ticker LOOT",
       "expected": {
         "is_launch_intent": true,
         "token_name": "Loot Box",
@@ -411,7 +411,7 @@
         "confidence": "high",
         "pair_with": null
       },
-      "notes": "Same trap in Indonesian, and GME is an approved pairing asset -- so a model that infers from theme has a real asset to wrongly pick."
+      "notes": "The dangerous case in English. GME is an approved pairing asset, so a model inferring pairing from theme has a real asset to wrongly pick."
     },
     {
       "id": "032",
@@ -486,7 +486,7 @@
     {
       "id": "037",
       "category": "undecided_but_asking",
-      "tweet_text": "@ponsrdotfun bikin token lah nama nya terserah lo aja deh",
+      "tweet_text": "@ponsrdotfun just make me a token, name it whatever you want",
       "expected": {
         "is_launch_intent": true,
         "token_name": null,
@@ -494,12 +494,12 @@
         "description": null,
         "confidence": "low"
       },
-      "notes": "Handing the choice back is an undecided detail, not an absent request. This returned false before 2026-08-19, and false means the bot replies with nothing at all -- the person is simply ignored."
+      "notes": "Handing the choice back is an undecided detail, not an absent request. This returned false before 2026-08-19, and false is answered with silence -- the person is simply ignored."
     },
     {
       "id": "038",
       "category": "undecided_but_asking",
-      "tweet_text": "@ponsrdotfun bikinin token dong yang lucu-lucu gitu",
+      "tweet_text": "@ponsrdotfun make me a token, something funny",
       "expected": {
         "is_launch_intent": true,
         "token_name": null,
@@ -525,7 +525,7 @@
     {
       "id": "040",
       "category": "not_launch_intent",
-      "tweet_text": "@ponsrdotfun gue mau punya token sendiri, gimana caranya bro",
+      "tweet_text": "@ponsrdotfun i'd like to have my own token, how does this work?",
       "expected": {
         "is_launch_intent": false,
         "token_name": null,
@@ -533,25 +533,25 @@
         "description": null,
         "confidence": "high"
       },
-      "notes": "The boundary the fix must NOT cross: asking how the bot works is a question, not a request. If this flips to true the rule has been widened into 'anyone who says the word token'."
+      "notes": "The boundary the fix must NOT cross: asking how the bot works is a question, not a request. If this flips to true the rule has widened into 'anyone who says the word token'."
     },
     {
       "id": "041",
       "category": "natural_flexible",
-      "tweet_text": "@ponsrdotfun anjay bikinin dong token Ayam Geprek $AYAM gasken",
+      "tweet_text": "@ponsrdotfun yooo drop a token called Fried Chicken $FRIED lesgooo",
       "expected": {
         "is_launch_intent": true,
-        "token_name": "Ayam Geprek",
-        "token_symbol": "AYAM",
+        "token_name": "Fried Chicken",
+        "token_symbol": "FRIED",
         "description": null,
         "confidence": "high"
       },
-      "notes": "Slang either side of the actual content. Nothing here is formal and all of it is unambiguous."
+      "notes": "Crypto-twitter slang either side of the content. Nothing here is formal and all of it is unambiguous."
     },
     {
       "id": "042",
       "category": "natural_flexible",
-      "tweet_text": "@ponsrdotfun launc token Boba Time ticker BOBA (maaf typo)",
+      "tweet_text": "@ponsrdotfun launc a token Boba Time ticker BOBA (sorry typo)",
       "expected": {
         "is_launch_intent": true,
         "token_name": "Boba Time",

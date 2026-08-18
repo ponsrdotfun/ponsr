@@ -281,10 +281,26 @@ describe('resolvePairAsset — how people actually write it', () => {
     }
   });
 
-  // A common name that is genuinely not this asset's name must be refused, not
-  // guessed at -- and the refusal names what is available, so the next attempt works.
-  it('refuses a nickname it was never told, and says what exists', () => {
-    const r = got('google');
+  // A handful of companies are known by a name the chain never records. Alphabet is
+  // Google; the ticker is the only place the connection exists, and it is not written
+  // there either.
+  it('knows the few names the chain does not carry', () => {
+    expect(got('google')).toMatchObject({ ok: true, asset: { symbol: 'GOOGL' } });
+    expect(got('Google')).toMatchObject({ ok: true, asset: { symbol: 'GOOGL' } });
+  });
+
+  // An alias names a symbol; it does not introduce one. With that asset unapproved the
+  // alias resolves to nothing and is refused exactly as if the table were empty, which
+  // is what stops it becoming a back door into assets pons has revoked.
+  it('an alias for an unapproved asset resolves to nothing', () => {
+    const withoutGoogl = ASSETS.filter((a) => a.symbol !== 'GOOGL');
+    expect(resolvePairAsset(withoutGoogl, 'google').ok).toBe(false);
+  });
+
+  // Everything not in that small table is still refused, and the refusal names what
+  // exists so the next attempt succeeds.
+  it('refuses a name it was never told, and says what exists', () => {
+    const r = got('microsoft');
     expect(r.ok).toBe(false);
     expect((r as any).detail).toContain('GOOGL');
   });

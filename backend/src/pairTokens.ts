@@ -164,6 +164,41 @@ export type PairResolution =
   | { ok: false; reason: 'AMBIGUOUS'; detail: string };
 
 /**
+ * Names for an asset that are not written anywhere on chain.
+ *
+ * Everything else in this file is discovered: the approved set, the symbols, the
+ * decimals, the thresholds. This table is the one exception, and it is deliberately
+ * tiny, because it encodes knowledge the chain does not carry -- that Google is
+ * Alphabet, that SpaceX is Space Exploration Technologies Corp., that the S&P 500 is
+ * what SPY tracks. No amount of reading the factory would reveal any of that.
+ *
+ * WHY THIS IS SAFE, GIVEN THE PAIRING IS PERMANENT
+ * An entry is a hint, not an answer. It names a SYMBOL, which is then looked up in
+ * the approved set like any other -- so an alias pointing at something pons has
+ * revoked resolves to nothing and is refused normally, exactly as if the table were
+ * empty. It cannot introduce an asset, only recognise one already approved.
+ *
+ * WHAT DOES NOT BELONG HERE
+ * Guesses, near misses, and anything a reasonable person might mean two ways. These
+ * are alternative *names for the same company*, not similar-sounding tickers. "AAP"
+ * will never appear here.
+ */
+const ALIASES: Record<string, string> = {
+  google: 'GOOGL',
+  spacex: 'SPCX',
+  'space x': 'SPCX',
+  'sp 500': 'SPY',
+  sp500: 'SPY',
+  // "S&P 500" normalises to "s p 500" -- the ampersand becomes a space before this
+  // table is consulted, so the key has to be the normalised form, not the typed one.
+  's p 500': 'SPY',
+  's p500': 'SPY',
+  spx: 'SPY',
+  's and p 500': 'SPY',
+  'standard and poors 500': 'SPY',
+};
+
+/**
  * Turns what somebody typed into an asset.
  *
  * Deliberately strict. This picks which asset a launch is priced and paid in, it
@@ -211,6 +246,13 @@ export function resolvePairAsset(assets: readonly PairAsset[], typed: string | n
   // and unchangeable once made, so a near miss must remain a refusal.
   if (matches.length === 0) {
     matches = assets.filter((a) => normaliseAssetWord(displayName(a.name)) === norm);
+  }
+
+  // Last, the handful of names the chain does not know it has. Resolved through the
+  // approved set rather than around it, so a revoked asset stays refused.
+  if (matches.length === 0 && ALIASES[norm]) {
+    const wanted = ALIASES[norm];
+    matches = assets.filter((a) => normaliseAssetWord(a.symbol) === normaliseAssetWord(wanted));
   }
 
   if (matches.length === 1) return { ok: true, asset: matches[0] };
