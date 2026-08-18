@@ -77,9 +77,18 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
 
   **The code for stock pairing is built and proven** (`pairTokens.ts`, `ponsV2Encoder.ts`,
   `launchTarget.ts`), verified by simulating real calldata against the live mainnet factory.
-  It is selected by `PONS_FACTORY_VERSION`, which still defaults to `v1` — flipping it is a
-  deliberate act, not a default. Nothing can launch either way until pons whitelists this
-  treasury or reopens the switch.
+  It is selected by `PONS_FACTORY_VERSION`. The code default is still `v1`, but
+  **production has run `v2` since 2026-08-19** (a Fly secret), because the whitelist that was
+  requested is a v2 grant and v2 is a superset: ETH pairing plus the eight approved assets.
+  Nothing can launch either way until pons whitelists this treasury or reopens the switch.
+
+  The Turnkey policy was widened to allow the v2 factory on the same day. Verified afterwards:
+  v1 and v2 both ALLOWED, and an arbitrary destination, the fee escrow and even the cold
+  wallet all still denied — a leak of the bot's key costs launches, not the treasury.
+
+  **Before opening v2 to users, run one self-dealt launch through `phase-b-launch.ts` first.**
+  `FeeSplitterV2` has never met a real fee; it passes 12 tests against a mock built from the
+  escrow's own source, which is not the same thing. See §10.7 of the findings.
 
   **`launchEnabled()` is `false` as of 2026-08-18, on v1 AND v2.** It was `true` when this
   was written, and both real launches happened while it was. pons switched it off at
