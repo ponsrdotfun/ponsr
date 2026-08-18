@@ -924,3 +924,120 @@ Whichever is chosen, the numbers that may appear in user-facing copy are **66.5%
 because those are what the contracts actually transfer. §9.9.1 covers why: the pre-protocol
 figures overstate a creator's take by ~1.4×, and it is a number anyone can check on-chain in
 a minute.
+
+---
+
+## 10. ⚠️ v2 re-read (2026-08-15): §7's pair-token findings are now WRONG
+
+§7 was written on 2026-08-04 and said v2 was "deployed but closed", with **nothing approved,
+not even ETH**, and stock pairing "not actionable". Every one of those reads was correct on the
+day. Three of them are no longer true, and the difference is large enough to change what Ponsr
+could be.
+
+All of the below is read live from mainnet (chain 4663) and from the **verified source** of
+`PonsV2LaunchFactory` at `0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8` — not from documentation.
+
+### 10.1 Eight pair tokens are approved, and six of them are stocks
+
+`approvedPairTokens` now returns `true` for eight assets. The full approval history is eight
+`PairTokenApprovalUpdated` events, all grants, **none revoked**:
+
+| Pair asset | Name | Graduation threshold |
+|---|---|---|
+| `AAPL` | Apple • Robinhood Token | **24.2 AAPL** |
+| `NVDA` | NVIDIA • Robinhood Token | **41.6 NVDA** |
+| `GOOGL` | Alphabet Class A • Robinhood Token | **24.2 GOOGL** |
+| `TSLA` | Tesla • Robinhood Token | **26.0 TSLA** |
+| `GME` | GameStop • Robinhood Token | **369.0 GME** |
+| `SPCX` | Space Exploration Technologies Class A • Robinhood Token | **72.2 SPCX** |
+| `SPY` | SPDR S&P 500 ETF Trust • Robinhood Token | **10.9 SPY** |
+| `USDG` | Global Dollar (stablecoin, **6 decimals**) | **8090.0 USDG** |
+
+Thresholds come from `pairTokenEconomics(pairToken)`, which also returns each asset's decimals.
+**USDG is 6-decimal**, unlike everything else on this chain; any amount arithmetic that assumes
+18 will be wrong by a factor of 10^12, which is not a rounding error but a different number.
+
+Note `SPCX` — SpaceX is not publicly traded, so this is exposure to a private company as a
+pairing asset. It is worth understanding what that token actually represents before building a
+product around it.
+
+A dollar comparison against v1's 4.2 ETH is deliberately not given here: this chain has no price
+oracle for these assets, so any figure would be imported from off-chain and stated with more
+confidence than it deserves.
+
+### 10.2 Native ETH still works on v2 — it is exempt, not approved
+
+`approvedPairTokens(0x0)` reads `false`, which looks like ETH pairing is impossible. It is not.
+From the verified source, the launch gate reads:
+
+```solidity
+if (pairToken != address(0) && !approvedPairTokens[pairToken]) revert PairTokenNotApproved();
+```
+
+The zero address short-circuits the check. This is confirmed by behaviour as well as by source:
+of the 43 real v2 launches, **13 used `pairToken = 0x0`** while `approvedPairTokens(0x0)` was
+already `false`. So v2 is a superset of v1's capability, not a replacement for it — ETH pairing
+plus eight approved assets.
+
+### 10.3 The whitelist bypasses the global switch — and unlike v1, it has actually been granted
+
+Same source, one line above:
+
+```solidity
+if (!launchEnabled && !whitelistedLaunchers[msg.sender]) revert NotWhitelisted();
+```
+
+So a whitelisted launcher can launch **while launching is globally off**. That matters because
+of the asymmetry between the two factories:
+
+| | v1 (`0xA5aAb3F0…`) | v2 (`0x7E1EAbd5…`) |
+|---|---|---|
+| `WhitelistedLauncherUpdated` events, all time | **0** | **2** |
+| Currently whitelisted | nobody | two EOAs, both still `true` |
+
+One of the two v2 whitelist holders is the factory's own `owner()`
+(`0x0815A488…`). The other, `0xD48e5622…`, is not — so an address outside pons's own has been
+granted this. On v1 it has never been granted to anyone, ever.
+
+**This changes the shape of the ask.** "Please turn the launchpad back on for everyone" is a
+platform decision; "please whitelist this address on v2, as you have done before" is a request
+with precedent, and it is the only one of the two that has ever happened.
+
+### 10.4 v2's public window was real, and short
+
+The 43 v2 launches happened on **2026-08-01 between 02:08 and 02:15 UTC** — seven minutes — by
+**18 distinct deployers**, none of them the whitelisted addresses. So this was ordinary public
+usage while `launchEnabled` was `true`, not a seeded test. `LaunchEnabledUpdated(false)` follows
+immediately at block 24672804.
+
+Two of those launches have since produced `PoolGraduated`, so the full v2 lifecycle — launch,
+curve, graduation into a Uniswap pool — has demonstrably completed on mainnet.
+
+### 10.5 Everything else on v2, as read today
+
+| Call | Value | Note |
+|---|---|---|
+| `launchEnabled()` | **`false`** | closed since 2026-08-01 |
+| `launchFee()` | `0.0005 ETH` | identical to v1 |
+| `launchConfigCount()` | `1` | one config |
+| `launchDeployer()` | `0xdD89f26b…` | **set** — launches revert with `LaunchDeployerNotSet` if it were not |
+| `maxCreatorTaxBps()` | `1000` | creator tax capped at 10% |
+| `owner()` | `0x0815A488…` | also whitelisted |
+
+### 10.6 What this means for Ponsr, stated plainly
+
+- **The fee still leaves in ETH, but the revenue would arrive in the pairing asset.** Launch
+  fees are paid in ETH regardless of pairing; §7's constraint still holds — the pairing asset is
+  fixed at launch and the creator and treasury shares arrive in it. A stock-paired launch means
+  the treasury's 3.5% arrives as AAPL, not ETH. That is arguably an improvement on today, where
+  half the take is a memecoin that usually goes to zero, but it is a different treasury model
+  and should be decided rather than absorbed by accident.
+- **Nothing here is buildable until an address is whitelisted or the switch flips.** The
+  encoder work is not blocked, though: §7 already recommended treating `pairToken` as a
+  first-class parameter, and 10.1 turns that from foresight into a requirement.
+- **Targeting v2 is not a rewrite of a working system.** v1 is also closed
+  (`LaunchEnabledUpdated(false)`, 2026-08-12 19:42 UTC), so both paths need pons to act. Given
+  that, the version to ask about is the one with the stock pairing and the whitelist precedent.
+- **Open question #17 ("which version to target") is re-opened.** It was closed for v1 on the
+  grounds that v1 was open and v2 was not. Neither is open now, so the reasoning that settled it
+  no longer applies.
