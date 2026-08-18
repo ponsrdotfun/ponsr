@@ -70,16 +70,34 @@ function line(label: string, value: unknown) {
 
   console.log('=== VERIFYING THE BOT POLICY ===');
   line('signer', from);
-  line('factory', config.PONS_FACTORY_ADDRESS);
+  line('v1 factory', config.PONS_FACTORY_ADDRESS);
+  line('v2 factory', config.PONS_V2_FACTORY_ADDRESS);
+  line('bot launches through', `${config.PONS_FACTORY_VERSION}  <- the one that has to be ALLOWED`);
   console.log('');
 
-  const toFactory = await attempt('launch', {
+  // Both factories, always. This script used to test only v1 and print PASSED, which on
+  // 2026-08-19 reported a healthy policy immediately after an attempt to widen it to v2
+  // had silently failed to run at all. A green tick about the contract you are not
+  // changing is worse than no tick: it answers a question nobody asked, in the voice of
+  // the one they did.
+  const toV1 = await attempt('launch v1', {
     ...base,
     to: config.PONS_FACTORY_ADDRESS,
     value: 500000000000000n,
     data: '0x12345678',
   });
-  line('1. tx to the pons factory', toFactory ? 'ALLOWED ✅' : 'denied ❌ (bot cannot launch)');
+  line('1a. tx to the v1 factory', toV1 ? 'ALLOWED ✅' : 'denied ❌');
+
+  const toV2 = await attempt('launch v2', {
+    ...base,
+    to: config.PONS_V2_FACTORY_ADDRESS,
+    value: 500000000000000n,
+    data: '0x12345678',
+  });
+  line('1b. tx to the v2 factory', toV2 ? 'ALLOWED ✅' : 'denied ❌');
+
+  const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
+  const toFactory = wantV2 ? toV2 : toV1;
 
   const deploy = await attempt('deploy', {
     ...base,
@@ -100,13 +118,27 @@ function line(label: string, value: unknown) {
   const good = toFactory && deploy && !elsewhere;
   if (good) {
     console.log('=== PASSED ===');
-    console.log('The bot can launch and deploy splitters, and cannot move funds anywhere else.');
+    console.log(`The bot can launch on ${config.PONS_FACTORY_VERSION} and deploy splitters, and`);
+    console.log('cannot move funds anywhere else.');
     console.log('A leak of this key now costs launches, not the treasury.');
     console.log('');
     console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
+    if (!toV2) {
+      console.log('');
+      console.log('NOTE: the v2 factory is still denied. That is fine while the bot runs v1,');
+      console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
+      console.log('every check it makes of pons and is then refused by its own signer --');
+      console.log('after the splitter has been deployed and paid for.');
+      console.log('  bash scripts/apply-v2-policy.sh --execute');
+    }
   } else {
     console.log('=== NOT SAFE YET ===');
-    if (!toFactory || !deploy) console.log('  The policy is too narrow -- the bot cannot do its job.');
+    if (!toFactory) {
+      console.log(`  The bot launches through ${config.PONS_FACTORY_VERSION}, and that factory is DENIED.`);
+      console.log('  It cannot launch anything at all.');
+      if (wantV2) console.log('  Fix: bash scripts/apply-v2-policy.sh --execute');
+    }
+    if (!deploy) console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
     if (elsewhere) console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
   }
   process.exitCode = good ? 0 : 1;
