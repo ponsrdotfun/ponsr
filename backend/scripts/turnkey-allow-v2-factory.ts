@@ -65,9 +65,41 @@ async function main() {
     console.error('TURNKEY_ORGANIZATION_ID is not set.');
     process.exit(1);
   }
+  const v1Addr = String(config.PONS_FACTORY_ADDRESS).toLowerCase();
+  const v2Addr = String(config.PONS_V2_FACTORY_ADDRESS).toLowerCase();
+
+  // The plan needs no credentials, and this script originally demanded them anyway --
+  // which meant the only way to see what it would do was to hand it the one key that can
+  // rewrite the treasury's guard rails. Everything below comes from config. Nothing is
+  // sent to Turnkey and nothing is changed.
+  if (!EXECUTE) {
+    console.log('=== PLAN ONLY (no credentials used, nothing contacted, nothing changed) ===');
+    line('organization', organizationId);
+    line('v1 factory', `${v1Addr}  (already allowed)`);
+    line('v2 factory', `${v2Addr}  (to allow)`);
+    console.log('\nPolicy this would create');
+    line('name', POLICY_NAME);
+    line('effect', 'ALLOW, for the ponsr-bot user only');
+    line('condition', `eth.tx.to == '${v2Addr}'`);
+    console.log('\n  Additive. The existing v1 policy is not read, edited or replaced, so the');
+    console.log('  contract-creation rule that lets the bot deploy a FeeSplitter stays exactly');
+    console.log('  as it is, and deleting this one policy restores today\'s behaviour precisely.');
+    console.log('\n  Still denied afterwards: any other destination from the bot user, and');
+    console.log('  anything at all from a key that is not the bot\'s.');
+    console.log('\nTo apply it, supply the ROOT credentials for this one command:');
+    console.log('\n  TURNKEY_ROOT_PUBLIC_KEY=... TURNKEY_ROOT_PRIVATE_KEY=... \\');
+    console.log('    npx tsx scripts/turnkey-allow-v2-factory.ts --execute');
+    console.log('\n  Root is deliberately not in backend/.env: it bypasses the policy engine');
+    console.log('  entirely, so keeping it beside the bot\'s key would make scoping pointless.');
+    console.log('\n  Then confirm the policy still bites -- an over-wide rule looks identical');
+    console.log('  to a correct one until the morning it matters:');
+    console.log('    npx tsx scripts/turnkey-verify-policy.ts');
+    return;
+  }
+
   if (!rootPublic || !rootPrivate) {
     console.error(
-      'Root credentials are required and are read only from the environment, never from .env.\n\n' +
+      'Root credentials are required to execute, and are read only from the environment.\n\n' +
         '  TURNKEY_ROOT_PUBLIC_KEY=... TURNKEY_ROOT_PRIVATE_KEY=... \\\n' +
         '    npx tsx scripts/turnkey-allow-v2-factory.ts --execute\n\n' +
         'The bot\'s own key cannot create a policy -- that is what scoping it means.'
@@ -82,10 +114,10 @@ async function main() {
     defaultOrganizationId: organizationId,
   }).apiClient();
 
-  const v1 = String(config.PONS_FACTORY_ADDRESS).toLowerCase();
-  const v2 = String(config.PONS_V2_FACTORY_ADDRESS).toLowerCase();
+  const v1 = v1Addr;
+  const v2 = v2Addr;
 
-  console.log(EXECUTE ? '=== ALLOWING THE V2 FACTORY — EXECUTING ===' : '=== PLAN ONLY (nothing is created) ===');
+  console.log('=== ALLOWING THE V2 FACTORY — EXECUTING ===');
   line('organization', organizationId);
   line('v1 factory (already allowed)', v1);
   line('v2 factory (to allow)', v2);
