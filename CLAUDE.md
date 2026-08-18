@@ -30,7 +30,7 @@ survives in historical notes.
 ### Settled, do not re-litigate without cause
 
 - **Parser model: Claude Haiku 4.5**, chosen for structured-output reliability over cost
-  (Part 9). Run `backend/scripts/run-eval.ts` (28 cases) after any change to the system prompt
+  (Part 9). Run `backend/scripts/run-eval.ts` (**36 cases**) after any change to the system prompt
   in `backend/src/parser.ts` — the eval set must pass cleanly before the change is trusted.
   **Re-run it when the route changes too, not only the prompt.** Its first-ever run (2026-08-06)
   scored 25/28 against a prompt that had been assumed good for weeks. All three failures were
@@ -38,6 +38,12 @@ survives in historical notes.
   worst would have launched a token named `MOON` from `launch $MOON` — a permanent on-chain
   name nobody chose. The rules covering all three were already written; they were stated but
   not operational. An eval that has never run is not evidence of anything.
+
+  Eight cases were added on 2026-08-15 for the pairing asset. Two of them exist only to hold
+  one line: a token **about** something is not a token **paired with** it. "Launch an Apple
+  meme coin" is a theme; "pair it with AAPL" is a permanent financial decision about what
+  every buyer spends. One of the two is in Indonesian against GameStop, because GME is an
+  approved pairing asset — so a model inferring from theme has a real asset to wrongly pick.
 - **Wallet-per-user: Privy. Treasury signer: Turnkey** (native Robinhood Chain policy support,
   Part 10). Two separate provider decisions, not one shared choice.
 - **Treasury pays every launch fee, not the user.** Part 5 explains why this requires the
