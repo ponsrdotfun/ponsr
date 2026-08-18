@@ -64,8 +64,16 @@ The v1 factory and locker are **verified with full source** on
 `api.blockscout.com`, the Pro aggregator, which does — that one wrong URL is why this looked
 blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi/`.
 
-- **Target v1.** One launch config is live (WETH pair, 4.2 ETH graduation). Open question
-  #17 closed.
+- **Target v1 — but #17 is re-opened, see §10 of the findings.** One launch config is live
+  (WETH pair, 4.2 ETH graduation). #17 was closed for v1 because v1 was open and v2 was not;
+  **both are closed now**, so that reasoning no longer holds, and v2 is the one that can pair
+  a launch against a tokenised stock.
+
+  **The code for stock pairing is built and proven** (`pairTokens.ts`, `ponsV2Encoder.ts`,
+  `launchTarget.ts`), verified by simulating real calldata against the live mainnet factory.
+  It is selected by `PONS_FACTORY_VERSION`, which still defaults to `v1` — flipping it is a
+  deliberate act, not a default. Nothing can launch either way until pons whitelists this
+  treasury or reopens the switch.
 
   **`launchEnabled()` is `false` as of 2026-08-15, on v1 AND v2.** It was `true` when this
   was written, and both real launches happened while it was. pons switched it off at
