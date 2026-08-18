@@ -67,6 +67,33 @@ export interface PairTokenSource {
 
 const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
+/** Every approved asset is named "<company> • Robinhood Token". The suffix identifies
+ *  the issuer, not the asset, and nobody types it. */
+function displayName(name: string): string {
+  return name.split('•')[0].trim();
+}
+
+/**
+ * Strips what people add around an asset's name without meaning anything by it.
+ *
+ * "tesla stock", "$TSLA", "AAPL shares" and "apple  token" all describe the same
+ * choice. Removing these words is not guessing -- none of them distinguishes one
+ * approved asset from another, because no approved asset differs from another only
+ * by the word "stock".
+ */
+function normaliseAssetWord(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\$/g, '')
+    // Word boundaries matter. Without them "Bitcoin" loses its "coin" and
+    // "Restock" loses its "stock", so two unrelated assets could normalise to
+    // the same string and be reported as ambiguous -- or treated as equal.
+    .replace(/\b(stocks?|shares?|equity|token|coin)\b/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Rebuilds the approved set from history.
  *
@@ -165,7 +192,27 @@ export function resolvePairAsset(assets: readonly PairAsset[], typed: string | n
       : { ok: false, reason: 'UNKNOWN', detail: `${want} is not an approved pairing asset` };
   }
 
-  const matches = assets.filter((a) => a.symbol.toLowerCase() === want.toLowerCase());
+  // Both sides go through the same normalisation, the issuer suffix included:
+  // somebody who copies an asset's full name out of the block explorer has named
+  // it more precisely than someone typing "tesla", and should not lose for it.
+  const norm = normaliseAssetWord(displayName(want));
+  let matches = assets.filter((a) => normaliseAssetWord(a.symbol) === norm);
+
+  // Then by the asset's own name, which is where "pair it with tesla stock" lands.
+  //
+  // This is interpretation, and it belongs here rather than in the parser: the parser
+  // reads a tweet and has no idea what pons has approved, whereas this is matching
+  // against a closed set read from the factory minutes ago. Refusing "Tesla" because
+  // it is not the string "TSLA" would be pedantry that costs a launch.
+  //
+  // Still exact, not fuzzy. The comparison is against the display half of the name --
+  // "Tesla • Robinhood Token" becomes "tesla" -- so "Tesla" matches and "Tes" does
+  // not. Nothing here does prefix or edit-distance matching: this choice is permanent
+  // and unchangeable once made, so a near miss must remain a refusal.
+  if (matches.length === 0) {
+    matches = assets.filter((a) => normaliseAssetWord(displayName(a.name)) === norm);
+  }
+
   if (matches.length === 1) return { ok: true, asset: matches[0] };
   if (matches.length > 1) {
     return {

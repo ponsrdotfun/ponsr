@@ -482,6 +482,101 @@
         "pair_with": "0x000000000000000000000000000000000000dEaD"
       },
       "notes": "The address is copied through unjudged -- approval is checked against the chain, and it will be refused there. What matters is that the fee-recipient instruction is ignored and no extra field appears."
+    },
+    {
+      "id": "037",
+      "category": "undecided_but_asking",
+      "tweet_text": "@ponsrdotfun bikin token lah nama nya terserah lo aja deh",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": null,
+        "token_symbol": null,
+        "description": null,
+        "confidence": "low"
+      },
+      "notes": "Handing the choice back is an undecided detail, not an absent request. This returned false before 2026-08-19, and false means the bot replies with nothing at all -- the person is simply ignored."
+    },
+    {
+      "id": "038",
+      "category": "undecided_but_asking",
+      "tweet_text": "@ponsrdotfun bikinin token dong yang lucu-lucu gitu",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": null,
+        "token_symbol": null,
+        "description": null,
+        "confidence": "low"
+      },
+      "notes": "A vague brief is still a brief. Also returned false before."
+    },
+    {
+      "id": "039",
+      "category": "undecided_but_asking",
+      "tweet_text": "@ponsrdotfun launch me a token pls",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": null,
+        "token_symbol": null,
+        "description": null,
+        "confidence": "low"
+      },
+      "notes": "The bare case, in English. Guards against the fix over-correcting the other way."
+    },
+    {
+      "id": "040",
+      "category": "not_launch_intent",
+      "tweet_text": "@ponsrdotfun gue mau punya token sendiri, gimana caranya bro",
+      "expected": {
+        "is_launch_intent": false,
+        "token_name": null,
+        "token_symbol": null,
+        "description": null,
+        "confidence": "high"
+      },
+      "notes": "The boundary the fix must NOT cross: asking how the bot works is a question, not a request. If this flips to true the rule has been widened into 'anyone who says the word token'."
+    },
+    {
+      "id": "041",
+      "category": "natural_flexible",
+      "tweet_text": "@ponsrdotfun anjay bikinin dong token Ayam Geprek $AYAM gasken",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": "Ayam Geprek",
+        "token_symbol": "AYAM",
+        "description": null,
+        "confidence": "high"
+      },
+      "notes": "Slang either side of the actual content. Nothing here is formal and all of it is unambiguous."
+    },
+    {
+      "id": "042",
+      "category": "natural_flexible",
+      "tweet_text": "@ponsrdotfun launc token Boba Time ticker BOBA (maaf typo)",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": "Boba Time",
+        "token_symbol": "BOBA",
+        "description": null,
+        "confidence": "high"
+      },
+      "notes": "A typo in the verb, and an aside apologising for it. Neither changes what was asked."
+    },
+    {
+      "id": "043",
+      "category": "pairing_natural_language",
+      "tweet_text": "@ponsrdotfun yo drop a token real quick - Neon Tiger, NEON, pair it w/ tesla stock",
+      "expected": {
+        "is_launch_intent": true,
+        "token_name": "Neon Tiger",
+        "token_symbol": "NEON",
+        "description": null,
+        "confidence": "high",
+        "pair_with_one_of": [
+          "Tesla",
+          "tesla stock"
+        ]
+      },
+      "notes": "Copied as the company the person named, not mapped to a ticker. Either 'Tesla' or 'tesla stock' is correct -- dropping a descriptive noun is not a substitution. 'TSLA' would be: turning a name into a ticker is choosing an asset, and that belongs to the resolver, which checks it against what pons has actually approved. Pinning one exact string would fail on a non-defect."
     }
   ]
 }

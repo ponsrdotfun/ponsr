@@ -237,3 +237,55 @@ describe('PairAssetRegistry', () => {
     await expect(reg.list()).rejects.toThrow('cold');
   });
 });
+
+/**
+ * Matching what a person actually types.
+ *
+ * The parser deliberately does not turn "tesla stock" into TSLA -- choosing an asset
+ * is not its job, and a model that maps names to tickers is a model that will map a
+ * token's *theme* to a pairing nobody asked for. So the interpretation happens here
+ * instead, against the closed set pons has approved rather than against the whole
+ * world of company names.
+ */
+describe('resolvePairAsset — how people actually write it', () => {
+  const ASSETS: PairAsset[] = [
+    { address: '0x' + 'a1'.repeat(20), symbol: 'TSLA', name: 'Tesla • Robinhood Token', decimals: 18, graduationThreshold: null },
+    { address: '0x' + 'a2'.repeat(20), symbol: 'AAPL', name: 'Apple • Robinhood Token', decimals: 18, graduationThreshold: null },
+    { address: '0x' + 'a3'.repeat(20), symbol: 'GOOGL', name: 'Alphabet Class A • Robinhood Token', decimals: 18, graduationThreshold: null },
+    { address: '0x' + 'a4'.repeat(20), symbol: 'USDG', name: 'Global Dollar', decimals: 6, graduationThreshold: null },
+  ];
+  const got = (s: string) => resolvePairAsset(ASSETS, s);
+
+  it('resolves the company name people type instead of the ticker', () => {
+    expect(got('Tesla')).toMatchObject({ ok: true, asset: { symbol: 'TSLA' } });
+    expect(got('apple')).toMatchObject({ ok: true, asset: { symbol: 'AAPL' } });
+    expect(got('Global Dollar')).toMatchObject({ ok: true, asset: { symbol: 'USDG' } });
+  });
+
+  it('ignores the words people add around it', () => {
+    for (const typed of ['tesla stock', 'TESLA shares', '$TSLA', 'tsla token', '  Tesla  ']) {
+      expect(got(typed)).toMatchObject({ ok: true, asset: { symbol: 'TSLA' } });
+    }
+  });
+
+  it('does not need the issuer suffix nobody types', () => {
+    expect(got('Alphabet Class A')).toMatchObject({ ok: true, asset: { symbol: 'GOOGL' } });
+    expect(got('Tesla • Robinhood Token')).toMatchObject({ ok: true, asset: { symbol: 'TSLA' } });
+  });
+
+  // The pairing is permanent and unchangeable once made. Everything above is exact
+  // matching after removing noise; nothing is fuzzy, and a near miss stays a refusal.
+  it('still refuses a near miss rather than reaching for the closest asset', () => {
+    for (const typed of ['Tes', 'Teslaa', 'AAP', 'Alphabet Class B', 'googl3']) {
+      expect(got(typed).ok).toBe(false);
+    }
+  });
+
+  // A common name that is genuinely not this asset's name must be refused, not
+  // guessed at -- and the refusal names what is available, so the next attempt works.
+  it('refuses a nickname it was never told, and says what exists', () => {
+    const r = got('google');
+    expect(r.ok).toBe(false);
+    expect((r as any).detail).toContain('GOOGL');
+  });
+});

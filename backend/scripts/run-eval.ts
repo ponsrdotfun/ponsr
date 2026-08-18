@@ -26,6 +26,13 @@ interface EvalCase {
   expected: {
     /** Optional: only the pairing cases assert this. */
     pair_with?: string | null;
+    /** For phrasings where several answers are equally correct. "pair it with tesla
+     *  stock" may reasonably yield "Tesla" or "tesla stock" -- both keep the company
+     *  name the person typed. What must NOT appear is "TSLA": mapping a name to a
+     *  ticker is choosing an asset, and that decision belongs to the resolver, which
+     *  checks it against what pons has actually approved. Pinning one exact string
+     *  here would fail the eval on a difference that is not a defect. */
+    pair_with_one_of?: string[];
     is_launch_intent: boolean;
     token_name: string | null;
     token_symbol: string | null;
@@ -52,6 +59,13 @@ function scoreNormalCase(actual: ParsedIntent, expected: EvalCase['expected']): 
   // test. Where a case does state one, it is compared case-insensitively but
   // otherwise literally: the parser must copy what the person typed, and a model
   // that "helpfully" turned Tesla into TSLA has chosen an asset nobody named.
+  if (expected.pair_with_one_of) {
+    const got = (actual.pairWith ?? '').trim().toLowerCase();
+    const ok = expected.pair_with_one_of.some((v) => v.trim().toLowerCase() === got);
+    if (!ok) {
+      return { pass: false, note: `pairWith "${actual.pairWith}" is not one of: ${expected.pair_with_one_of.join(' | ')}` };
+    }
+  }
   if (expected.pair_with !== undefined) {
     const gotPair = (actual.pairWith ?? '').trim().toLowerCase();
     const wantPair = (expected.pair_with ?? '').trim().toLowerCase();
