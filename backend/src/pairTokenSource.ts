@@ -20,14 +20,19 @@ const ERC20_METADATA_ABI = [
 ];
 
 /**
- * How far back to scan for approval events.
+ * How wide a single `eth_getLogs` window may be.
  *
- * The factory's approvals were granted around block 23.58M and the chain head is
- * past 37M, so a scan has to cover millions of blocks. Providers cap the span of a
- * single `eth_getLogs`, hence the chunking; the default window is generous because
- * missing an approval means silently not offering an asset pons does support.
- */
-const DEFAULT_CHUNK = 100_000;
+ * The approvals were granted around block 23.58M against a head past 39M, so a scan
+ * covers millions of blocks and providers cap the span of one request -- hence the
+ * chunking.
+ *
+ * Measured against this RPC on 2026-08-19: a 2,000,000-block window returns in 0.5s.
+ *  The original 100,000 was a guess made without asking, and it turned a nine-request
+ *  scan into a hundred and sixty-five -- 56 seconds, which is long enough that the
+ *  status page timed out on it and the first person to ask for a stock pairing would
+ *  have waited a minute. Kept below the measured ceiling rather than at it, so a
+ *  tightening on their side degrades speed instead of breaking the scan. */
+const DEFAULT_CHUNK = 1_000_000;
 
 export interface ChainPairTokenSourceOptions {
   provider: ethers.Provider;
@@ -46,11 +51,10 @@ export class ChainPairTokenSource implements PairTokenSource {
 
   /** Events already scanned, and the block they were scanned up to.
    *
-   *  Approvals were granted around block 23.58M against a head past 37M, so a full
-   *  scan is ~135 windows and takes the better part of a minute. Doing that every
-   *  refresh would stall the bot for a minute an hour to re-learn facts that have
-   *  not changed since 1 August. Events are immutable once mined, so a refresh only
-   *  needs the blocks it has not seen. */
+   *  Even at a million blocks a window, a full scan is ~17 requests to re-learn facts
+   *  that have not changed since 1 August. Events are immutable once mined, so a
+   *  refresh only needs the blocks it has not seen -- which after the first pass is
+   *  usually none at all. */
   private seen: ApprovalEvent[] = [];
   private scannedTo: number | null = null;
 

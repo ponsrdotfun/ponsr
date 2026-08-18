@@ -102,8 +102,8 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
  * Which assets a launch may be priced in.
  *
  * Only v2 can pair against anything but ETH, so there is nothing to discover on v1
- * and no reason to spend a log scan finding that out. Discovery is lazy: the first
- * mention asking for a pairing pays for it, and an hourly TTL covers the rest.
+ * and no reason to spend a log scan finding that out. The set is discovered once at
+ * boot (below) and refreshed on an hourly TTL.
  */
 const pairAssets =
   config.PONS_FACTORY_VERSION === 'v2'
@@ -117,6 +117,22 @@ const pairAssets =
     : undefined;
 
 const launchTarget = createLaunchTarget(provider);
+
+// Warmed at boot, in the background.
+//
+// Discovery is a log scan, and the first caller pays for it. Left cold, that caller
+// is whoever first asks for a stock-paired launch -- so the feature's first ever use
+// is also its slowest, and /status reports the approved set as unavailable until
+// somebody happens to trigger it. Neither is a failure, but both look like one.
+//
+// Fire-and-forget on purpose: a failure here must not stop the bot booting. The set
+// is re-read on demand anyway, and approval is checked live at launch time.
+if (pairAssets) {
+  void pairAssets
+    .list()
+    .then((assets) => console.log(`Pair assets discovered: ${assets.map((a) => a.symbol).join(', ') || 'none'}.`))
+    .catch((err) => console.warn('[pairTokens] initial discovery failed, will retry on demand:', err?.message ?? err));
+}
 
 const deps = {
   pairAssets,
