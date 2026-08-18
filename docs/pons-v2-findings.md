@@ -1041,3 +1041,50 @@ curve, graduation into a Uniswap pool — has demonstrably completed on mainnet.
 - **Open question #17 ("which version to target") is re-opened.** It was closed for v1 on the
   grounds that v1 was open and v2 was not. Neither is open now, so the reasoning that settled it
   no longer applies.
+
+### 10.7 🔴 v2 does not push creator fees — it escrows them, and the escrow pays `msg.sender`
+
+Found on 2026-08-18 while wiring the v2 launch path, and it would have cost real money.
+
+v1 **pushes**: `PonsLaunchLocker.collectFees` transfers the proceeds straight to
+`feeRedirects[token]`. A contract that can move ERC20 out again is therefore sufficient, which
+is exactly what `FeeSplitter` is and why §9.11 could prove the fee path end to end.
+
+v2 **credits**. Fees accumulate in `PonsV2FeeEscrow`
+(`0xbc39B6502E1a6Ab36E4A5c5026A35F08342A0A9c`, verified source) against the recipient's
+address, and are collected by calling:
+
+```solidity
+function claimToken(address token) external returns (uint256);   // pays msg.sender
+```
+
+Read that carefully. There is **no `claimFor`**, and no way for the treasury or anyone else to
+claim on another address's behalf. So a v2 launch naming a plain `FeeSplitter` as
+`creatorFeeRecipient` would be credited correctly and forever, and **no transaction would exist
+that could ever move those fees**. Nothing reverts. The money is visible, attributed, and
+permanently unreachable — the §9.10 incident arriving by a different route.
+
+Confirmed empirically as well as from source: the escrow's mainnet log shows `CreditedToken`
+raised by curve and hook contracts as trading happens, and `ClaimedToken` raised by recipients
+collecting. **There is no public "collect" step for a fee recipient to trigger on v2** — the
+money is already there; the only action is the claim.
+
+Consequences, all now implemented:
+
+- `contracts/FeeSplitterV2.sol` inherits `FeeSplitter` and adds `claimAndSplit`. It inherits
+  rather than restates: a second copy of the split logic is a second thing to keep in step,
+  which is what stranded the fees the first time.
+- **Partial claims are required, not a nicety.** The escrow documents that `creditToken` is
+  permissionless, that a recipient's balance aggregates credits from every source, and that
+  against an asset with a per-transfer cap a full-balance claim can revert — leaving the
+  recipient unable to draw any of it.
+- `compile-all.js` emits both splitters from one compile; `splitterDeployer.ts` picks by
+  factory version and throws rather than falling back; `phase-b-launch.ts` reads
+  `claimAndSplit`'s selector back out of the deployed bytecode.
+- `scripts/collect-and-split-v2.ts` replaces the v1 collection flow, and refuses outright if
+  handed a v1 splitter — verified against a real deployed one.
+
+**Still unproven:** no v2 launch can be made by anyone while `launchEnabled` is false, so
+`FeeSplitterV2` has never met a real fee. It passes 12 tests against a mock built from the
+escrow's own source, which is not the same thing. Run it end to end before trusting it with a
+creator's money.
