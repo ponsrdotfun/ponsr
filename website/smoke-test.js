@@ -106,6 +106,10 @@ async function run() {
           launchedAt: Date.now() - (i + 1) * 3600 * 1000,
           liquidityEth: liq,
           progress: Math.min(1, liq / 4.2),
+          // Uncapped, exactly as the real rows carry it. Sorting uses this: with only
+          // the clamped value, every fixture above 4.2 ETH ties at 1 and the ordering
+          // assertion below passes or fails on log order rather than on the sort.
+          progressRaw: liq / 4.2,
           holders: 3 + i,
           status: liq >= 4.2 ? 'graduated' : 'curve',
           trend: null,

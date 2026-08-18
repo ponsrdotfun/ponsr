@@ -1098,6 +1098,17 @@
     pairToken: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', // WETH
     // keccak("TokenLaunched(address,address,address,address,address,uint256,uint256,uint256,uint256,uint256)")
     topicLaunched: '0xdb51ea9ad51ab453a65a4cb7e60c3cb378c9501bb002609f8f97778fb6c4235a',
+
+    // v2 is a different contract emitting a differently-shaped event, so it needs
+    // its own query rather than a second address on the same one. Three things move:
+    // the deployer is topic3 rather than topic2, there is no pool address at all
+    // (a v2 launch holds its liquidity in a bonding curve), and the graduation
+    // threshold arrives in the event instead of having to be read from a config.
+    // A launch that is invisible here still exists on-chain -- the board simply
+    // does not show it, which is the failure that hid both real launches in August.
+    factoryV2: '0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8',
+    // keccak("TokenLaunched(address,address,address,address,uint256,uint256)")
+    topicLaunchedV2: '0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607',
     // Launch config 0's graduation threshold, read live on 2026-08-04. Shown as
     // progress, so being slightly stale would mislead rather than break -- worth
     // re-checking with scripts/probe-pons-v1.js if pons edits the config.
@@ -1142,6 +1153,12 @@
     }, 'latest']).then(hexToBig).catch(function () { return 0n; });
   }
 
+  /** A v2 launch paired against native ETH holds ETH on its curve, so there is no
+   *  balanceOf to call -- the account balance is the liquidity. */
+  function nativeBalanceOf(holder) {
+    return rpcCall('eth_getBalance', [holder, 'latest']).then(hexToBig).catch(function () { return 0n; });
+  }
+
   function blockTime(blockNumberHex) {
     return rpcCall('eth_getBlockByNumber', [blockNumberHex, false])
       .then(function (b) { return Number(hexToBig(b.timestamp)) * 1000; })
@@ -1181,9 +1198,17 @@
   function tokenIdentity(address) {
     return Promise.all([
       rpcCall('eth_call', [{ to: address, data: '0x06fdde03' }, 'latest']).catch(function () { return null; }),
-      rpcCall('eth_call', [{ to: address, data: '0x95d89b41' }, 'latest']).catch(function () { return null; })
+      rpcCall('eth_call', [{ to: address, data: '0x95d89b41' }, 'latest']).catch(function () { return null; }),
+      // decimals(). Read, never assumed: USDG is 6 while everything else on this
+      // chain is 18, and assuming 18 would show a balance a trillion times too small.
+      rpcCall('eth_call', [{ to: address, data: '0x313ce567' }, 'latest']).catch(function () { return null; })
     ]).then(function (r) {
-      return { name: decodeString(r[0]), symbol: decodeString(r[1]) };
+      var dec = r[2] && r[2] !== '0x' ? Number(hexToBig(r[2])) : null;
+      return {
+        name: decodeString(r[0]),
+        symbol: decodeString(r[1]),
+        decimals: dec !== null && dec >= 0 && dec <= 36 ? dec : null
+      };
     });
   }
 
@@ -1213,26 +1238,63 @@
       return Promise.resolve(window.__PONSR_FIXTURE__);
     }
 
-    return rpcCall('eth_getLogs', [{
+    // Both factories. v1 launches keep appearing exactly as before; v2 launches are
+    // read with their own shape. A failure on either side must not blank the board,
+    // so each query falls back to an empty list -- half a ledger beats none, and the
+    // half that is missing is visibly missing rather than silently wrong.
+    var v1Logs = rpcCall('eth_getLogs', [{
       address: CHAIN.factory,
       fromBlock: '0x0',
       toBlock: 'latest',
       topics: [CHAIN.topicLaunched, null, CHAIN.launchers.map(pad32)]
-    }]).then(function (logs) {
-      return Promise.all(logs.map(function (log) {
+    }]).catch(function () { return []; });
+
+    var v2Logs = rpcCall('eth_getLogs', [{
+      address: CHAIN.factoryV2,
+      fromBlock: '0x0',
+      toBlock: 'latest',
+      // deployer is topic3 on v2, not topic2. Filtering on the wrong position
+      // returns nothing at all, which reads identically to "we never launched".
+      topics: [CHAIN.topicLaunchedV2, null, null, CHAIN.launchers.map(pad32)]
+    }]).catch(function () { return []; });
+
+    return Promise.all([v1Logs, v2Logs]).then(function (both) {
+      var logs = (both[0] || []).map(function (l) { return { log: l, v2: false }; })
+        .concat((both[1] || []).map(function (l) { return { log: l, v2: true }; }));
+
+      return Promise.all(logs.map(function (entry) {
+        var log = entry.log;
         var token = addrFromWord(log.topics[1]);
-        var pool = addrFromWord(word(log.data, 1));
+        // v1 carries the Uniswap pool; v2 carries a bonding curve and names its pair
+        // asset per launch, because on v2 the pairing is chosen at launch rather than
+        // fixed by the config.
+        var pool = entry.v2 ? addrFromWord(log.topics[2]) : addrFromWord(word(log.data, 1));
+        var pairToken = entry.v2 ? addrFromWord(word(log.data, 0)) : CHAIN.pairToken;
+        // A v2 launch against native ETH holds ETH, not an ERC20 -- there is no
+        // balanceOf to call, so the curve's own balance is the figure.
+        var nativePair = entry.v2 && /^0x0+$/.test(pairToken);
+        var thresholdRaw = entry.v2 ? hexToBig(word(log.data, 2)) : BigInt(CHAIN.graduationWei);
+
         return Promise.all([
           blockTime(log.blockNumber),
           tokenMeta(token),
-          erc20BalanceOf(CHAIN.pairToken, pool),
-          tokenIdentity(token)
+          nativePair ? nativeBalanceOf(pool) : erc20BalanceOf(pairToken, pool),
+          tokenIdentity(token),
+          entry.v2 && !nativePair ? tokenIdentity(pairToken) : Promise.resolve(null)
         ]).then(function (parts) {
           var launchedAt = parts[0], meta = parts[1] || {}, liquidityWei = parts[2];
           var ident = parts[3] || {};
+          var pairIdent = parts[4] || {};
+          var pairSymbol = entry.v2 ? (nativePair ? 'ETH' : (pairIdent.symbol || '?')) : 'ETH';
+          var pairDecimals = entry.v2 && !nativePair ? (pairIdent.decimals != null ? pairIdent.decimals : 18) : 18;
           // Contract first, indexer second, address slice only if both are unreachable.
           var symbol = ident.symbol || meta.symbol || token.slice(2, 8).toUpperCase();
-          var progress = Number(liquidityWei) / CHAIN.graduationWei;
+          // Per-launch on v2: the threshold is denominated in whatever the launch is
+          // paired against, so one hardcoded ETH figure would be wrong for every
+          // stock-paired launch. Computed as a ratio, which is the one number that
+          // stays comparable across assets -- 24 AAPL and 4.2 ETH are not orderable,
+          // but "31% of the way there" and "62% of the way there" are.
+          var progress = Number(thresholdRaw) > 0 ? Number(liquidityWei) / Number(thresholdRaw) : 0;
           return {
             // The contract address, not the symbol. Symbols are chosen by whoever tweets,
             // so two people asking for $PONSR produce two tokens with one id -- and the
@@ -1249,8 +1311,19 @@
             // meaningful on a bonding curve: it is also the graduation progress.
             // The old board showed a USD market cap, which would need a price
             // oracle that does not exist on this chain.
-            liquidityEth: weiToEth(liquidityWei),
+            // Kept as-is for ETH-paired launches so nothing about the existing board
+            // changes. Null when the launch trades in something else: a stock amount
+            // labelled ETH would be a wrong number wearing a familiar unit.
+            liquidityEth: pairSymbol === 'ETH' ? weiToEth(liquidityWei) : null,
+            liquidity: Number(liquidityWei) / Math.pow(10, pairDecimals),
+            pairSymbol: pairSymbol,
+            pairToken: pairToken,
+            factoryVersion: entry.v2 ? 'v2' : 'v1',
             progress: Math.min(1, progress),
+            // Uncapped, for ordering only. `progress` is clamped to 1 so a bar cannot
+            // overfill, and sorting on the clamped value makes every graduated launch
+            // tie at 1 and fall into whatever order the log happened to arrive in.
+            progressRaw: progress,
             holders: typeof meta.holders_count === 'number'
               ? meta.holders_count
               : (meta.holders ? Number(meta.holders) : null),
@@ -1276,6 +1349,24 @@
      oracle we can read from a static page, so a dollar figure would be a guess
      dressed as a fact -- and this number is the one the graduation threshold is
      denominated in anyway. */
+  /**
+   * An amount in the asset a launch actually trades in.
+   *
+   * fmtEth below stays for everything genuinely denominated in ETH. This exists
+   * because a v2 launch can be priced in AAPL or USDG, and printing "24.20 ETH" for
+   * 24.20 AAPL is not a formatting slip -- it is a different claim about how much
+   * money is in something.
+   */
+  function fmtPair(t) {
+    var sym = t.pairSymbol || 'ETH';
+    if (sym === 'ETH') return fmtEth(t.liquidityEth != null ? t.liquidityEth : t.liquidity);
+    var n = t.liquidity;
+    if (n === null || n === undefined) return '—';
+    if (n >= 1) return n.toFixed(2) + ' ' + sym;
+    if (n >= 0.001) return n.toFixed(4) + ' ' + sym;
+    return (n > 0 ? n.toFixed(6) : '0') + ' ' + sym;
+  }
+
   function fmtEth(n) {
     if (n === null || n === undefined) return '—';
     if (n >= 1) return n.toFixed(2) + ' ETH';
@@ -1360,7 +1451,7 @@
     // Liquidity, not a percentage change: there is no price history to compute a
     // change from, and a ticker of fabricated percentages was the most confident
     // false thing on the page.
-    return '<span class="ticker-item" data-sym="'+s.symbol+'"><span class="sym">$'+s.symbol+'</span> <span class="chg">'+fmtEth(s.liquidityEth)+'</span> <span class="sep">/</span></span>';
+    return '<span class="ticker-item" data-sym="'+s.symbol+'"><span class="sym">$'+s.symbol+'</span> <span class="chg">'+fmtPair(s)+'</span> <span class="sep">/</span></span>';
   }
   function buildTicker() {
     const track = document.getElementById('ticker-track');
@@ -1431,13 +1522,33 @@
       const okQ = !q || t.name.toLowerCase().indexOf(q) >= 0 || t.symbol.toLowerCase().indexOf(q) >= 0;
       return okF && okQ;
     });
+    // How much is in a launch, as one comparable number.
+    //
+    // Raw liquidity stopped being orderable the moment launches could be priced in
+    // different assets: 24 AAPL against 4.2 ETH needs a price oracle this chain does
+    // not have. The ratio to each launch's own graduation threshold asks the same
+    // question of every asset -- and on an ETH-only board it is liquidity divided by
+    // a constant, so today's ordering does not change at all.
+    //
+    // Uncapped on purpose. `progress` is clamped to 1 so a bar cannot overfill, and
+    // ranking on the clamped value ties every graduated launch at 1 and leaves them
+    // in whatever order the logs arrived.
+    var liqRank = function (t) {
+      if (typeof t.progressRaw === 'number') return t.progressRaw;
+      if (typeof t.progress === 'number') return t.progress;
+      return t.liquidityEth || 0;
+    };
     arr.sort(function(a, b) {
       switch (ledgerState.sort) {
         case 'oldest': return a.launchedAt - b.launchedAt;
-        case 'mcap': return (b.liquidityEth || 0) - (a.liquidityEth || 0);
+        // Ranked by graduation progress, not by raw liquidity. Once launches can be
+        // priced in different assets, 24 AAPL and 4.2 ETH are not orderable without a
+        // price oracle this chain does not have -- but "how close to graduating" is
+        // the same question for both, and it is what the number was standing in for.
+        case 'mcap': return liqRank(b) - liqRank(a);
         // 'gainers' needs price history. With none, fall back to liquidity rather
         // than ordering by a number that does not exist.
-        case 'gainers': return (b.liquidityEth || 0) - (a.liquidityEth || 0);
+        case 'gainers': return liqRank(b) - liqRank(a);
         case 'holders': return (b.holders || 0) - (a.holders || 0);
         default: return b.launchedAt - a.launchedAt; // newest
       }
@@ -1459,7 +1570,7 @@
           '<span class="token-symbol">$' + t.symbol + '</span></span>' +
           (chg === null ? '' : '<span class="tcard-chg ' + (chg >= 0 ? 'up' : 'down') + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>') +
         '</span>' +
-        '<span class="tcard-mc"><b data-mcap>' + fmtEth(t.liquidityEth) + '</b> <i>LIQ</i></span>' +
+        '<span class="tcard-mc"><b data-mcap>' + fmtPair(t) + '</b> <i>LIQ</i></span>' +
         '<span class="tcard-bar"><i style="width:' + prog + '%"></i></span>' +
         '<span class="tcard-foot">' +
           '<span class="tcard-addr">' + shortAddr(tokenAddress(t)) + '</span>' +
@@ -1615,7 +1726,7 @@
     const t = spotlightToken;
     document.getElementById('sp-name').textContent = t.name;
     document.getElementById('sp-sym').textContent = '$' + t.symbol;
-    document.getElementById('sp-mcap').textContent = fmtEth(t.liquidityEth);
+    document.getElementById('sp-mcap').textContent = fmtPair(t);
     document.getElementById('sp-age').textContent = fmtAge(t.launchedAt);
     const w = 520, h = 320, line = sparklinePath(t.trend, w, h, 26), area = line + ' L'+w+','+h+' L0,'+h+' Z';
     document.getElementById('sp-chart').innerHTML =
@@ -1903,7 +2014,7 @@
     st.className = 'tstatus ' + t.status;
 
     document.getElementById('tp-age').textContent = 'launched ' + fmtAge(t.launchedAt);
-    document.getElementById('tp-mcap').textContent = fmtEth(t.liquidityEth);
+    document.getElementById('tp-mcap').textContent = fmtPair(t);
     document.getElementById('tp-holders').textContent = t.holders === null ? '—' : fmtHolders(t.holders);
     document.getElementById('tp-status2').textContent = graduated ? 'Graduated' : 'On curve';
     document.getElementById('tp-launched').textContent = fmtAge(t.launchedAt);
@@ -2435,7 +2546,7 @@
     x.fillText('$' + t.symbol, 72, 272);
 
     // Only figures that came off the chain. A missing one is omitted, never zeroed.
-    var stats = [['LIQUIDITY', fmtEth(t.liquidityEth)]];
+    var stats = [['LIQUIDITY', fmtPair(t)]];
     if (typeof t.holders === 'number') stats.push(['HOLDERS', String(t.holders)]);
     stats.push(['STATUS', t.status === 'graduated' ? 'Graduated' : 'On curve']);
 

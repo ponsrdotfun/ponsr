@@ -1,13 +1,35 @@
 import { ethers } from 'ethers';
 import { config } from './config';
 import { PONS_FACTORY_ABI } from './ponsEncoder';
+import { PONS_V2_FACTORY_ABI } from './ponsV2Encoder';
 
 export function createProvider(): ethers.JsonRpcProvider {
   return new ethers.JsonRpcProvider(config.RPC_URL, config.CHAIN_ID);
 }
 
+/**
+ * The factory the bot actually launches through.
+ *
+ * This used to be v1 unconditionally, which was correct while v1 was the only
+ * option and quietly wrong the moment it was not: every guard in this file --
+ * the live fee, `launchEnabled`, the whitelist, the launch config -- would have
+ * been read from a contract the bot was no longer using. Checking the wrong
+ * factory before spending money is worse than not checking, because it produces
+ * a confident answer about somewhere else.
+ */
+export function activeFactoryAddress(): string {
+  return config.PONS_FACTORY_VERSION === 'v2'
+    ? config.PONS_V2_FACTORY_ADDRESS
+    : config.PONS_FACTORY_ADDRESS;
+}
+
 function factory(provider: ethers.Provider): ethers.Contract {
-  return new ethers.Contract(config.PONS_FACTORY_ADDRESS, PONS_FACTORY_ABI, provider);
+  const v2 = config.PONS_FACTORY_VERSION === 'v2';
+  return new ethers.Contract(
+    activeFactoryAddress(),
+    v2 ? PONS_V2_FACTORY_ABI : PONS_FACTORY_ABI,
+    provider
+  );
 }
 
 /**
@@ -73,11 +95,15 @@ export async function getLaunchReadiness(
   dexId: bigint = config.PONS_DEX_ID
 ): Promise<LaunchReadiness> {
   const f = factory(provider);
+  // v2 has no dexConfigCount: the DEX is not a launch parameter there, the pairing
+  // asset is. Calling it would throw rather than report, so the dex leg is simply
+  // not a question on v2 and is answered as satisfied.
+  const isV2 = config.PONS_FACTORY_VERSION === 'v2';
   const [enabled, whitelisted, count, dexCount] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,
     f.launchConfigCount() as Promise<bigint>,
-    f.dexConfigCount() as Promise<bigint>,
+    isV2 ? Promise.resolve(1n) : (f.dexConfigCount() as Promise<bigint>),
   ]);
 
   const launchConfigCount = BigInt(count.toString());
@@ -112,10 +138,15 @@ export async function getLaunchReadiness(
     };
   }
 
-  const [cfg, dex] = await Promise.all([f.getLaunchConfig(launchConfigId), f.getDexConfig(dexId)]);
+  // v2 has no getDexConfig either, and no pairToken on the launch config: the
+  // pairing is a launch parameter there, chosen per launch, not a property of the
+  // config. Reporting v1's shape for a v2 launch would describe a pairing nobody
+  // is using.
+  const cfg = await f.getLaunchConfig(launchConfigId);
+  const dex = isV2 ? { enabled: true } : await f.getDexConfig(dexId);
   const configEnabled = Boolean(cfg.enabled);
   const dexEnabled = Boolean(dex.enabled);
-  const pairToken = cfg.pairToken as string;
+  const pairToken = isV2 ? null : (cfg.pairToken as string);
 
   let reason: string | undefined;
   if (!canLaunch) reason = 'launchEnabled is false and this launcher is not whitelisted';
