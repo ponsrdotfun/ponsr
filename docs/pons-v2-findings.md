@@ -927,7 +927,7 @@ a minute.
 
 ---
 
-## 10. ⚠️ v2 re-read (2026-08-15): §7's pair-token findings are now WRONG
+## 10. ⚠️ v2 re-read (2026-08-18): §7's pair-token findings are now WRONG
 
 §7 was written on 2026-08-04 and said v2 was "deployed but closed", with **nothing approved,
 not even ETH**, and stock pairing "not actionable". Every one of those reads was correct on the

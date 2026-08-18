@@ -11,7 +11,7 @@ survives in historical notes.
 
 1. **`docs/pons-v2-findings.md` — start at §10, then §9.** Sections 1–8 are what was believed
    from documentation; §9 onward is what the verified contracts and two real mainnet launches
-   actually showed, and **§10 (2026-08-15) supersedes §7 outright** — v2 now approves eight
+   actually showed, and **§10 (2026-08-18) supersedes §7 outright** — v2 now approves eight
    pairing assets, six of them tokenised stocks, and both the ETH exemption and the whitelist
    bypass are settled from source rather than inferred. Where they disagree, the later section
    wins. §9.10 is an incident report worth reading
@@ -39,7 +39,7 @@ survives in historical notes.
   name nobody chose. The rules covering all three were already written; they were stated but
   not operational. An eval that has never run is not evidence of anything.
 
-  Eight cases were added on 2026-08-15 for the pairing asset. Two of them exist only to hold
+  Eight cases were added on 2026-08-18 for the pairing asset. Two of them exist only to hold
   one line: a token **about** something is not a token **paired with** it. "Launch an Apple
   meme coin" is a theme; "pair it with AAPL" is a permanent financial decision about what
   every buyer spends. One of the two is in Indonesian against GameStop, because GME is an
@@ -81,7 +81,7 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   deliberate act, not a default. Nothing can launch either way until pons whitelists this
   treasury or reopens the switch.
 
-  **`launchEnabled()` is `false` as of 2026-08-15, on v1 AND v2.** It was `true` when this
+  **`launchEnabled()` is `false` as of 2026-08-18, on v1 AND v2.** It was `true` when this
   was written, and both real launches happened while it was. pons switched it off at
   **2026-08-12 19:42 UTC** — recorded on-chain by `LaunchEnabledUpdated(false)` on the
   factory — and **nobody has launched anything through pons since**, so this is a

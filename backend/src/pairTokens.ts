@@ -4,7 +4,7 @@
  * pons v2 lets a launch be priced, funded and graduated in something other than
  * ETH: buyers spend that asset to buy in, the graduation target is counted in it,
  * the Uniswap pool it graduates into is paired against it, and the creator is paid
- * in it. As of 2026-08-15 eight assets are approved and six are tokenised stocks
+ * in it. As of 2026-08-18 eight assets are approved and six are tokenised stocks
  * (AAPL, NVDA, GOOGL, TSLA, GME, SPCX, SPY) plus USDG.
  *
  * THE SET IS DISCOVERED, NOT HARDCODED
@@ -12,7 +12,7 @@
  * `setPairTokenApproved` is owner-only and pons calls it whenever they like. A
  * checked-in list would be a snapshot of one afternoon, and this project has been
  * bitten by exactly that: the findings doc confidently recorded "nothing is
- * approved, not even ETH" and was wrong eleven days later. So the approved set is
+ * approved, not even ETH" and was wrong fourteen days later. So the approved set is
  * rebuilt from the factory's own `PairTokenApprovalUpdated` history, which means
  * an asset pons approves tomorrow works without a deploy, and one they revoke
  * stops working without anyone having to notice.
