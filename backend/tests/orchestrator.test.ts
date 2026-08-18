@@ -106,6 +106,7 @@ const HIGH_CONFIDENCE_MOON: ParsedIntent = {
   tokenName: 'Moon Coin',
   tokenSymbol: 'MOON',
   description: null,
+  pairWith: null,
 };
 
 describe('handleMention -- full pipeline integration', () => {
@@ -162,7 +163,7 @@ describe('handleMention -- full pipeline integration', () => {
     const mention2 = makeMention({ tweetId: 't2', text: 'launch Star Fox STARFOX' });
     const parser = new MockParser(new Map([
       [mention1.text, HIGH_CONFIDENCE_MOON],
-      [mention2.text, { isLaunchIntent: true, confidence: 'high', tokenName: 'Star Fox', tokenSymbol: 'STARFOX', description: null }],
+      [mention2.text, { isLaunchIntent: true, confidence: 'high', tokenName: 'Star Fox', tokenSymbol: 'STARFOX', description: null, pairWith: null }],
     ]));
     const walletResolver = new MockWalletResolver(db);
 
@@ -198,7 +199,7 @@ describe('handleMention -- full pipeline integration', () => {
   it('rejects a not-launch-intent tweet silently (no reply sent, no spend)', async () => {
     const mention = makeMention({ text: 'lol did you see the new chain launch today' });
     const parser = new MockParser(new Map([[mention.text, {
-      isLaunchIntent: false, confidence: 'low', tokenName: null, tokenSymbol: null, description: null,
+      isLaunchIntent: false, confidence: 'low', tokenName: null, tokenSymbol: null, description: null, pairWith: null,
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
@@ -212,7 +213,7 @@ describe('handleMention -- full pipeline integration', () => {
   it('rejects a missing-symbol tweet with a clarification reply and zero spend', async () => {
     const mention = makeMention({ text: 'launch token dong namanya Moon Coin' });
     const parser = new MockParser(new Map([[mention.text, {
-      isLaunchIntent: true, confidence: 'low', tokenName: 'Moon Coin', tokenSymbol: null, description: null,
+      isLaunchIntent: true, confidence: 'low', tokenName: 'Moon Coin', tokenSymbol: null, description: null, pairWith: null,
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
@@ -230,7 +231,7 @@ describe('handleMention -- full pipeline integration', () => {
     // Even if the parser were somehow tricked, ParsedIntent's TYPE has no field for a wallet
     // override -- there is nothing for the orchestrator to read even if it wanted to.
     const parser = new MockParser(new Map([[injectionText, {
-      isLaunchIntent: true, confidence: 'medium', tokenName: 'Test Coin', tokenSymbol: 'TEST', description: null,
+      isLaunchIntent: true, confidence: 'medium', tokenName: 'Test Coin', tokenSymbol: 'TEST', description: null, pairWith: null,
     }]]));
     const walletResolver = new MockWalletResolver(db);
 

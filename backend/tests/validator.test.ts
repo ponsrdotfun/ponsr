@@ -35,6 +35,7 @@ function goodIntent(overrides: Partial<ParsedIntent> = {}): ParsedIntent {
     tokenName: 'Moon Coin',
     tokenSymbol: 'MOON',
     description: 'a fun community token',
+    pairWith: null,
     ...overrides,
   };
 }
@@ -116,7 +117,7 @@ describe('validateLaunchRequest', () => {
 
   it('rejects when isLaunchIntent is false -- eval case 013/014/015 style', async () => {
     const result = await validateLaunchRequest(
-      goodIntent({ isLaunchIntent: false }),
+      goodIntent({ isLaunchIntent: false, pairWith: null }),
       'user1',
       'tweet1',
       { db, getAccountSignals: async () => OLD_ACCOUNT, getLiveFeeWei, getTreasuryBalanceWei, getLaunchReadiness }

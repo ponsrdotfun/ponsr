@@ -17,6 +17,14 @@ export interface ParsedIntent {
   tokenName: string | null;
   tokenSymbol: string | null;
   description: string | null;
+  /** The asset the launch should be priced and traded in, exactly as the person
+   *  typed it -- a symbol, a company name, or null when they did not ask.
+   *
+   *  Deliberately unresolved. The parser reads a tweet; it does not get to decide
+   *  which assets pons has approved, and a model that "corrected" AAPL to something
+   *  else would be choosing an asset nobody asked for. Resolution and approval are
+   *  checked against the chain in pairTokens.ts. */
+  pairWith: string | null;
 }
 
 export type RejectionReason =

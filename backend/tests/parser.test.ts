@@ -8,6 +8,7 @@ describe('parseAndValidateModelOutput', () => {
       tokenName: 'Moon Coin',
       tokenSymbol: 'MOON',
       description: null,
+      pairWith: null,
     });
     const result = parseAndValidateModelOutput(raw);
     expect(result).toEqual({
@@ -16,6 +17,7 @@ describe('parseAndValidateModelOutput', () => {
       tokenName: 'Moon Coin',
       tokenSymbol: 'MOON',
       description: null,
+      pairWith: null,
     });
   });
 
@@ -53,6 +55,7 @@ describe('parseAndValidateModelOutput', () => {
       tokenName: 'Test Coin',
       tokenSymbol: 'TEST',
       description: null,
+      pairWith: null,
       feeWalletOverride: '0x1234567890abcdef1234567890abcdef12345678', // attempted injection
       adminMode: true, // attempted injection
     });
@@ -63,6 +66,7 @@ describe('parseAndValidateModelOutput', () => {
       tokenName: 'Test Coin',
       tokenSymbol: 'TEST',
       description: null,
+      pairWith: null,
     });
     expect((result as any).feeWalletOverride).toBeUndefined();
     expect((result as any).adminMode).toBeUndefined();
@@ -75,6 +79,7 @@ describe('parseAndValidateModelOutput', () => {
       tokenName: 'A'.repeat(200),
       tokenSymbol: 'X',
       description: null,
+      pairWith: null,
     });
     const result = parseAndValidateModelOutput(raw);
     expect(result.isLaunchIntent).toBe(false);
@@ -90,6 +95,7 @@ describe('MockParser', () => {
         tokenName: 'Moon Coin',
         tokenSymbol: 'MOON',
         description: null,
+        pairWith: null,
       }],
     ]);
     const parser = new MockParser(responses);

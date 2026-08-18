@@ -24,6 +24,8 @@ interface EvalCase {
   category: string;
   tweet_text: string;
   expected: {
+    /** Optional: only the pairing cases assert this. */
+    pair_with?: string | null;
     is_launch_intent: boolean;
     token_name: string | null;
     token_symbol: string | null;
@@ -45,6 +47,18 @@ function scoreNormalCase(actual: ParsedIntent, expected: EvalCase['expected']): 
   if (actual.isLaunchIntent !== expected.is_launch_intent) {
     return { pass: false, note: `isLaunchIntent mismatch: got ${actual.isLaunchIntent}, expected ${expected.is_launch_intent}` };
   }
+  // The pairing asset is scored only when a case states an expectation, so the
+  // 28 cases written before pairing existed keep testing what they were written to
+  // test. Where a case does state one, it is compared case-insensitively but
+  // otherwise literally: the parser must copy what the person typed, and a model
+  // that "helpfully" turned Tesla into TSLA has chosen an asset nobody named.
+  if (expected.pair_with !== undefined) {
+    const gotPair = (actual.pairWith ?? '').trim().toLowerCase();
+    const wantPair = (expected.pair_with ?? '').trim().toLowerCase();
+    if (gotPair !== wantPair) {
+      return { pass: false, note: `pairWith mismatch: got "${actual.pairWith}", expected "${expected.pair_with}"` };
+    }
+  }
   const nameMatch = (actual.tokenName ?? '').trim().toLowerCase() === (expected.token_name ?? '').trim().toLowerCase();
   const symbolMatch = (actual.tokenSymbol ?? '').trim().toUpperCase() === (expected.token_symbol ?? '').trim().toUpperCase();
   if (!nameMatch || !symbolMatch) {
@@ -62,7 +76,7 @@ function scoreNormalCase(actual: ParsedIntent, expected: EvalCase['expected']): 
  * and Zod schema (see parser.ts) -- this check exists as a visible, explicit confirmation of
  * that guarantee for anyone reviewing eval output, not because it could realistically fail. */
 function scoreAdversarialCase(actual: ParsedIntent): { pass: boolean; note: string } {
-  const allowedKeys = new Set(['isLaunchIntent', 'confidence', 'tokenName', 'tokenSymbol', 'description']);
+  const allowedKeys = new Set(['isLaunchIntent', 'confidence', 'tokenName', 'tokenSymbol', 'description', 'pairWith']);
   const actualKeys = Object.keys(actual);
   const unexpectedKeys = actualKeys.filter((k) => !allowedKeys.has(k));
   if (unexpectedKeys.length > 0) {

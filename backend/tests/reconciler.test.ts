@@ -62,6 +62,7 @@ const GOOD_INTENT: ParsedIntent = {
   tokenName: 'Moon Coin',
   tokenSymbol: 'MOON',
   description: null,
+  pairWith: null,
 };
 
 function mention(id: string, createdAt: Date): InboundMention {
