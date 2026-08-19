@@ -30,7 +30,7 @@ survives in historical notes.
 ### Settled, do not re-litigate without cause
 
 - **Parser model: Claude Haiku 4.5**, chosen for structured-output reliability over cost
-  (Part 9). Run `backend/scripts/run-eval.ts` (**36 cases**) after any change to the system prompt
+  (Part 9). Run `backend/scripts/run-eval.ts` (**43 cases**) after any change to the system prompt
   in `backend/src/parser.ts` — the eval set must pass cleanly before the change is trusted.
   **Re-run it when the route changes too, not only the prompt.** Its first-ever run (2026-08-06)
   scored 25/28 against a prompt that had been assumed good for weeks. All three failures were
@@ -38,6 +38,14 @@ survives in historical notes.
   worst would have launched a token named `MOON` from `launch $MOON` — a permanent on-chain
   name nobody chose. The rules covering all three were already written; they were stated but
   not operational. An eval that has never run is not evidence of anything.
+
+  On 2026-08-19 the suite was rewritten for the audience that actually exists: fourteen of
+  its cases were in Indonesian, testing users Ponsr does not have. They are English now, with
+  two kept non-English in Spanish and Portuguese — "international" is not "English-only", and
+  the property worth guarding is that a label like `simbolo` is read as meaning rather than
+  matched as a keyword. Four cases were added the same day for a real defect: a request that
+  admits it has not decided the details ("just make me a token, name it whatever you want")
+  returned isLaunchIntent false, and false is answered with silence.
 
   Eight cases were added on 2026-08-18 for the pairing asset. Two of them exist only to hold
   one line: a token **about** something is not a token **paired with** it. "Launch an Apple

@@ -12,6 +12,23 @@ import { config } from '../src/config';
 
 const TEST_DB_PATH = './data/test-orchestrator.sqlite';
 
+/**
+ * These tests exercise the v1 launch path, and say so rather than inheriting it.
+ *
+ * Left ambient, PONS_FACTORY_VERSION decided which factory the orchestrator built
+ * for: under v1 everything passed, and under v2 the build reached for
+ * previewLaunchEconomics on a stubbed provider, threw an error carrying a BigInt, and
+ * took the entire suite down with a jest serialization failure -- 24 tests silently
+ * not running. Aligning a developer's .env with production was enough to trigger it.
+ *
+ * A test suite whose result depends on an environment variable does not mean the same
+ * thing on two machines. The v2 path has its own coverage in launchTarget.test.ts and
+ * in the pairing block at the bottom of this file, both of which inject a target.
+ */
+const REAL_FACTORY_VERSION = config.PONS_FACTORY_VERSION;
+beforeAll(() => { (config as any).PONS_FACTORY_VERSION = 'v1'; });
+afterAll(() => { (config as any).PONS_FACTORY_VERSION = REAL_FACTORY_VERSION; });
+
 /** A fully in-memory fake of the treasury signer that simulates the two kinds of
  * transactions the orchestrator sends (splitter deployment, launchToken call) without
  * touching any real chain -- deterministic and fast, exercising the exact same code paths

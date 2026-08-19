@@ -1,6 +1,13 @@
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import { Db } from '../src/db';
+import { config } from '../src/config';
+import {
+  EMPTY_SOCIALS,
+  buildLaunchCalldata,
+  extractLaunchedTokenAddress,
+  saltForTweet,
+} from '../src/ponsEncoder';
 import { MockParser } from '../src/parser';
 import { MockWalletResolver } from '../src/walletResolver';
 import { MockXClient } from '../src/xClient';
@@ -95,6 +102,37 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n, // funded; not what these test
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+      // Pinned rather than inherited from config.
+      //
+      // These tests are about the sweep -- which mentions get retried, which get
+      // skipped, what happens when one fails -- and none of that depends on which
+      // factory a launch goes to. Left ambient, PONS_FACTORY_VERSION decided it: with
+      // v1 they passed, and with v2 the launch build reached for previewLaunchEconomics
+      // on a stubbed provider and two of them failed. A suite whose result depends on
+      // an environment variable does not mean the same thing on two machines.
+      launchTarget: {
+        version: 'v1' as const,
+        factoryAddress: config.PONS_FACTORY_ADDRESS,
+        supportsPairing: false,
+        build: async (req: any, feeWei: bigint) => {
+          const { data, value } = buildLaunchCalldata(
+            {
+              tokenName: req.tokenName,
+              tokenSymbol: req.tokenSymbol,
+              logo: '',
+              description: req.description ?? '',
+              socials: EMPTY_SOCIALS,
+              feeWallet: req.splitterAddress,
+              launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
+              dexId: config.PONS_DEX_ID,
+              salt: saltForTweet(req.tweetId),
+            },
+            feeWei
+          );
+          return { to: config.PONS_FACTORY_ADDRESS, data, value };
+        },
+        extractToken: (logs: any) => extractLaunchedTokenAddress(logs),
+      },
     };
   });
   afterEach(() => db.close());
