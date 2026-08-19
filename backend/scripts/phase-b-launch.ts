@@ -33,7 +33,11 @@ import { ethers } from 'ethers';
 import { config, requireConfig } from '../src/config';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from '../src/chainClient';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchDetails, saltForTweet } from '../src/ponsEncoder';
-import { RawKeyTreasurySigner } from '../src/treasurySigner';
+import { createLaunchTarget } from '../src/launchTarget';
+import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
+import { PairAssetRegistry } from '../src/pairTokens';
+import { ChainPairTokenSource } from '../src/pairTokenSource';
+import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
 
@@ -57,21 +61,33 @@ async function main() {
   const provider = createProvider();
   const network = await provider.getNetwork();
 
-  // RawKeyTreasurySigner refuses to run under NODE_ENV=production by design (Part 5). That
-  // guard is about the *bot*, not this one-off script -- but it does mean this must be run
-  // with NODE_ENV unset or 'development', which is a useful accident: it keeps the production
-  // process and this script from ever sharing a configuration.
-  const signer = new RawKeyTreasurySigner(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider);
+  // The launch MUST come from the wallet pons whitelisted, which is the Turnkey
+  // treasury -- so this uses the same signer the bot does rather than a raw key.
+  //
+  // It used to hardcode RawKeyTreasurySigner, and that was correct in August when the
+  // raw key made the two Phase B launches. It stopped being correct the moment the
+  // bot moved to Turnkey: the whitelist we asked pons for names the Turnkey address,
+  // and this script would have launched from the retired raw-key wallet instead --
+  // an address that will never be whitelisted, holding 0.000249 ETH. The first
+  // launch, on the day the whitelist finally landed, would have been refused, and
+  // the refusal would have read as "pons did not actually grant it".
+  //
+  // RAW_KEY=1 forces the old behaviour, for the case where the raw wallet is
+  // deliberately the subject.
+  const signer = process.env.RAW_KEY === '1'
+    ? new RawKeyTreasurySigner(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider)
+    : createTreasurySigner(provider);
   const treasury = await signer.address();
 
   console.log('Chain');
   line('rpc', config.RPC_URL);
   line('chainId', `${network.chainId}${network.chainId === 4663n ? '  (Robinhood Chain MAINNET)' : ''}`);
-  line('factory', config.PONS_FACTORY_ADDRESS);
+  line('factory', config.PONS_FACTORY_VERSION === 'v2' ? config.PONS_V2_FACTORY_ADDRESS : config.PONS_FACTORY_ADDRESS);
   console.log();
 
   console.log('Treasury');
   const balance = await getBalanceWei(provider, treasury);
+  line('signer', process.env.RAW_KEY === '1' ? 'raw key (forced)' : 'from config (Turnkey in production)');
   line('address', treasury);
   line('balance', `${formatEth(balance)} ETH`);
   console.log();
@@ -91,6 +107,11 @@ async function main() {
   const problems: string[] = [];
   if (!readiness.canLaunch || !readiness.launchConfigUsable || !readiness.dexConfigUsable) {
     problems.push(readiness.reason ?? 'the factory would refuse this launch');
+    if (!readiness.whitelisted && !readiness.launchEnabled) {
+      // Naming the address here is the difference between "pons has not granted it"
+      // and "we asked for a different address than the one we are launching from".
+      problems.push(`the address above (${treasury}) is the one that must be whitelisted -- check it is the address in docs/email-pons-whitelist.md`);
+    }
   }
   if (fee > config.TREASURY_MAX_FEE_WEI) {
     problems.push(`live fee ${formatEth(fee)} ETH exceeds TREASURY_MAX_FEE_WEI ${formatEth(config.TREASURY_MAX_FEE_WEI)} ETH`);
@@ -174,22 +195,65 @@ async function main() {
   console.log();
 
   console.log('2/2  Launching...');
-  const { data, value } = buildLaunchCalldata(
+
+  // Built through the same launch target the bot uses, not through the v1 encoder
+  // directly.
+  //
+  // This script hardcoded the v1 encoder and the v1 factory address, which was
+  // correct while v1 was the only option and silently wrong afterwards: production
+  // moved to v2, the whitelist we asked pons for is a v2 grant, and this script --
+  // the one that performs the FIRST self-dealt launch -- would have deployed a v2
+  // splitter and then sent v1 calldata to the v1 factory. On v1 we are not
+  // whitelisted, so the very launch this script exists to make would have reverted,
+  // at the exact moment it mattered, for a reason that reads as "pons refused us".
+  const target = createLaunchTarget(provider);
+  line('factory version', target.version);
+  line('factory address', target.factoryAddress);
+
+  // Resolve the pairing asset the same way the bot does, so a self-dealt launch is
+  // the same shape as a user's. PAIR_WITH is a symbol or an address; unset means ETH,
+  // which is what v1 always uses and what v2 defaults to.
+  let pairAsset: PairAsset = {
+    address: NATIVE_ETH, symbol: 'ETH', name: 'Ether', decimals: 18, graduationThreshold: null,
+  };
+  const wanted = process.env.PAIR_WITH;
+  if (wanted && target.supportsPairing) {
+    const registry = new PairAssetRegistry(
+      new ChainPairTokenSource({
+        provider,
+        factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
+        fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
+      })
+    );
+    const resolved = await registry.resolve(wanted);
+    if (!resolved.ok) {
+      console.error(`
+PAIR_WITH="${wanted}" is not an approved pairing asset: ${resolved.detail}`);
+      console.error('Nothing was launched. The splitter above is deployed but unused.');
+      process.exit(1);
+    }
+    pairAsset = resolved.asset;
+  } else if (wanted && !target.supportsPairing) {
+    console.error(`
+PAIR_WITH is set but ${target.version} takes its pairing from the launch config.`);
+    console.error('Set PONS_FACTORY_VERSION=v2, or unset PAIR_WITH to launch against ETH.');
+    process.exit(1);
+  }
+  line('paired against', pairAsset.symbol);
+
+  const { to, data, value } = await target.build(
     {
       tokenName: TOKEN_NAME,
       tokenSymbol: TOKEN_SYMBOL,
-      logo: '',
       description: TOKEN_DESCRIPTION,
-      socials: { ...EMPTY_SOCIALS, website: 'https://ponsr.fun' },
-      feeWallet: splitterAddress,
-      launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
-      dexId: config.PONS_DEX_ID,
-      salt,
+      splitterAddress,
+      tweetId: salt,
+      pairAsset,
     },
     fee
   );
 
-  const sent = await signer.sendTransaction({ to: config.PONS_FACTORY_ADDRESS, data, value });
+  const sent = await signer.sendTransaction({ to, data, value });
   line('tx', sent.hash);
   const receipt = await sent.wait();
 
