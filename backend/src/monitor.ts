@@ -40,6 +40,10 @@ export type AlertKind =
    *  refuses crypto addresses from a newly authenticated account. Expected at first;
    *  the way we learn the restriction has lifted is that these stop arriving. */
   | 'REPLY_DEGRADED'
+  /** The parser threw. Almost always an exhausted API balance or a provider outage, and
+   *  it is invisible without this: the mention is retried by the sweep, so nothing looks
+   *  broken from outside while every launch request quietly goes unanswered. */
+  | 'PARSER_UNAVAILABLE'
   /** pons has switched launching off on their factory, so no launch can succeed. It is
    *  their switch, not ours, and nothing else reports it: the process stays up, /health
    *  answers ok, and a bot with no mentions looks identical to a bot that cannot launch. */
@@ -447,6 +451,27 @@ export class TreasuryMonitor {
    * actually want has never once been delivered, and the only way to learn that
    * the window has closed is to notice this alert no longer arriving.
    */
+  /**
+   * The parser could not be reached at all.
+   *
+   * Worth waking someone for even though the mention is retried: if the cause is an
+   * exhausted balance, every retry fails too, and the bot is deaf until somebody tops
+   * it up. The most likely cause is money, which is why the message says so.
+   */
+  async onParserFailed(tweetId: string, detail: string, now: Date = new Date()): Promise<void> {
+    await this.notifier.send({
+      kind: 'PARSER_UNAVAILABLE',
+      severity: 'critical',
+      message:
+        'The parser could not be reached, so a launch request could not be read. The mention ' +
+        'was released and will be retried by the sweep -- but if this is an exhausted API ' +
+        'balance, every retry will fail too and the bot is effectively deaf until it is ' +
+        'topped up. Check the OpenRouter balance first.',
+      detail: { tweetId, error: detail.slice(0, 300) },
+      at: now.toISOString(),
+    });
+  }
+
   async onReplyDegraded(tweetId: string, detail: string, now: Date = new Date()): Promise<void> {
     await this.notifier.send({
       kind: 'REPLY_DEGRADED',

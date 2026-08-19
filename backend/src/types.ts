@@ -51,6 +51,10 @@ export type RejectionReason =
    *  and quietly launching against something else would be a permanent decision made on
    *  somebody's behalf. */
   | 'PAIR_ASSET_UNAVAILABLE'
+  /** The parser could not be reached. Distinct from a parse that succeeded and found no
+   *  launch intent: nothing was read, so nothing was judged. The mention is released
+   *  and retried rather than consumed. */
+  | 'PARSER_UNAVAILABLE'
   | 'DUPLICATE_TWEET';
 
 export interface ValidationResult {

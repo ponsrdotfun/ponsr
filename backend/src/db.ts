@@ -112,6 +112,27 @@ export class Db {
     }
   }
 
+  /**
+   * Gives the idempotency slot back, so the mention can be tried again.
+   *
+   * The claim is taken before anything else runs, which is what makes duplicate
+   * webhook deliveries harmless. The cost is that a failure *between* the claim and
+   * any real work burns the mention permanently: the sweep will not retry it,
+   * because as far as the database is concerned it was handled.
+   *
+   * That is the right trade only while nothing can fail in between. A parser that
+   * throws -- an exhausted API balance, a network blip, an upstream outage -- is a
+   * transient failure that would otherwise silently consume a genuine launch request
+   * and answer it with nothing at all.
+   *
+   * ⚠️ ONLY safe before a transaction has been sent. Releasing a mention whose launch
+   * may have reached the chain invites launching the same request twice and paying
+   * the fee twice. Every caller must be certain no money has moved.
+   */
+  releaseTweetClaim(tweetId: string): void {
+    this.db.prepare('DELETE FROM processed_tweets WHERE tweet_id = ?').run(tweetId);
+  }
+
   getUser(xUserId: string): ResolvedWallet | null {
     const row = this.db
       .prepare('SELECT x_user_id, wallet_address, wallet_provider_ref FROM users WHERE x_user_id = ?')

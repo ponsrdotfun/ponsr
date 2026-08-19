@@ -145,7 +145,25 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   }
 
   // --- Step 1 continued: parse intent ---
-  const intent = await deps.parser.parse(mention.text);
+  //
+  // Guarded, because the claim above is already taken. Without this a parser failure
+  // -- an exhausted API balance, a network blip, an outage on the provider's side --
+  // throws past every handler, and the mention stays marked as processed forever: the
+  // sweep will not retry it, nobody is replied to, and nothing alerts. A real launch
+  // request would be consumed and answered with silence.
+  //
+  // Releasing the claim is safe here and only here: no wallet has been resolved, no
+  // contract deployed, no transaction sent. The worst a retry costs is another parse.
+  let intent;
+  try {
+    intent = await deps.parser.parse(mention.text);
+  } catch (err: any) {
+    deps.db.releaseTweetClaim(mention.tweetId);
+    const detail = err?.message ?? String(err);
+    console.error(`[parser] failed on tweet ${mention.tweetId}, claim released for retry: ${detail}`);
+    notify(deps, (m) => m.onParserFailed(mention.tweetId, detail));
+    return { kind: 'rejected', reason: 'PARSER_UNAVAILABLE' };
+  }
 
   // --- Step 2: validation guard ---
   const validation = await validateLaunchRequest(intent, mention.authorXUserId, mention.tweetId, {

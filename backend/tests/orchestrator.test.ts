@@ -609,3 +609,98 @@ describe('launching paired against an approved asset', () => {
     expect(built[0].pairAsset.symbol).toBe('ETH');
   });
 });
+
+/**
+ * A parser that cannot be reached.
+ *
+ * The idempotency claim is taken before anything else runs, which is what makes a
+ * duplicate webhook delivery harmless. It also means a failure between the claim and
+ * any real work burns the mention permanently: the sweep will not retry it, because
+ * as far as the database is concerned it was handled.
+ *
+ * Found on 2026-08-19 with $1.59 left on the parser's API balance, so this was a
+ * scheduled failure rather than a hypothetical one.
+ */
+describe('when the parser cannot be reached', () => {
+  let db: Db;
+  let xClient: MockXClient;
+  let treasurySigner: FakeTreasurySigner;
+
+  beforeEach(() => {
+    db = freshDb();
+    xClient = new MockXClient();
+    treasurySigner = new FakeTreasurySigner();
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    db.close();
+    jest.restoreAllMocks();
+  });
+
+  function runWithBrokenParser(extra: Record<string, unknown> = {}) {
+    const mention = makeMention();
+    return handleMention(mention, {
+      db,
+      parser: { parse: async () => { throw new Error('402 insufficient credits'); } },
+      walletResolver: new MockWalletResolver(db),
+      xClient,
+      treasurySigner,
+      provider: {} as any,
+      getLiveFeeWei: async () => 500_000_000_000_000n,
+      getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+      ...extra,
+    } as any);
+  }
+
+  // The whole point: the mention must survive to be tried again.
+  it('releases the claim so the sweep can retry the mention', async () => {
+    const outcome = await runWithBrokenParser();
+    expect(outcome).toMatchObject({ kind: 'rejected', reason: 'PARSER_UNAVAILABLE' });
+    expect(db.isTweetProcessed('tweet_1')).toBe(false);
+  });
+
+  // Retrying must actually work, not merely be permitted.
+  it('the same mention succeeds on a later attempt', async () => {
+    await runWithBrokenParser();
+
+    const mention = makeMention();
+    const outcome = await handleMention(mention, {
+      db,
+      parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
+      walletResolver: new MockWalletResolver(db),
+      xClient,
+      treasurySigner,
+      provider: {} as any,
+      getLiveFeeWei: async () => 500_000_000_000_000n,
+      getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
+      getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
+    } as any);
+
+    expect(outcome.kind).toBe('launched');
+  });
+
+  // An exhausted balance fails every retry too, so the sweep hides it rather than
+  // fixing it. Without an alert the bot is deaf and nothing says so.
+  it('alerts, because a retry loop is not a fix', async () => {
+    const seen: string[] = [];
+    await runWithBrokenParser({
+      monitor: new Proxy({} as any, {
+        get: (_t, prop: string) => async (...args: unknown[]) => {
+          if (prop === 'onParserFailed') seen.push(String(args[0]));
+        },
+      }),
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual(['tweet_1']);
+  });
+
+  // Nothing may have moved. A released claim plus a spent fee would be the one
+  // combination that could launch the same request twice.
+  it('spends nothing and deploys nothing', async () => {
+    await runWithBrokenParser();
+    expect(treasurySigner.sentTransactions).toHaveLength(0);
+    expect(db.totalSpendLast24h()).toBe(0n);
+    expect(xClient.sentReplies).toHaveLength(0);
+  });
+});
