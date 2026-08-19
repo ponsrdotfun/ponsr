@@ -21,6 +21,7 @@ import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
 import { createLaunchTarget } from './launchTarget';
+import { FixedWindowRateLimit } from './webhookRateLimit';
 
 const app = express();
 app.use(express.json());
@@ -118,6 +119,23 @@ const pairAssets =
 
 const launchTarget = createLaunchTarget(provider);
 
+/**
+ * What a leaked webhook secret costs.
+ *
+ * The treasury is already bounded by the daily spend cap. The parser is not: every
+ * accepted mention is a paid API call against a fixed prepaid balance, so a flood
+ * exhausts it and the bot goes deaf to everyone until somebody tops it up. That is a
+ * denial of service that needs no launch to succeed and costs the attacker nothing.
+ *
+ * Sized well above any real provider's delivery rate -- twitterapi.io is polled every
+ * two minutes and a webhook fires per mention -- so this is a ceiling on abuse rather
+ * than a throttle on normal use.
+ */
+const webhookLimit = new FixedWindowRateLimit(
+  config.WEBHOOK_MAX_PER_MINUTE,
+  60_000
+);
+
 // Warmed at boot, in the background.
 //
 // Discovery is a log scan, and the first caller pays for it. Left cold, that caller
@@ -174,6 +192,16 @@ app.post('/webhook/mention', async (req, res) => {
       // secret" would tell an attacker which of the two they are up against.
       console.warn(`[webhook] rejected an unauthorised POST from ${req.ip}`);
       res.status(401).json({ error: 'unauthorised' });
+      return;
+    }
+
+    // After the secret check on purpose: an unauthenticated flood must not be able to
+    // eat the allowance and lock out the real provider.
+    const limit = webhookLimit.check();
+    if (!limit.allowed) {
+      console.warn(`[webhook] rate limited (${limit.count} in the current window) from ${req.ip}`);
+      res.setHeader('Retry-After', String(limit.resetInSeconds));
+      res.status(429).json({ error: 'rate limited' });
       return;
     }
 
@@ -394,6 +422,46 @@ const server = app.listen(config.PORT, () => {
 });
 
 // Stop cleanly so an in-flight launch isn't cut off mid-transaction on redeploy.
+/**
+ * Do not die quietly.
+ *
+ * Node terminates the process on an unhandled promise rejection, and this codebase is
+ * full of deliberately fire-and-forget promises -- alerts, the boot-time asset scan,
+ * the launchpad checks. Every one of them has a `.catch`, but the failure mode being
+ * guarded here is the one that does not: a rejection added later, or thrown from a
+ * dependency, kills the listener.
+ *
+ * Fly restarts it, so the bot recovers on its own. What it does not do is tell anyone,
+ * and a process that dies and restarts every few minutes looks from outside exactly
+ * like a process that is running fine and receiving no mentions.
+ *
+ * So this alerts and then exits rather than swallowing. Continuing after an unknown
+ * rejection means running in a state nobody reasoned about, on a path that spends
+ * money; a clean restart from a known-good state is the safer half of the trade.
+ */
+function reportFatal(kind: string, err: unknown): void {
+  const detail = (err as Error)?.stack ?? String(err);
+  console.error(`[fatal] ${kind}:`, detail);
+  // Fire and forget with a hard deadline: the alert is worth a moment, but a hung
+  // notifier must not keep a broken process alive indefinitely.
+  const done = notifier
+    .send({
+      kind: 'LAUNCH_FAILED',
+      severity: 'critical',
+      message:
+        `The bot process hit an ${kind} and is exiting so Fly can restart it from a known ` +
+        'state. It will come back on its own; this alert exists because otherwise a crash ' +
+        'loop is indistinguishable from a quiet day.',
+      detail: { error: String(detail).slice(0, 500) },
+      at: new Date().toISOString(),
+    })
+    .catch(() => undefined);
+  void Promise.race([done, new Promise((r) => setTimeout(r, 3000))]).then(() => process.exit(1));
+}
+
+process.on('unhandledRejection', (reason) => reportFatal('unhandled rejection', reason));
+process.on('uncaughtException', (err) => reportFatal('uncaught exception', err));
+
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     console.log(`\n${signal} received, shutting down.`);

@@ -111,6 +111,9 @@ const ConfigSchema = z.object({
    * right now, so neither works until pons acts either way.
    */
   PONS_FACTORY_VERSION: z.enum(['v1', 'v2']).default('v1'),
+  /** Ceiling on authenticated webhook deliveries per minute. Guards the parser's
+   *  prepaid balance, not the treasury -- the daily spend cap already bounds that. */
+  WEBHOOK_MAX_PER_MINUTE: z.coerce.number().default(30),
   PONS_V2_FACTORY_ADDRESS: z.string().default('0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8'),
   /**
    * Where to begin scanning for `PairTokenApprovalUpdated`.
