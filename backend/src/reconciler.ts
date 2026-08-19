@@ -99,7 +99,14 @@ export async function reconcileOnce(
       // A concurrent webhook delivery can win the claim between our check and
       // the call; that is the idempotency guard working, not a recovery.
       if (outcome.kind === 'duplicate') result.alreadyHandled++;
-      else result.recovered++;
+      // Counted as failed, not recovered. The parser being unreachable used to throw
+      // out of handleMention and land in the catch below; it is now handled there,
+      // which released the claim so the mention survives -- but nothing about it was
+      // read, so calling it recovered would report a success that did not happen and
+      // hide a bot that cannot process anything at all.
+      else if (outcome.kind === 'rejected' && outcome.reason === 'PARSER_UNAVAILABLE') {
+        result.failed++;
+      } else result.recovered++;
     } catch (err: any) {
       // One bad mention must not abort the sweep -- the rest may be fine.
       result.failed++;
