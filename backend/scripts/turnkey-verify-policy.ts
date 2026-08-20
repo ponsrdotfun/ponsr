@@ -16,6 +16,7 @@
  * also allows cases 1 and 2, and would look identical here without it.
  */
 import { config } from '../src/config';
+import { deploymentById, executableDeployment } from '../src/deployments';
 
 const ARBITRARY = '0x000000000000000000000000000000000000dEaD';
 
@@ -90,11 +91,22 @@ function line(label: string, value: unknown) {
     return o === 'allowed' ? 'ALLOWED ❌' : 'denied ❌';
   }
 
+  // From the registry, because a config address is how this went wrong twice.
+  //
+  // On 2026-08-20 this script read `PONS_V2_FACTORY_ADDRESS` and reported PASSED for
+  // 0x7E1EAbd5…, a deployment pons replaced on 2026-08-03 and which the bot no longer
+  // calls. Every tick was green and none of them described the launch path. That is the
+  // §11 lesson arriving inside the tool written to apply it: an address is not an
+  // identity, and the registry is the only thing that knows which one is executable.
+  const target = executableDeployment();
+  const superseded = deploymentById('pons-v2-legacy-7e1');
+
   console.log('=== VERIFYING THE BOT POLICY ===');
   line('signer', from);
   line('v1 factory', config.PONS_FACTORY_ADDRESS);
-  line('v2 factory', config.PONS_V2_FACTORY_ADDRESS);
-  line('bot launches through', `${config.PONS_FACTORY_VERSION}  <- the one that has to be ALLOWED`);
+  line('current factory', `${target.factory}  (${target.id})`);
+  line('superseded factory', `${superseded.factory}  (not launched through)`);
+  line('bot launches through', `${target.id}  <- the one that has to be ALLOWED`);
   console.log('');
 
   // Both factories, always. This script used to test only v1 and print PASSED, which on
@@ -110,16 +122,16 @@ function line(label: string, value: unknown) {
   });
   line('1a. tx to the v1 factory', show(toV1, 'allowed'));
 
-  const toV2 = await attempt('launch v2', {
+  const toCurrent = await attempt('launch current', {
     ...base,
-    to: config.PONS_V2_FACTORY_ADDRESS,
+    to: target.factory,
     value: 500000000000000n,
-    data: '0x12345678',
+    data: target.launchSelector,
   });
-  line('1b. tx to the v2 factory', show(toV2, 'allowed'));
+  line('1b. tx to the CURRENT factory', show(toCurrent, 'allowed'));
 
   const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
-  const toFactory = wantV2 ? toV2 : toV1;
+  const toFactory = wantV2 ? toCurrent : toV1;
 
   const deploy = await attempt('deploy', {
     ...base,
@@ -139,7 +151,7 @@ function line(label: string, value: unknown) {
   console.log('');
   // Unknown anywhere means the run proves nothing, in either direction. Reporting
   // PASSED on unanswered questions would be the same defect pointing the other way.
-  const unknowns = [toV1, toV2, deploy, elsewhere].filter((o) => o === 'unknown').length;
+  const unknowns = [toV1, toCurrent, deploy, elsewhere].filter((o) => o === 'unknown').length;
   if (unknowns > 0) {
     console.log('=== INCONCLUSIVE ===');
     console.log(`  ${unknowns} of 4 checks could not be asked, so this run proves nothing.`);
@@ -153,25 +165,25 @@ function line(label: string, value: unknown) {
   const good = toFactory === 'allowed' && deploy === 'allowed' && elsewhere === 'denied';
   if (good) {
     console.log('=== PASSED ===');
-    console.log(`The bot can launch on ${config.PONS_FACTORY_VERSION} and deploy splitters, and`);
+    console.log(`The bot can launch on ${target.id} and deploy splitters, and`);
     console.log('cannot move funds anywhere else.');
     console.log('A leak of this key now costs launches, not the treasury.');
     console.log('');
     console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
-    if (toV2 !== 'allowed') {
+    if (toCurrent !== 'allowed') {
       console.log('');
-      console.log('NOTE: the v2 factory is still denied. That is fine while the bot runs v1,');
+      console.log(`NOTE: ${target.id} is still denied. That is fine while the bot runs v1,`);
       console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
       console.log('every check it makes of pons and is then refused by its own signer --');
       console.log('after the splitter has been deployed and paid for.');
-      console.log('  bash scripts/apply-v2-policy.sh --execute');
+      console.log('  powershell -File scripts\\apply-v2-policy.ps1 -Execute');
     }
   } else {
     console.log('=== NOT SAFE YET ===');
     if (toFactory !== 'allowed') {
-      console.log(`  The bot launches through ${config.PONS_FACTORY_VERSION}, and that factory is DENIED.`);
+      console.log(`  The bot launches through ${target.id}, and that factory is DENIED.`);
       console.log('  It cannot launch anything at all.');
-      if (wantV2) console.log('  Fix: bash scripts/apply-v2-policy.sh --execute');
+      if (wantV2) console.log('  Fix: powershell -File scripts\\apply-v2-policy.ps1 -Execute');
     }
     if (deploy !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
     if (elsewhere === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
