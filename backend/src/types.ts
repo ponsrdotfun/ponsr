@@ -96,3 +96,26 @@ export interface AccountSignals {
   accountCreatedAt: string; // ISO
   followerCount: number;
 }
+
+/**
+ * Which pons deployment a launch was made through.
+ *
+ * Recorded per launch because Ponsr has now used three, and they differ in ABI, event
+ * shape and fee escrow. Reading a launch back without this means guessing which
+ * contract to ask about it.
+ */
+export interface LaunchProvenance {
+  deploymentId: string;
+  factory: string;
+  feeEscrow: string;
+  chainId: number;
+  /** The address the factory recorded as the launch's deployer. On the direct path
+   *  this is the treasury, not the X user -- the user receives the creator share
+   *  through the splitter instead. */
+  originalDeployer: string;
+  pairToken: string;
+  launchConfigId: string;
+  salt: string;
+  economicsDigest: string | null;
+  curve: string | null;
+}

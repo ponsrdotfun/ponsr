@@ -10,6 +10,7 @@ import { deploySplitter } from './splitterDeployer';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
+import { launchSalt } from './ponsV2CurrentEncoder';
 import { composeSuccessReply, composeRejectionReply, composeOnChainFailureReply } from './replyComposer';
 import { TreasuryMonitor } from './monitor';
 import { config } from './config';
@@ -286,6 +287,28 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       },
       liveFee
     );
+
+    // Written before the transaction is sent, so a launch that reverts still leaves
+    // evidence of which deployment it was aimed at -- the case where knowing that
+    // matters most, because the reason is usually that it was aimed at the wrong one.
+    if (launchTarget.deployment) {
+      const d = launchTarget.deployment;
+      deps.db.recordLaunchProvenance(launchId, {
+        deploymentId: d.id,
+        factory: d.factory,
+        feeEscrow: d.feeEscrow,
+        chainId: d.chainId,
+        // The treasury, not the X user. Through the direct path the factory records
+        // its caller as the launch's deployer; the user receives the creator share
+        // through the splitter. No reply or document may say otherwise.
+        originalDeployer: treasuryAddress,
+        pairToken: pairAsset.address,
+        launchConfigId: String(config.PONS_LAUNCH_CONFIG_ID),
+        salt: launchSalt(d, mention.tweetId),
+        economicsDigest: null,
+        curve: null,
+      });
+    }
 
     const sent = await deps.treasurySigner.sendTransaction({ to, data, value });
 

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LaunchRecord, ResolvedWallet } from './types';
+import { LaunchRecord, ResolvedWallet , LaunchProvenance } from './types';
 
 /**
  * All persistence for the bot. Deliberately SQLite for local dev/testnet -- the schema below
@@ -57,6 +57,37 @@ export class Db {
         fee_wei_paid TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (source_tweet_id) REFERENCES processed_tweets(tweet_id)
+      );
+
+      /*
+       * Which pons deployment a launch was actually made through.
+       *
+       * A separate table rather than columns on the launches table, for one reason:
+       * the rows
+       * that already exist predate every pons migration, and adding NOT NULL columns
+       * would either refuse to migrate or invent values for launches made through
+       * contracts that did not exist yet. A missing row here means "we do not know",
+       * which is the truth about those launches and is not the same as "the current
+       * deployment".
+       *
+       * Ponsr has now launched through three deployments with different ABIs, event
+       * shapes and escrows. Reading a token's history back means knowing which
+       * contract to ask, and after the next migration nobody will remember.
+       */
+      CREATE TABLE IF NOT EXISTS launch_provenance (
+        launch_id TEXT PRIMARY KEY,
+        deployment_id TEXT NOT NULL,
+        factory TEXT NOT NULL,
+        fee_escrow TEXT NOT NULL,
+        chain_id INTEGER NOT NULL,
+        original_deployer TEXT NOT NULL,
+        pair_token TEXT NOT NULL,
+        launch_config_id TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        economics_digest TEXT,
+        curve TEXT,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY (launch_id) REFERENCES launches(id)
       );
 
       CREATE TABLE IF NOT EXISTS treasury_spend_log (
@@ -131,6 +162,59 @@ export class Db {
    */
   releaseTweetClaim(tweetId: string): void {
     this.db.prepare('DELETE FROM processed_tweets WHERE tweet_id = ?').run(tweetId);
+  }
+
+  /**
+   * Records which deployment a launch was built for, at the time it was built.
+   *
+   * Written before the transaction is sent, so a launch that reverts still leaves
+   * evidence of what was attempted -- which is the case where knowing the deployment
+   * matters most.
+   */
+  recordLaunchProvenance(launchId: string, p: LaunchProvenance): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO launch_provenance
+         (launch_id, deployment_id, factory, fee_escrow, chain_id, original_deployer,
+          pair_token, launch_config_id, salt, economics_digest, curve, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        launchId,
+        p.deploymentId,
+        p.factory,
+        p.feeEscrow,
+        p.chainId,
+        p.originalDeployer,
+        p.pairToken,
+        p.launchConfigId,
+        p.salt,
+        p.economicsDigest ?? null,
+        p.curve ?? null,
+        new Date().toISOString()
+      );
+  }
+
+  /** Null for launches made before this was recorded. Not a default: those launches
+   *  went through contracts that no longer decide anything, and naming the current
+   *  deployment for them would be a guess written down as a fact. */
+  getLaunchProvenance(launchId: string): LaunchProvenance | null {
+    const r: any = this.db
+      .prepare('SELECT * FROM launch_provenance WHERE launch_id = ?')
+      .get(launchId);
+    if (!r) return null;
+    return {
+      deploymentId: r.deployment_id,
+      factory: r.factory,
+      feeEscrow: r.fee_escrow,
+      chainId: Number(r.chain_id),
+      originalDeployer: r.original_deployer,
+      pairToken: r.pair_token,
+      launchConfigId: String(r.launch_config_id),
+      salt: r.salt,
+      economicsDigest: r.economics_digest,
+      curve: r.curve,
+    };
   }
 
   getUser(xUserId: string): ResolvedWallet | null {
