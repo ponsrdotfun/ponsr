@@ -111,13 +111,22 @@ export async function deploySplitter(
   // v2's splitter takes the escrow address as a fourth argument, and it is immutable:
   // a splitter that could be repointed later is a splitter whose fees could be
   // redirected after a creator has agreed to the terms.
+  //
+  // From the registry, never from configuration. This line read
+  // `config.PONS_V2_FEE_ESCROW_ADDRESS` until 2026-08-20, whose default is the escrow
+  // of the factory pons replaced. Everything around it had already been migrated, so
+  // the launch would have succeeded -- the factory's escrow matched the registry, the
+  // calldata was correct, the transaction confirmed -- and only the splitter would
+  // have been bound to the wrong escrow. That is the failure with no recovery: fees
+  // credited to an address the splitter cannot claim from, forever.
+  const escrow = splitterEscrowFor();
   const deployTx =
     name === 'FeeSplitterV2'
       ? await factory.getDeployTransaction(
           creatorWallet,
           treasuryWallet,
           tokenAddressPlaceholder,
-          config.PONS_V2_FEE_ESCROW_ADDRESS
+          escrow
         )
       : await factory.getDeployTransaction(creatorWallet, treasuryWallet, tokenAddressPlaceholder);
 

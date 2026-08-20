@@ -49,3 +49,38 @@ describe('splitter escrow binding', () => {
     expect(() => assertEscrowMatches(current, '0x' + '00'.repeat(20))).toThrow(/escrow/i);
   });
 });
+
+/**
+ * The deployer itself, not just the guard beside it.
+ *
+ * Found during the independent review pass of this migration: `deploySplitter` still
+ * read the escrow from configuration, whose default is the SUPERSEDED one. Everything
+ * else had been migrated -- the registry, the encoder, the target's pre-build check --
+ * and the launch would have succeeded, because the factory's escrow matched the
+ * registry. Only the splitter was bound to the wrong one, and that is the failure
+ * mode with no recovery: fees credited to an address the splitter cannot claim from.
+ *
+ * The fork rehearsal did not catch it because it constructed the splitter itself.
+ */
+describe('the splitter deployer binds the registry escrow', () => {
+  it('does not read the escrow from configuration', () => {
+    const raw = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/splitterDeployer.ts'),
+      'utf8'
+    );
+    // Comments are stripped first. The file deliberately explains what it used to read
+    // and why that was dangerous, and a check that could not tell an explanation from
+    // an instruction would force the explanation out -- which is how the reason for a
+    // guard gets lost while the guard survives.
+    const code: string = raw
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .filter((l: string) => !l.trim().startsWith('//'))
+      .join('\n');
+
+    // Configuration and the registry can disagree, and only one of them is checked
+    // against the chain before a launch.
+    expect(code).not.toMatch(/PONS_V2_FEE_ESCROW_ADDRESS/);
+    expect(code).toMatch(/splitterEscrowFor\(/);
+  });
+});
