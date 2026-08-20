@@ -9,7 +9,10 @@ survives in historical notes.
 
 ## Read these first, in this order
 
-1. **`docs/pons-v2-findings.md` — start at §10, then §9.** Sections 1–8 are what was believed
+1. **`docs/pons-v2-findings.md` — start at §11, then §10, then §9.** **§11 (2026-08-20) is the
+   most important section here right now**: Ponsr had been reading a *superseded* pons factory.
+   The current one has been open since 2026-08-03 and has taken over 1,900 launches. Everything
+   §10 concluded about a "closed launchpad" was true of a contract nobody uses. Sections 1–8 are what was believed
    from documentation; §9 onward is what the verified contracts and two real mainnet launches
    actually showed, and **§10 (2026-08-18) supersedes §7 outright** — v2 now approves eight
    pairing assets, six of them tokenised stocks, and both the ETH exemption and the whitelist
@@ -78,46 +81,37 @@ The v1 factory and locker are **verified with full source** on
 `api.blockscout.com`, the Pro aggregator, which does — that one wrong URL is why this looked
 blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi/`.
 
-- **Target v1 — but #17 is re-opened, see §10 of the findings.** One launch config is live
-  (WETH pair, 4.2 ETH graduation). #17 was closed for v1 because v1 was open and v2 was not;
-  **both are closed now**, so that reasoning no longer holds, and v2 is the one that can pair
-  a launch against a tokenised stock.
+- **Target: the CURRENT pons v2, `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e`.** See §11 of
+  the findings. `launchEnabled()` is **true** and `canLaunch(treasury)` is **true** — Ponsr can
+  launch today through the public gate, and never needed a whitelist to develop or test. The
+  whitelist is still worth having, because it survives the gate closing.
 
-  **The code for stock pairing is built and proven** (`pairTokens.ts`, `ponsV2Encoder.ts`,
-  `launchTarget.ts`), verified by simulating real calldata against the live mainnet factory.
-  It is selected by `PONS_FACTORY_VERSION`. The code default is still `v1`, but
-  **production has run `v2` since 2026-08-19** (a Fly secret), because the whitelist that was
-  requested is a v2 grant and v2 is a superset: ETH pairing plus the eight approved assets.
-  Nothing can launch either way until pons whitelists this treasury or reopens the switch.
+  **Deployments are a registry now, not a config address** (`backend/src/deployments.ts`). Each
+  entry binds factory, ABI hash, runtime bytecode hash, escrow, selector and schema; exactly one
+  is executable and the older two stay indexable forever. A bare address let a superseded
+  factory and the current one look identical, and every guard read the wrong one confidently
+  for a week.
 
-  The Turnkey policy was widened to allow the v2 factory on the same day. Verified afterwards:
-  v1 and v2 both ALLOWED, and an arbitrary destination, the fee escrow and even the cold
-  wallet all still denied — a leak of the bot's key costs launches, not the treasury.
+  Three things differ between the V2 deployments, each failing differently: the calldata gains a
+  `salt` (selector `0xf35abbcf`, not `0xa41d5f2b`), the fee escrow is different, and the approved
+  asset set is **23 rather than 8**, with RIVN already revoked. The escrow is the dangerous one —
+  immutable in each splitter, claims pay `msg.sender`, no `claimFor` — so the wrong one strands a
+  creator's fees permanently. Asserted before the splitter is deployed and again before the
+  calldata is built.
 
-  **Before opening v2 to users, run one self-dealt launch through `phase-b-launch.ts` first.**
-  `FeeSplitterV2` has never met a real fee on mainnet. It does pass a full rehearsal on a
-  forked mainnet — `FORK=1 … npx hardhat run --no-compile scripts/fork-rehearsal.js` launches
-  against the real factory paired with AAPL, buys with real AAPL, and claims the fee back out
-  95/5 — so the path is proven against the actual contracts. That fork also settles three
-  things: the chain is on **Cancun**, fees are credited to the escrow per trade rather than
-  swept, and the split reads 94.99/5.00 because the creator's share is floored. But
-  impersonation is what mainnet will not allow, so the rehearsal de-risks the first launch
-  rather than replacing it. See §10.7 of the findings.
+  **The treasury is the on-chain deployer**, not the X user, who receives the creator share
+  through the splitter. `launchTokenFor` would change that but is callable only by pons's
+  forwarder. No reply or document may say otherwise.
 
-  **`launchEnabled()` is `false` as of 2026-08-18, on v1 AND v2.** It was `true` when this
-  was written, and both real launches happened while it was. pons switched it off at
-  **2026-08-12 19:42 UTC** — recorded on-chain by `LaunchEnabledUpdated(false)` on the
-  factory — and **nobody has launched anything through pons since**, so this is a
-  platform-wide pause, not something aimed at Ponsr. No whitelist has been granted to
-  anyone in that window either.
+  Verified with nothing broadcast: exact production calldata PASSES against the live factory by
+  `eth_call`, and a forked rehearsal launches paired with AAPL, trades real AAPL, and claims the
+  fee back out 95/5 with nothing stranded.
 
-  Consequences, none of which are fixable in this codebase: **the bot cannot launch until
-  pons flips it back**, or until this treasury is whitelisted, which needs pons to act.
-  The bot handles it correctly — `validator.ts` reads readiness live, refuses with
-  `LAUNCHPAD_UNAVAILABLE` before any money moves, and tells the person the cause is
-  upstream — so nothing is at risk; it simply cannot do its job. `launchpadWatch.ts` now
-  alerts when this flips either way, because for three days nothing did, and a closed
-  launchpad with no traffic looks exactly like an open one with no traffic.
+  **Operator-gated before anything public:** the Turnkey policy still names the *superseded*
+  factory, so the bot cannot sign for the current one yet. `scripts/turnkey-allow-v2-factory.ts`
+  is now named per deployment so it will not collide with that stale rule. Production config,
+  the deployed backend, and the public availability claim are all unchanged.
+
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
   But they arrive as **ERC20** (the launched token + WETH), and the old splitter handled only

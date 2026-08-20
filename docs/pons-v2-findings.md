@@ -1088,3 +1088,85 @@ Consequences, all now implemented:
 `FeeSplitterV2` has never met a real fee. It passes 12 tests against a mock built from the
 escrow's own source, which is not the same thing. Run it end to end before trusting it with a
 creator's money.
+
+
+---
+
+## 11. WE WERE READING A SUPERSEDED FACTORY (2026-08-20)
+
+Section 10 was written on 2026-08-18 against `0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8` and
+concluded that launching was closed platform-wide. Every read in it was correct **about that
+contract**. It was not the contract pons uses.
+
+**pons deployed a new V2 factory on 2026-08-03** -- block 26,841,846 -- and left launching open.
+Over **1,900 launches** have gone through it since. Ponsr spent a week reporting a closed
+launchpad, alerting about a closed launchpad, and asking pons to whitelist us for a closed
+launchpad, while the door stood open on an address nobody was reading.
+
+### 11.1 The current deployment, verified from the chain
+
+| | |
+|---|---|
+| Factory | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` |
+| Fee escrow | `0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e` |
+| Launch deployer | `0x3711ceA4feaDE896C913C68F01Eda97Cb06D1A42` |
+| Launch forwarder | `0xe33E9E479dF8802cb0866d5d05258bEc4cF62948` |
+| Created | block 26,841,846, 2026-08-03 |
+| Runtime bytecode | 24,177 bytes, sha256 `226a042e...3848` |
+| Canonical ABI | sha256 `1d424e7b...b323` (verified, not a proxy) |
+| `launchEnabled()` | **true** |
+| `canLaunch(treasury)` | **true** |
+| `whitelistedLaunchers(treasury)` | false |
+
+**Ponsr can launch today, through the public gate.** The whitelist is still worth having -- it
+survives the gate closing -- but it was never a prerequisite for development, testing, or
+launching.
+
+### 11.2 Why changing only the address would have been worse than doing nothing
+
+Three things differ between the two V2 deployments, and each fails differently:
+
+- **The calldata.** Current `TokenParams` ends with an extra `bytes32 salt`, moving the selector
+  from `0xa41d5f2b` to `0xf35abbcf`. Old calldata sent to the current factory reverts --
+  confirmed by `eth_call` before any code was written.
+- **The fee escrow.** Each deployment credits its own. The escrow is baked immutably into every
+  splitter, escrow claims pay `msg.sender`, and there is no `claimFor` -- so a splitter built
+  against the superseded escrow holds a creator's fees where **nothing can ever reach them**.
+  This is the single most dangerous thing in the migration, and it is now a hard assertion both
+  before the splitter is deployed and again before the calldata is built.
+- **The approved assets.** The superseded factory approved 8. The current one approves **23** --
+  adding AMD, AMZN, MSFT, META, COIN, MU, PLTR, TTWO, COST, DJT, MSTR, QQQ, RDDT, SNDK, CRCL --
+  and has already **revoked RIVN**. Carrying the old snapshot forward would offer a set both too
+  small and, for the revoked one, wrong.
+
+### 11.3 Identity: the treasury is the on-chain deployer
+
+The current factory records `msg.sender` as `originalDeployer`. Ponsr calls it directly, so:
+
+```text
+originalDeployer     = Ponsr treasury
+creatorFeeRecipient  = the per-launch FeeSplitterV2
+95% of the split     = the user's generated wallet
+5% of the split      = Ponsr treasury
+```
+
+`launchTokenFor(...)` would change this but is callable **only** by the configured forwarder.
+**Do not claim the X user is recorded as the on-chain deployer.** Preserving that would be a
+separate architecture project, not part of this migration.
+
+### 11.4 There is no pons "V3"
+
+References to V3 in this repository mean **Uniswap V3 infrastructure used by pons v1**. There is
+no third pons launch protocol, and none may be implemented or advertised without a separately
+verified canonical factory.
+
+### 11.5 What this cost, and the lesson
+
+One mutable `PONS_V2_FACTORY_ADDRESS` made a superseded deployment and the current one
+indistinguishable. Every guard read the wrong contract *confidently*: `/status` was internally
+consistent and completely wrong, and `launchpadWatch` alerted correctly about a contract nobody
+uses.
+
+**An address is not an identity.** A deployment is an ABI, an escrow, a selector, a schema, and
+hashes proving the chain matches the description. That is what `backend/src/deployments.ts` now
+holds, with exactly one entry executable and the rest indexable forever.

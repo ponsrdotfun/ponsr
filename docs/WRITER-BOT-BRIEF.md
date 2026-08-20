@@ -12,11 +12,18 @@ anything that depends on it.
 
 ## 0. The one rule that matters more than the rest
 
-**Ponsr cannot launch tokens right now, and you must never write a post implying it can.**
+**Do not write a post implying Ponsr can launch tokens, until you are told otherwise.**
 
-The launchpad Ponsr builds on (pons) switched launching off for everyone on 2026-08-12. That is
-their decision, not ours, and it affects every project on that chain — not just us. Ponsr's code
-is finished and tested, but the door is closed.
+This rule has not changed, but the reason has. The earlier reason -- that pons had switched
+launching off -- turned out to be about a contract Ponsr was reading and pons had replaced. The
+current pons factory has been open since 2026-08-03, and Ponsr's migration to it is code-complete
+and verified against the live contracts.
+
+What is still true is that **nothing has been deployed to production and no launch has been made
+through the current factory.** The bot's signer is not yet permitted to sign for it, that
+permission is an operator action nobody has taken, and until it is taken and a first launch has
+been verified, an invitation to launch would send people to something that has not been switched
+on. Availability is announced by the owner, never inferred by you.
 
 So: no "launch your token now", no "tag us to launch", no calls to action that would make
 someone try and be turned away. Everything you write must be true on the day it posts.
@@ -61,12 +68,11 @@ Write nothing that contradicts this section.
 
 | Thing | State |
 |---|---|
-| Can Ponsr launch a token today? | **No** |
-| Why | pons switched launching off platform-wide on 2026-08-12 at 19:42 UTC |
-| Is this aimed at Ponsr? | **No.** Nobody has launched through pons since — **39 other addresses** have tried and reverted |
-| Is Ponsr broken? | **No.** It refuses cleanly before spending anything and tells the person the cause is upstream |
-| Is the pons team gone? | **No.** Their wallet is active on-chain daily |
-| What unblocks it | pons reopening it for everyone, **or** granting Ponsr a whitelist. We have asked for the second |
+| Can Ponsr launch a token today? | **Not yet — and not for the reason we thought** |
+| Is pons open? | **Yes.** They deployed a new factory on 2026-08-03 and it has taken over 1,900 launches |
+| So what is missing? | Ponsr's migration to it is code-complete and verified, but nothing is deployed and the signer is not yet permitted. Both are operator actions |
+| Was the old "closed launchpad" wrong? | It was true of a contract pons had replaced. Do not repeat that claim |
+| Do we need a whitelist? | **No.** The gate is public. A whitelist would make permission survive the gate closing, which is worth having and is not a blocker |
 | Has Ponsr ever launched real tokens? | **Yes — two, on mainnet, in August 2026.** Both confirmed, fees split correctly |
 
 **How to talk about the pause if it comes up:** factually, briefly, without blame. pons is a
