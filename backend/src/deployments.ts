@@ -53,6 +53,16 @@ export interface PonsDeployment {
   /** Where this deployment credits or pushes creator fees. On v1 this is the locker,
    *  which pushes; on v2 it is an escrow, which credits and must be claimed. */
   feeEscrow: string;
+  /**
+   * Which of those two it is, stated rather than inferred from the address.
+   *
+   * The field above holds a different KIND of thing per deployment, and that was left
+   * to a comment. A guard then read `feeEscrow` for v1, called `feeEscrow()` on a
+   * contract that has no such function, and reported the manifest as drifted when it
+   * was correct. One overloaded field, one confident wrong answer -- the same shape as
+   * the bug this whole registry replaced.
+   */
+  feeModel: 'push-from-locker' | 'escrow-credit';
   launchDeployer?: string;
   launchForwarder?: string;
   /** First four bytes of the launch function this deployment actually accepts. */
@@ -77,6 +87,7 @@ const V1: PonsDeployment = {
   runtimeBytecodeSha256: '834a3a3f3c5a7ca4db3be3ca96f34c99cab44e01822aef04ea9d7104a2159507',
   // v1 pushes fees from the locker rather than escrowing them, so this is the locker.
   feeEscrow: '0x736D76699C26D0d966744cAe304C000d471f7F35',
+  feeModel: 'push-from-locker',
   launchSelector: '0x686399cb',
   launchSignature:
     'launchToken((string,string,string,string,(string,string,string,string,string),address),uint256,uint256,bytes32)',
@@ -96,6 +107,7 @@ const V2_LEGACY: PonsDeployment = {
   runtimeBytecodeLength: 22_757,
   runtimeBytecodeSha256: '6796fb0e5c1687698e7f2dcea07d855606396345b14c8dd212eb3ce3544cad63',
   feeEscrow: '0xbc39B6502E1a6Ab36E4A5c5026A35F08342A0A9c',
+  feeModel: 'escrow-credit',
   // No salt in TokenParams, hence a different selector from the current deployment.
   launchSelector: '0xa41d5f2b',
   launchSignature:
@@ -116,6 +128,7 @@ const V2_CURRENT: PonsDeployment = {
   runtimeBytecodeLength: 24_177,
   runtimeBytecodeSha256: '226a042e6d68a69a6038d4fda211925b03eb5299399434b87a7877f79f6e3848',
   feeEscrow: '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e',
+  feeModel: 'escrow-credit',
   launchDeployer: '0x3711ceA4feaDE896C913C68F01Eda97Cb06D1A42',
   launchForwarder: '0xe33E9E479dF8802cb0866d5d05258bEc4cF62948',
   launchSelector: '0xf35abbcf',

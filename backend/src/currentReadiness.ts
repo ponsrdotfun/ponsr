@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { PonsDeployment, executableDeployment } from './deployments';
 import { PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
 import { NATIVE_ETH } from './pairTokens';
+import { verifyDeploymentIdentity } from './deploymentIdentity';
 
 /**
  * Whether the current pons deployment would accept a launch, asked rather than inferred.
@@ -34,6 +35,18 @@ export interface CurrentReadiness {
   feeWei: bigint;
   /** Whether the live factory's fee escrow matches the registry. */
   escrowMatches: boolean;
+  /**
+   * Whether the contract on chain is the one the registry describes -- runtime
+   * bytecode, ABI file, and the selector derived from it.
+   *
+   * Kept apart from every permission above, because "pons will not let you launch" and
+   * "this is not the contract we think it is" are unrelated problems with unrelated
+   * fixes. The registry has recorded these hashes since it was written; this is what
+   * finally reads them.
+   */
+  identityMatches: boolean;
+  /** One entry per drifted axis, each naming the axis. Empty when identity holds. */
+  identityMismatches: string[];
 }
 
 export interface ReadinessVerdict extends CurrentReadiness {
@@ -59,7 +72,14 @@ export function describeReadiness(r: CurrentReadiness): ReadinessVerdict {
   // since launching with the wrong escrow loses the fees permanently and a launch that
   // does not happen costs nothing.
   let reason: string | undefined;
-  if (!r.canLaunch) {
+  // First, and ahead of every permission: if this is not the contract the registry
+  // describes, nothing else asked about it means anything. A green `canLaunch` from an
+  // unexpected contract is not reassurance, it is the most dangerous reading available.
+  if (!r.identityMatches) {
+    reason =
+      'the contract at this address is not the one the registry describes -- ' +
+      r.identityMismatches.join('; ');
+  } else if (!r.canLaunch) {
     reason = r.launchEnabled
       ? 'canLaunch() is false for this address even though the public gate is open'
       : 'canLaunch() is false: the public gate is closed and this address is not whitelisted';
@@ -98,6 +118,9 @@ export async function readCurrentReadiness(
 ): Promise<ReadinessVerdict> {
   const f = new ethers.Contract(deployment.factory, PONS_V2_CURRENT_ABI, provider);
 
+  // Asked before the permissions, and reported alongside them.
+  const identity = await verifyDeploymentIdentity(deployment, provider);
+
   const [launchEnabled, whitelisted, canLaunch, configCount, feeWei, escrow] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcher) as Promise<boolean>,
@@ -134,5 +157,7 @@ export async function readCurrentReadiness(
     pairApproved,
     feeWei: BigInt(feeWei.toString()),
     escrowMatches: String(escrow).toLowerCase() === deployment.feeEscrow.toLowerCase(),
+    identityMatches: identity.ok,
+    identityMismatches: identity.mismatches,
   });
 }

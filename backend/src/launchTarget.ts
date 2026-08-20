@@ -171,6 +171,11 @@ class CurrentV2Target implements LaunchTarget {
   async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {
     const factory = new ethers.Contract(this.factoryAddress, PONS_V2_CURRENT_ABI, this.provider);
 
+    // Full identity -- runtime hash, ABI hash, selector -- is verified in
+    // `readCurrentReadiness()`, which runs before this and before any gas is spent.
+    // Repeating it here would add an RPC round trip per build and would force this
+    // module's unit tests to fake a 24kB contract byte for byte to stay honest.
+    //
     // Checked here as well as at splitter-deploy time. By this point the splitter is
     // already deployed and paid for, so this catches a factory that migrated between
     // the two steps -- the window is small, and the loss it prevents is permanent.
