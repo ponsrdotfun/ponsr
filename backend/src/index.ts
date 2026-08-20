@@ -417,7 +417,13 @@ const crossCheck =
 // to check the wrong contract.
 const launchpadWatches = [
   { label: 'the v1 factory', address: config.PONS_FACTORY_ADDRESS },
-  { label: 'the v2 factory', address: config.PONS_V2_FACTORY_ADDRESS },
+  // The CURRENT factory, from the registry. This watched
+  // `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20 -- the superseded deployment --
+  // which is how a "launchpad closed" alert kept firing accurately about a contract
+  // pons had already replaced, while the one Ponsr would launch through was open the
+  // entire time. A monitor pointed at the wrong contract does not go quiet; it reports
+  // confidently on somewhere else.
+  { label: `the current factory (${executableDeployment().id})`, address: executableDeployment().factory },
 ].map(({ label, address }) =>
   startLaunchpadWatch(
     { getLaunchReadiness: async () => getSwitchState(provider, address, await treasurySigner.address()) },

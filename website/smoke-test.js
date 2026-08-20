@@ -763,6 +763,35 @@ async function run() {
       `paused->${shownWhenPaused ? 'shown' : 'HIDDEN'}, open->${hiddenWhenOpen ? 'hidden' : 'SHOWN'}`]);
   }
 
+  // ---------------------------------------------------------------------------
+  // WHICH v2 FACTORY THE PAGE ASKS
+  //
+  // The three checks above all passed while the notice was reading the SUPERSEDED
+  // factory, whose launchEnabled is false permanently. So the page told every visitor
+  // "pons has new launches switched off platform-wide" -- a false statement about
+  // somebody else's product -- and the suite called it correct, because it tested that
+  // the notice follows the chain without testing WHICH contract it asks.
+  //
+  // A test that verifies the wiring but not the destination is how a confident wrong
+  // answer survives a green suite.
+  // ---------------------------------------------------------------------------
+  const CURRENT_V2 = '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e'.toLowerCase();
+  const LEGACY_V2 = '0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8'.toLowerCase();
+  const src = html.toLowerCase();
+
+  checks.push(['the current v2 factory is configured', src.includes(CURRENT_V2), CURRENT_V2]);
+
+  // The pause notice must ask the factory pons actually uses.
+  const pausedBlock = html.slice(Math.max(0, html.indexOf('SEL_LAUNCH_ENABLED = ')), html.indexOf('function hexToBig'));
+  checks.push(['the paused notice asks the CURRENT factory',
+    /factoryV2Current, data: SEL_LAUNCH_ENABLED/.test(pausedBlock),
+    pausedBlock.includes('CHAIN.factoryV2, data: SEL_LAUNCH_ENABLED') ? 'still asking the superseded factory' : '']);
+
+  // History must stay visible: the superseded factory holds real launches.
+  checks.push(['the ledger still reads the superseded factory too',
+    src.includes(LEGACY_V2) && /v2Addresses\s*=\s*\[\s*CHAIN\.factoryV2\s*,\s*CHAIN\.factoryV2Current/.test(html),
+    'a launch made through it did not stop existing']);
+
   let failCount = 0;
   for (const [name, pass, detail] of checks) {
     console.log((pass ? 'PASS' : 'FAIL') + ' -- ' + name + (detail ? ' (' + detail + ')' : ''));

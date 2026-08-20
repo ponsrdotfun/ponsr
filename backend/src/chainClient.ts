@@ -2,6 +2,16 @@ import { ethers } from 'ethers';
 import { config } from './config';
 import { PONS_FACTORY_ABI } from './ponsEncoder';
 import { PONS_V2_FACTORY_ABI } from './ponsV2Encoder';
+import { PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
+import { executableDeployment } from './deployments';
+
+/** The ABI of whichever deployment is executable, so reads decode against the contract
+ *  actually being addressed rather than against whichever v2 shipped first. */
+function executableAbi(): ethers.InterfaceAbi {
+  return executableDeployment().tokenParamsVersion === 'v2-salt'
+    ? PONS_V2_CURRENT_ABI
+    : PONS_V2_FACTORY_ABI;
+}
 
 export function createProvider(): ethers.JsonRpcProvider {
   return new ethers.JsonRpcProvider(config.RPC_URL, config.CHAIN_ID);
@@ -18,8 +28,19 @@ export function createProvider(): ethers.JsonRpcProvider {
  * a confident answer about somewhere else.
  */
 export function activeFactoryAddress(): string {
+  // From the registry, exactly as `createLaunchTarget` does.
+  //
+  // This read `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20, whose default is the
+  // SUPERSEDED factory. `launchTarget` had been migrated; this had not. Flipping
+  // PONS_FACTORY_VERSION to v2 would therefore have built calldata for the current
+  // factory while every guard here read a different contract -- one whose
+  // `launchEnabled` is false, so launches would have been refused loudly for a reason
+  // that had nothing to do with them.
+  //
+  // The guard and the calldata have to name one contract. Two settings that can
+  // disagree is the entire shape of what this migration was cleaning up.
   return config.PONS_FACTORY_VERSION === 'v2'
-    ? config.PONS_V2_FACTORY_ADDRESS
+    ? executableDeployment().factory
     : config.PONS_FACTORY_ADDRESS;
 }
 
@@ -27,7 +48,10 @@ function factory(provider: ethers.Provider): ethers.Contract {
   const v2 = config.PONS_FACTORY_VERSION === 'v2';
   return new ethers.Contract(
     activeFactoryAddress(),
-    v2 ? PONS_V2_FACTORY_ABI : PONS_FACTORY_ABI,
+    // The current deployment's ABI, not the superseded one's. They differ, and the
+    // reads this file makes -- launchFee, launchEnabled, the whitelist -- have to be
+    // decoded against the contract actually being addressed.
+    v2 ? executableAbi() : PONS_FACTORY_ABI,
     provider
   );
 }

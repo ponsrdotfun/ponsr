@@ -1124,7 +1124,16 @@
     // threshold arrives in the event instead of having to be read from a config.
     // A launch that is invisible here still exists on-chain -- the board simply
     // does not show it, which is the failure that hid both real launches in August.
+    // The SUPERSEDED v2, kept because it holds real launches that must stay visible.
+    // Never ask this one whether launching is open: pons replaced it on 2026-08-03 and
+    // its `launchEnabled` is false forever, which is how this page came to tell every
+    // visitor that "pons has new launches switched off platform-wide" while the factory
+    // pons actually uses was open and taking over 1,900 launches. A false statement
+    // about somebody else's product is worse than saying nothing.
     factoryV2: '0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8',
+    // The CURRENT v2. Same event signature and same indexed layout as the superseded
+    // one -- verified, not assumed -- so it needs an address here and no new decoder.
+    factoryV2Current: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
     // keccak("TokenLaunched(address,address,address,address,uint256,uint256)")
     topicLaunchedV2: '0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607',
     // Launch config 0's graduation threshold, read live on 2026-08-04. Shown as
@@ -1176,8 +1185,10 @@
     // so their launches still appear on the board.
     var treasury = CHAIN.launchers[CHAIN.launchers.length - 1].replace(/^0x/, '');
     Promise.all([
-      rpcCall('eth_call', [{ to: CHAIN.factoryV2, data: SEL_LAUNCH_ENABLED }, 'latest']),
-      rpcCall('eth_call', [{ to: CHAIN.factoryV2, data: SEL_WHITELISTED + '0'.repeat(24) + treasury }, 'latest'])
+      // The CURRENT factory. Asking the superseded one is how this notice stayed up
+      // permanently, stating something untrue about pons to every visitor.
+      rpcCall('eth_call', [{ to: CHAIN.factoryV2Current, data: SEL_LAUNCH_ENABLED }, 'latest']),
+      rpcCall('eth_call', [{ to: CHAIN.factoryV2Current, data: SEL_WHITELISTED + '0'.repeat(24) + treasury }, 'latest'])
     ]).then(function (r) {
       note.hidden = hexToBig(r[0]) === 1n || hexToBig(r[1]) === 1n;
     }).catch(function () { note.hidden = true; });
@@ -1305,14 +1316,22 @@
       topics: [CHAIN.topicLaunched, null, CHAIN.launchers.map(pad32)]
     }]).catch(function () { return []; });
 
-    var v2Logs = rpcCall('eth_getLogs', [{
-      address: CHAIN.factoryV2,
-      fromBlock: '0x0',
-      toBlock: 'latest',
-      // deployer is topic3 on v2, not topic2. Filtering on the wrong position
-      // returns nothing at all, which reads identically to "we never launched".
-      topics: [CHAIN.topicLaunchedV2, null, null, CHAIN.launchers.map(pad32)]
-    }]).catch(function () { return []; });
+    // Both v2 deployments, because a launch made through the superseded factory did not
+    // stop existing when pons moved on. The event signature and indexed layout are
+    // identical across the two, so one decoder covers both.
+    var v2Addresses = [CHAIN.factoryV2, CHAIN.factoryV2Current];
+    var v2Logs = Promise.all(v2Addresses.map(function (address) {
+      return rpcCall('eth_getLogs', [{
+        address: address,
+        fromBlock: '0x0',
+        toBlock: 'latest',
+        // deployer is topic3 on v2, not topic2. Filtering on the wrong position
+        // returns nothing at all, which reads identically to "we never launched".
+        topics: [CHAIN.topicLaunchedV2, null, null, CHAIN.launchers.map(pad32)]
+      }]).catch(function () { return []; });
+    })).then(function (sets) {
+      return sets.reduce(function (all, s) { return all.concat(s || []); }, []);
+    });
 
     return Promise.all([v1Logs, v2Logs]).then(function (both) {
       var logs = (both[0] || []).map(function (l) { return { log: l, v2: false }; })
