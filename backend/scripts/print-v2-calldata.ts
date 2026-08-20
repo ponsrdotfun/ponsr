@@ -6,6 +6,7 @@
  * it is rehearsing proves the re-implementation.
  */
 import { createLaunchTarget } from '../src/launchTarget';
+import { executableDeployment } from '../src/deployments';
 import { createProvider } from '../src/chainClient';
 import { NATIVE_ETH } from '../src/pairTokens';
 import { ethers } from 'ethers';
@@ -21,7 +22,7 @@ const [splitter, pairToken] = process.argv.slice(2);
       tokenSymbol: 'REHRS',
       description: 'forked-mainnet rehearsal',
       splitterAddress: splitter,
-      tweetId: 'rehearsal',
+      tweetId: process.argv[4] ?? 'rehearsal',
       pairAsset: {
         address: pairToken || NATIVE_ETH,
         symbol: 'PAIR',
@@ -32,7 +33,17 @@ const [splitter, pairToken] = process.argv.slice(2);
     },
     500_000_000_000_000n
   );
-  console.log(JSON.stringify({ to: built.to, data: built.data, value: built.value.toString() }));
+  // The deployment id travels with the calldata so the rehearsal can assert it is
+  // building for the factory it thinks it is, rather than trusting the address alone.
+  console.log(
+    JSON.stringify({
+      to: built.to,
+      data: built.data,
+      value: built.value.toString(),
+      deployment: executableDeployment().id,
+      selector: built.data.slice(0, 10),
+    })
+  );
 })().catch((e) => {
   console.error(String(e?.message ?? e));
   process.exit(1);
