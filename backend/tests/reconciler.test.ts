@@ -98,7 +98,7 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any,
+      provider: {} as any, verifyIdentity: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n, // funded; not what these test
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),

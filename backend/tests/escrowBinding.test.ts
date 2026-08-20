@@ -84,3 +84,80 @@ describe('the splitter deployer binds the registry escrow', () => {
     expect(code).toMatch(/splitterEscrowFor\(/);
   });
 });
+
+/**
+ * Identity, checked before the splitter is deployed.
+ *
+ * Order matters and this is the expensive end of it. `readCurrentReadiness` verifies
+ * identity, but readiness and the deploy are two moments, and only one of them spends
+ * gas. Everything between them -- a factory upgraded, an RPC swapped to another chain, a
+ * regenerated ABI -- lands in that window, and the splitter is the first durable,
+ * irreversible artifact the flow creates.
+ *
+ * A splitter deployed against a factory that has since changed is not a wasted fee; it
+ * is a contract that may be handed a creator's fees and be unable to claim them. §3 of
+ * the closure order requires the identity check here for that reason: a mismatch must
+ * leave zero durable side effects, and after `deploySplitter` returns there is already
+ * one.
+ */
+describe('splitter deployment refuses a drifted deployment', () => {
+  const { ethers } = require('ethers');
+  const { assertDeploymentIdentity } = require('../src/deploymentIdentity');
+
+  function providerFor(over: { chainId?: number; code?: string; escrow?: string } = {}) {
+    const d = executableDeployment();
+    return {
+      getNetwork: async () => ({ chainId: BigInt(over.chainId ?? d.chainId), name: 'x' }),
+      getCode: async () => over.code ?? '0x' + 'ab'.repeat(10),
+      call: async () =>
+        ethers.AbiCoder.defaultAbiCoder().encode(['address'], [over.escrow ?? d.feeEscrow]),
+    } as any;
+  }
+
+  function manifest(code: string, over: any = {}) {
+    const d = executableDeployment();
+    return {
+      ...d,
+      runtimeBytecodeLength: (code.length - 2) / 2,
+      runtimeBytecodeSha256: ethers.sha256(code).slice(2),
+      ...over,
+    };
+  }
+
+  it('refuses before deploying when the chain is wrong', async () => {
+    const code = '0x' + 'ab'.repeat(10);
+    await expect(
+      assertDeploymentIdentity(manifest(code), providerFor({ chainId: 46630, code }))
+    ).rejects.toThrow(/chain id/i);
+  });
+
+  it('refuses before deploying when the escrow moved', async () => {
+    const code = '0x' + 'ab'.repeat(10);
+    const legacy = deploymentById('pons-v2-legacy-7e1');
+    await expect(
+      assertDeploymentIdentity(manifest(code), providerFor({ code, escrow: legacy.feeEscrow }))
+    ).rejects.toThrow(/escrow/i);
+  });
+
+  it('says nothing was deployed and no fee was spent', async () => {
+    const code = '0x' + 'ab'.repeat(10);
+    await expect(
+      assertDeploymentIdentity(manifest(code), providerFor({ chainId: 1, code }))
+    ).rejects.toThrow(/nothing was deployed and no fee was spent/i);
+  });
+
+  // The wiring itself: the deployer must actually call the guard, not merely have one
+  // available in the module next door.
+  it('deploySplitter performs the check rather than trusting an earlier one', () => {
+    const raw: string = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/splitterDeployer.ts'),
+      'utf8'
+    );
+    const code = raw
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .filter((l: string) => !l.trim().startsWith('//'))
+      .join('\n');
+    expect(code).toMatch(/assertDeploymentIdentity\(/);
+  });
+});

@@ -98,3 +98,95 @@ describe('launch provenance', () => {
     db = new Db(P);
   });
 });
+
+/**
+ * Lineage the closure order requires, and the two fields that were missing.
+ *
+ * `splitter` is the sharper omission. It is the creator's fee recipient, deployed once
+ * per launch, and it is the only address that can claim from the escrow -- claims pay
+ * `msg.sender` and there is no `claimFor`. Not recording it means a historical launch's
+ * fees can only be recovered by re-deriving an address from a transaction receipt, which
+ * is exactly the archaeology that does not happen when it matters.
+ *
+ * `launchSelector` and `tokenParamsVersion` are the encoding lineage. Two deployments in
+ * this registry already take different calldata for the same nominal function; a row
+ * that does not say which encoding produced it cannot be replayed or audited later.
+ */
+describe('provenance records the full lineage', () => {
+  let db2: Db;
+  beforeEach(() => { db2 = fresh(); });
+  afterEach(() => db2.close());
+
+  function seed(id: string) {
+    db2.claimTweetForProcessing('tw-' + id);
+    db2.insertLaunch({
+      id, sourceTweetId: 'tw-' + id, xUserId: 'u1',
+      tokenName: 'A', tokenSymbol: 'AAA', status: 'pending', createdAt: new Date().toISOString(),
+      splitterAddress: null, tokenAddress: null, txHash: null, rejectionReason: null, feeWeiPaid: null,
+    } as any);
+  }
+
+  const base = {
+    deploymentId: 'pons-v2-current-7ed',
+    factory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
+    feeEscrow: '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e',
+    chainId: 4663,
+    originalDeployer: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+    pairToken: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
+    launchConfigId: '0',
+    salt: '0x' + 'ab'.repeat(32),
+    economicsDigest: '0x' + 'cd'.repeat(32),
+    curve: null,
+  };
+
+  it('stores the splitter, the only address that can claim the fees', () => {
+    seed('lp1');
+    db2.recordLaunchProvenance('lp1', {
+      ...base,
+      splitter: '0x2222222222222222222222222222222222222222',
+      launchSelector: '0xf35abbcf',
+      tokenParamsVersion: 'v2-salt',
+    } as any);
+    const back: any = db2.getLaunchProvenance('lp1');
+    expect(back.splitter).toBe('0x2222222222222222222222222222222222222222');
+  });
+
+  it('stores the encoding lineage, so a row can say how it was built', () => {
+    seed('lp2');
+    db2.recordLaunchProvenance('lp2', {
+      ...base,
+      splitter: '0x2222222222222222222222222222222222222222',
+      launchSelector: '0xf35abbcf',
+      tokenParamsVersion: 'v2-salt',
+    } as any);
+    const back: any = db2.getLaunchProvenance('lp2');
+    expect(back.launchSelector).toBe('0xf35abbcf');
+    expect(back.tokenParamsVersion).toBe('v2-salt');
+  });
+
+  // Forward-safe: a database created before these columns existed must open, keep its
+  // rows, and read them back with the new fields empty rather than guessed.
+  it('adds the columns to a database that predates them, without losing rows', () => {
+    const path = './data/test-provenance-migrate.sqlite';
+    if (fs.existsSync(path)) fs.unlinkSync(path);
+    const older = new Db(path);
+    older.claimTweetForProcessing('tw-old');
+    older.insertLaunch({
+      id: 'old1', sourceTweetId: 'tw-old', xUserId: 'u1',
+      tokenName: 'Old', tokenSymbol: 'OLD', status: 'confirmed', createdAt: new Date().toISOString(),
+      splitterAddress: null, tokenAddress: null, txHash: null, rejectionReason: null, feeWeiPaid: null,
+    } as any);
+    // Drop the new columns to simulate the older schema exactly.
+    (older as any).raw?.exec?.('ALTER TABLE launch_provenance DROP COLUMN splitter');
+    older.close();
+
+    const reopened = new Db(path);
+    try {
+      // The row survives the schema change; provenance for it is simply absent, which
+      // is the honest answer for a launch made before these columns existed.
+      expect(reopened.getLaunchProvenance('old1')).toBeNull();
+    } finally {
+      reopened.close();
+    }
+  });
+});

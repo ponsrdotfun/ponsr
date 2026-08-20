@@ -783,9 +783,16 @@
        failed read leaves the page saying nothing rather than claiming a pause that ended. -->
   <div class="pause-note" id="pause-note" role="status" hidden>
     <strong>Launching is paused.</strong>
-    <span>pons has new launches switched off platform-wide, so nothing can launch through
-    them right now &mdash; Ponsr included. The ledger below is live, and this notice
-    disappears on its own when launching reopens.</span>
+    <!-- Scoped to the deployment this page actually queries, and no wider.
+         It used to read "pons has new launches switched off platform-wide" -- a claim
+         about all of pons, inferred from one factory. That factory turned out to be the
+         superseded one, so the sentence was both an overreach and false: the deployment
+         pons actually uses was open the whole time and had taken over 1,900 launches.
+         One contract's gate is evidence about one contract. -->
+    <span>New launches are switched off on the pons deployment Ponsr launches through,
+    so nothing can launch there right now &mdash; Ponsr included. This says nothing about
+    pons's other contracts. The ledger below is live, and this notice disappears on its
+    own when that deployment reopens.</span>
   </div>
 
   <section class="hero" id="hero">

@@ -7,6 +7,8 @@ import { WalletResolver } from './walletResolver';
 import { XClient } from './xClient';
 import { TreasurySigner } from './treasurySigner';
 import { deploySplitter } from './splitterDeployer';
+import { assertDeploymentIdentity } from './deploymentIdentity';
+import { executableDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
@@ -55,6 +57,15 @@ export interface OrchestratorDeps {
   pairAssets?: { resolve(typed: string | null | undefined): Promise<PairResolution> };
   /** Which factory to build for. Defaults from config; injected in tests. */
   launchTarget?: LaunchTarget;
+  /**
+   * Proves the factory on chain is still the one the registry describes, immediately
+   * before the splitter -- the first durable artifact -- is deployed.
+   *
+   * Injected like every other chain-facing dependency here, and defaulted to the real
+   * check. A test that passes `provider: {} as any` is not exercising this, and saying
+   * so explicitly is better than a stub that quietly answers yes.
+   */
+  verifyIdentity?: (provider: ethers.Provider) => Promise<void>;
 }
 
 /** Alerting must never change a launch outcome. If the notifier is down, that is
@@ -253,11 +264,29 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // The splitter's `token` field is bookkeeping-only (see FeeSplitter.sol NatSpec), so a
     // placeholder here is safe; it gets superseded by the real launches table record either
     // way once the launch confirms.
+    // Identity, immediately before the first DURABLE artifact of this launch exists.
+    //
+    // Readiness verified it earlier, but readiness and this deploy are two moments and
+    // only one of them spends gas. A factory upgraded, an RPC repointed at another
+    // chain, an ABI regenerated -- all of it lands in the window between, and a splitter
+    // bound to a factory that has since moved is not a wasted fee: it is a contract that
+    // may be handed a creator's fees and be unable to claim them.
+    //
+    // Injected like every other chain-facing dependency in this file, so the
+    // orchestration tests can state plainly that they are not exercising it.
+    const verifyIdentity =
+      deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(executableDeployment(), p));
+    await verifyIdentity(deps.provider);
+
     const { splitterAddress, deployTxHash } = await deploySplitter(
       deps.treasurySigner,
       wallet.walletAddress,
       treasuryAddress,
-      ethers.ZeroAddress
+      ethers.ZeroAddress,
+      // Nothing here: identity was asserted just above, through the injected
+      // `verifyIdentity`, so passing the provider again would repeat the same four RPC
+      // calls for the same answer.
+      undefined
     );
 
     const liveFee = await deps.getLiveFeeWei();
@@ -307,6 +336,15 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
         salt: launchSalt(d, mention.tweetId),
         economicsDigest: null,
         curve: null,
+        // The splitter, because it is the only address that can ever claim this
+        // launch's fees out of the escrow: claims pay `msg.sender` and there is no
+        // `claimFor`. Recovering it later from a receipt is possible and is exactly
+        // the archaeology nobody performs when a creator asks where their fees went.
+        splitter: splitterAddress,
+        // How the calldata was built, so this row can be replayed or audited without
+        // assuming it used whatever encoding happens to be current at read time.
+        launchSelector: d.launchSelector,
+        tokenParamsVersion: d.tokenParamsVersion,
       });
     }
 

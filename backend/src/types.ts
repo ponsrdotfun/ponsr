@@ -118,4 +118,21 @@ export interface LaunchProvenance {
   salt: string;
   economicsDigest: string | null;
   curve: string | null;
+  /**
+   * The per-launch FeeSplitter: the creator's fee recipient.
+   *
+   * The only address that can claim this launch's fees out of the escrow -- claims pay
+   * `msg.sender` and there is no `claimFor`. A row without it can only be recovered by
+   * re-deriving the address from a transaction receipt.
+   *
+   * Nullable because launches recorded before this column existed genuinely have no
+   * value here, and backfilling one would be inventing a fact about money.
+   */
+  splitter?: string | null;
+  /** The four bytes actually sent. Two deployments in the registry take different
+   *  calldata for the same nominal function, so a row that cannot say which encoding
+   *  produced it cannot be replayed or audited. */
+  launchSelector?: string | null;
+  /** The TokenParams schema behind that selector: 'v1' | 'v2-no-salt' | 'v2-salt'. */
+  tokenParamsVersion?: string | null;
 }

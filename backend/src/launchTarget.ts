@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from './config';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
-import { PONS_V2_FACTORY_ABI, buildV2LaunchCalldata, extractV2LaunchDetails } from './ponsV2Encoder';
 import {
   PONS_V2_CURRENT_ABI,
   buildCurrentV2LaunchCalldata,
@@ -99,48 +98,20 @@ class V1Target implements LaunchTarget {
   }
 }
 
-class V2Target implements LaunchTarget {
-  version = 'v2' as const;
-  factoryAddress = config.PONS_V2_FACTORY_ADDRESS;
-  supportsPairing = true;
-
-  constructor(private provider: ethers.Provider) {}
-
-  async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {
-    const factory = new ethers.Contract(this.factoryAddress, PONS_V2_FACTORY_ABI, this.provider);
-
-    // Read immediately before building, never cached. The digest pins supply,
-    // thresholds and fee tiers to what was quoted; a stale one does not protect the
-    // launch, it reverts it. Getting nothing back is the safer failure: a launch
-    // that does not happen beats one priced on terms nobody saw.
-    const expectedEconomics: string = await factory.previewLaunchEconomics(
-      config.PONS_LAUNCH_CONFIG_ID,
-      req.pairAsset.address
-    );
-
-    const { data, value } = buildV2LaunchCalldata(
-      {
-        tokenName: req.tokenName,
-        tokenSymbol: req.tokenSymbol,
-        logo: '',
-        description: req.description ?? '',
-        socials: EMPTY_SOCIALS,
-        feeWallet: req.splitterAddress,
-        launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
-        pairToken: req.pairAsset.address,
-        creatorTaxBps: 0,
-        buybackEnabled: false,
-        expectedEconomics,
-      },
-      launchFeeWei
-    );
-    return { to: this.factoryAddress, data, value };
-  }
-
-  extractToken(logs: readonly ethers.Log[]): string | null {
-    return extractV2LaunchDetails(logs)?.token ?? null;
-  }
-}
+/*
+ * `V2Target` -- the target for the SUPERSEDED v2 factory -- was deleted on 2026-08-20.
+ *
+ * It had been unreachable since `createLaunchTarget` started routing everything except
+ * v1 to the registry, so it changed no behaviour. It was removed anyway, because what
+ * it still held was `config.PONS_V2_FACTORY_ADDRESS` -- a setting whose default is the
+ * factory pons replaced -- inside a class that looks maintained and deliberate.
+ *
+ * Dead code carrying a superseded address is not neutral. It reads as something kept
+ * for a reason, and the next person to need a "v2 target" finds one already written.
+ *
+ * The superseded deployment stays in `deployments.ts` and stays indexable; what is gone
+ * is the ability to LAUNCH through it. Rollback is v1, which is still selectable.
+ */
 
 /**
  * The pons deployment that is actually live.

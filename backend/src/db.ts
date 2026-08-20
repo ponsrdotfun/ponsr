@@ -86,6 +86,16 @@ export class Db {
         salt TEXT NOT NULL,
         economics_digest TEXT,
         curve TEXT,
+        -- The creator's fee recipient for this launch. It is the ONLY address that can
+        -- claim from the escrow -- claims pay msg.sender and there is no claimFor -- so
+        -- a row without it can only be recovered by re-deriving the address from a
+        -- transaction receipt, which is the archaeology nobody does when it matters.
+        splitter TEXT,
+        -- How the calldata was built. Two deployments in the registry already take
+        -- different calldata for the same nominal function, so a row that cannot say
+        -- which encoding produced it cannot be replayed or audited.
+        launch_selector TEXT,
+        token_params_version TEXT,
         recorded_at TEXT NOT NULL,
         FOREIGN KEY (launch_id) REFERENCES launches(id)
       );
@@ -124,6 +134,12 @@ export class Db {
       CREATE INDEX IF NOT EXISTS idx_launch_created ON launches(created_at);
       CREATE INDEX IF NOT EXISTS idx_rejected_at ON rejection_log(rejected_at);
     `);
+
+    // Runs after the schema on every open, and does nothing when there is nothing to
+    // do. `CREATE TABLE IF NOT EXISTS` is a no-op on a table that already exists, so a
+    // column added above would never reach a database created before it -- every
+    // existing deployment would start writing to columns that are not there.
+    this.migrateProvenanceColumns();
   }
 
   /** Atomically claims a tweet ID for processing. Returns false if it was already claimed --
@@ -171,13 +187,40 @@ export class Db {
    * evidence of what was attempted -- which is the case where knowing the deployment
    * matters most.
    */
+  /**
+   * Adds provenance columns to a database created before they existed.
+   *
+   * `CREATE TABLE IF NOT EXISTS` does nothing to a table that is already there, so a
+   * schema change alone would leave every existing deployment writing to columns that
+   * are not present. Additive and idempotent: each column is added only if missing, and
+   * existing rows get NULL rather than a backfilled guess. A launch made before this
+   * column existed genuinely has no recorded splitter, and writing one in would be
+   * inventing a fact about money.
+   */
+  private migrateProvenanceColumns(): void {
+    const existing = new Set(
+      (this.db.prepare('PRAGMA table_info(launch_provenance)').all() as any[]).map((c) => c.name)
+    );
+    const additions: Array<[string, string]> = [
+      ['splitter', 'TEXT'],
+      ['launch_selector', 'TEXT'],
+      ['token_params_version', 'TEXT'],
+    ];
+    for (const [name, type] of additions) {
+      if (!existing.has(name)) {
+        this.db.exec(`ALTER TABLE launch_provenance ADD COLUMN ${name} ${type}`);
+      }
+    }
+  }
+
   recordLaunchProvenance(launchId: string, p: LaunchProvenance): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO launch_provenance
          (launch_id, deployment_id, factory, fee_escrow, chain_id, original_deployer,
-          pair_token, launch_config_id, salt, economics_digest, curve, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          pair_token, launch_config_id, salt, economics_digest, curve,
+          splitter, launch_selector, token_params_version, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         launchId,
@@ -191,6 +234,9 @@ export class Db {
         p.salt,
         p.economicsDigest ?? null,
         p.curve ?? null,
+        p.splitter ?? null,
+        p.launchSelector ?? null,
+        p.tokenParamsVersion ?? null,
         new Date().toISOString()
       );
   }
@@ -214,6 +260,9 @@ export class Db {
       salt: r.salt,
       economicsDigest: r.economics_digest,
       curve: r.curve,
+      splitter: r.splitter ?? null,
+      launchSelector: r.launch_selector ?? null,
+      tokenParamsVersion: r.token_params_version ?? null,
     };
   }
 

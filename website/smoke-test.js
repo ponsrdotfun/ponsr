@@ -792,6 +792,17 @@ async function run() {
     src.includes(LEGACY_V2) && /v2Addresses\s*=\s*\[\s*CHAIN\.factoryV2\s*,\s*CHAIN\.factoryV2Current/.test(html),
     'a launch made through it did not stop existing']);
 
+  // The notice must not generalise one contract's gate into a claim about all of pons.
+  // It read "switched off platform-wide" while querying the SUPERSEDED factory, so the
+  // sentence was an overreach AND false: the deployment pons actually uses was open.
+  checks.push(['the notice does not generalise beyond the deployment it queried',
+    note ? !/platform-wide|platform wide|all of pons|everywhere/i.test(note.textContent) : false,
+    note ? '' : 'no notice']);
+
+  checks.push(['the notice says which scope it speaks for',
+    note ? /deployment/i.test(note.textContent) : false,
+    note ? note.textContent.replace(/\s+/g, ' ').trim().slice(0, 70) + '…' : '']);
+
   let failCount = 0;
   for (const [name, pass, detail] of checks) {
     console.log((pass ? 'PASS' : 'FAIL') + ' -- ' + name + (detail ? ' (' + detail + ')' : ''));

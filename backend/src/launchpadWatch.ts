@@ -47,9 +47,10 @@ export function startLaunchpadWatch(
     running = true;
     try {
       const r = await deps.getLaunchReadiness();
-      // Whitelisting is what the switch is for: it only applies while launching is
-      // globally off, so a whitelisted treasury can still launch and this is not an
-      // outage for us.
+      // Whitelisting is what the switch is for: it only applies while THIS deployment's
+      // public gate is shut, so a whitelisted treasury can still launch and this is not
+      // an outage for us. Scoped to the deployment on purpose -- pons runs more than one
+      // factory, and a gate shut on a superseded one says nothing about the current one.
       const blocked = !r.launchEnabled && !r.whitelisted;
 
       if (blocked && !closed) {
@@ -71,8 +72,8 @@ export function startLaunchpadWatch(
           severity: 'info',
           message: r.launchEnabled
             ? `pons has switched launching back on for ${label}. The bot can launch again there.`
-            : `This treasury is now whitelisted on ${label}, so it can launch there even with ` +
-              'launching globally off. This is the grant that was asked for.',
+            : `This treasury is now whitelisted on ${label}, so it can launch there even ` +
+              'while that deployment\'s public gate is shut. This is the grant that was asked for.',
           at: new Date().toISOString(),
         });
       }

@@ -83,6 +83,28 @@ export async function verifyDeploymentIdentity(
 ): Promise<IdentityResult> {
   const checks: IdentityCheck[] = [];
 
+  // --- which chain are we even on? -------------------------------------------------
+  //
+  // First, because it is the cheapest axis and the one most often wrong in practice.
+  // Every other check reads an address, and the same address on a different chain is a
+  // different contract -- usually no contract at all. `backend/.env` points at testnet
+  // by design while the executable deployment is a mainnet contract, so this is a
+  // routine misconfiguration, not a hypothetical.
+  //
+  // Without it the guard still fails, but it fails by reporting the runtime hash as
+  // e3b0c442... -- the sha256 of nothing -- which reads as "the bytecode differs" and
+  // sends the reader hunting an upgrade that never happened.
+  //
+  // A provider that cannot say which chain it is on has not proven it is the right one,
+  // so an unreadable network is a mismatch rather than a pass.
+  let chainId = 'unreadable';
+  try {
+    chainId = String((await provider.getNetwork()).chainId);
+  } catch (err: any) {
+    chainId = `unreadable (${String(err?.message ?? err).slice(0, 40)})`;
+  }
+  record(checks, 'chain id', String(deployment.chainId), chainId);
+
   // --- the chain -----------------------------------------------------------------
   const code = await provider.getCode(deployment.factory);
   if (!code || code === '0x') {

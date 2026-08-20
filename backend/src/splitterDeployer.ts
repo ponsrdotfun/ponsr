@@ -3,6 +3,7 @@ import feeSplitterArtifact from './feeSplitterArtifact.json';
 import { TreasurySigner } from './treasurySigner';
 import { config } from './config';
 import { PonsDeployment, executableDeployment } from './deployments';
+import { assertDeploymentIdentity } from './deploymentIdentity';
 
 /**
  * Deploys one FeeSplitter per launch (see contracts/FeeSplitter.sol's header comment for why
@@ -103,8 +104,28 @@ export async function deploySplitter(
   signer: TreasurySigner,
   creatorWallet: string,
   treasuryWallet: string,
-  tokenAddressPlaceholder: string
+  tokenAddressPlaceholder: string,
+  /**
+   * Optional, and the reason it exists is timing.
+   *
+   * `readCurrentReadiness` already verifies identity -- but readiness and this deploy
+   * are two separate moments, and only one of them spends gas. A factory upgraded, an
+   * RPC swapped to another chain, an ABI regenerated: all of it lands in the window
+   * between, and the splitter is the first DURABLE artifact this flow creates. A
+   * splitter bound to a factory that has since moved is not a wasted fee; it is a
+   * contract that may be handed a creator's fees and be unable to claim them.
+   *
+   * Pass a provider and the check runs here too, immediately before the bytes go out.
+   * Omit it and the caller is asserting that nothing could have changed since readiness
+   * -- true in the unit tests, which have no chain at all.
+   */
+  provider?: ethers.Provider
 ): Promise<SplitterDeployResult> {
+  if (provider) {
+    // Throws rather than returning a flag: after this function returns there is already
+    // a durable side effect, so the refusal has to happen before anything is sent.
+    await assertDeploymentIdentity(executableDeployment(), provider);
+  }
   const { abi, bytecode, name } = splitterArtifact();
   const factory = new ethers.ContractFactory(abi, bytecode);
 

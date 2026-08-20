@@ -26,6 +26,9 @@ function fakeProvider(opts: { code?: string; escrow?: string }): ethers.Provider
   const d = executableDeployment();
   const code = opts.code ?? '0x' + 'ab'.repeat(10);
   return {
+    // A real provider always knows which chain it is on, so a fake that does not would
+    // be testing against something that cannot exist.
+    getNetwork: async () => ({ chainId: BigInt(d.chainId), name: 'robinhood' }),
     getCode: async () => code,
     call: async () =>
       ethers.AbiCoder.defaultAbiCoder().encode(['address'], [opts.escrow ?? d.feeEscrow]),
@@ -159,6 +162,7 @@ describe('historical deployments verify without false alarms', () => {
     // was never supposed to have.
     const v1 = deploymentById('pons-v1');
     const provider = {
+      getNetwork: async () => ({ chainId: BigInt(4663), name: 'robinhood' }),
       getCode: async () => '0x' + 'cd'.repeat(10),
       call: async () => {
         throw new Error('execution reverted');
@@ -172,6 +176,7 @@ describe('historical deployments verify without false alarms', () => {
     // The exemption must be a property of the deployment, not a blanket softening.
     const current = executableDeployment();
     const provider = {
+      getNetwork: async () => ({ chainId: BigInt(4663), name: 'robinhood' }),
       getCode: async () => '0x' + 'cd'.repeat(10),
       call: async () => {
         throw new Error('execution reverted');
@@ -196,5 +201,124 @@ describe('the assertion form, for the launch path', () => {
     await expect(
       assertDeploymentIdentity(manifestMatching(code), fakeProvider({ code }))
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Chain id, which the first version of this guard did not check.
+ *
+ * It is the cheapest axis and the one most likely to be wrong in practice: every other
+ * check reads an address, and the same address on a different chain is a different
+ * contract -- or, far more often, no contract at all. `backend/.env` points at testnet
+ * by design, and the executable deployment is a mainnet contract, so this is not a
+ * hypothetical configuration.
+ *
+ * Without it the guard still fails, but it fails by reporting the runtime hash as
+ * e3b0c442… -- the sha256 of nothing -- which reads as "the bytecode differs" and sends
+ * the reader to look for an upgrade that never happened.
+ */
+describe('chain id is an identity axis', () => {
+  const code = '0x' + 'ab'.repeat(10);
+
+  function providerOn(chainId: number): ethers.Provider {
+    const d = executableDeployment();
+    return {
+      getNetwork: async () => ({ chainId: BigInt(chainId), name: 'x' }),
+      getCode: async () => code,
+      call: async () => ethers.AbiCoder.defaultAbiCoder().encode(['address'], [d.feeEscrow]),
+    } as unknown as ethers.Provider;
+  }
+
+  it('passes on the deployment’s own chain', async () => {
+    const result = await verifyDeploymentIdentity(manifestMatching(code), providerOn(4663));
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses on a different chain, naming the axis', async () => {
+    const result = await verifyDeploymentIdentity(manifestMatching(code), providerOn(46630));
+    expect(result.ok).toBe(false);
+    expect(result.mismatches.join(' ')).toMatch(/chain/i);
+  });
+
+  it('says which chain it found, not merely that it was wrong', async () => {
+    const result = await verifyDeploymentIdentity(manifestMatching(code), providerOn(46630));
+    expect(result.mismatches.join(' ')).toContain('46630');
+  });
+
+  // A provider that cannot say which chain it is on has not proven it is the right one.
+  it('treats an unreadable network as a mismatch rather than a pass', async () => {
+    const d = executableDeployment();
+    const provider = {
+      getNetwork: async () => {
+        throw new Error('no network');
+      },
+      getCode: async () => code,
+      call: async () => ethers.AbiCoder.defaultAbiCoder().encode(['address'], [d.feeEscrow]),
+    } as unknown as ethers.Provider;
+    const result = await verifyDeploymentIdentity(manifestMatching(code), provider);
+    expect(result.ok).toBe(false);
+    expect(result.mismatches.join(' ')).toMatch(/chain/i);
+  });
+});
+
+/**
+ * A wrong factory ADDRESS, distinct from a wrong contract at the right address.
+ *
+ * The closure order lists these separately and they really are different failures. A
+ * wrong address is usually a typo, a copied config, or a registry entry pointing at the
+ * previous deployment; a wrong runtime hash at the right address is an upgrade. The
+ * first is fixed in a settings file, the second needs someone to read a changelog, and a
+ * guard that cannot tell them apart sends the operator to the wrong one.
+ */
+describe('a wrong factory address is caught and named', () => {
+  const realCode = '0x' + 'ab'.repeat(10);
+
+  /** Answers only for the expected address; anything else is an empty account, which is
+   *  what a wrong address looks like on a real chain most of the time. */
+  function providerAnsweringOnlyFor(expected: string): ethers.Provider {
+    const d = executableDeployment();
+    return {
+      getNetwork: async () => ({ chainId: BigInt(d.chainId), name: 'x' }),
+      getCode: async (address: string) =>
+        String(address).toLowerCase() === expected.toLowerCase() ? realCode : '0x',
+      call: async () => ethers.AbiCoder.defaultAbiCoder().encode(['address'], [d.feeEscrow]),
+    } as unknown as ethers.Provider;
+  }
+
+  it('passes when the manifest names the address that holds the contract', async () => {
+    const d = executableDeployment();
+    const result = await verifyDeploymentIdentity(
+      manifestMatching(realCode),
+      providerAnsweringOnlyFor(d.factory)
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses when the manifest names an address holding nothing', async () => {
+    const wrong = '0x000000000000000000000000000000000000BEEF';
+    const result = await verifyDeploymentIdentity(
+      manifestMatching(realCode, { factory: wrong }),
+      providerAnsweringOnlyFor(executableDeployment().factory)
+    );
+    expect(result.ok).toBe(false);
+    expect(result.mismatches.join(' ')).toMatch(/no contract|empty/i);
+  });
+
+  // The migration's exact near-miss: a real, live, correct contract -- just not this one.
+  it('refuses the superseded factory even though it is a real live contract', async () => {
+    const legacy = deploymentById('pons-v2-legacy-7e1');
+    const d = executableDeployment();
+    const provider = {
+      getNetwork: async () => ({ chainId: BigInt(d.chainId), name: 'x' }),
+      // The legacy factory exists and answers. That is the entire difficulty.
+      getCode: async () => '0x' + 'cd'.repeat(10),
+      call: async () =>
+        ethers.AbiCoder.defaultAbiCoder().encode(['address'], [legacy.feeEscrow]),
+    } as unknown as ethers.Provider;
+    const result = await verifyDeploymentIdentity({ ...d, factory: legacy.factory }, provider);
+    expect(result.ok).toBe(false);
+    // Both the bytecode and the escrow give it away, and the report names both.
+    expect(result.mismatches.join(' ')).toMatch(/runtime/i);
+    expect(result.mismatches.join(' ')).toMatch(/escrow/i);
   });
 });

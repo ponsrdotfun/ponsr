@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { ApprovalEvent, PairTokenSource } from './pairTokens';
-import v2FactoryAbi from './abi/ponsV2LaunchFactory.json';
+import { executableDeployment } from './deployments';
 
 /**
  * The chain-backed implementation of `PairTokenSource`.
@@ -11,7 +11,25 @@ import v2FactoryAbi from './abi/ponsV2LaunchFactory.json';
  * to run. This file is the thin part that talks to one.
  */
 
-export const PONS_V2_FACTORY_ABI = v2FactoryAbi as ethers.InterfaceAbi;
+/**
+ * The ABI of the deployment being scanned, loaded from the registry.
+ *
+ * This used to be a module-level import of `abi/ponsV2LaunchFactory.json` -- the
+ * SUPERSEDED deployment's artifact. The ADDRESS passed in had been the current factory
+ * since the registry landed, so every address check passed while the decoding came from
+ * somewhere else entirely. An import is invisible to a check that only looks at
+ * addresses.
+ *
+ * It worked, which is the uncomfortable part: `PairTokenApprovalUpdated` and
+ * `PairTokenEconomicsUpdated` are byte-identical across both deployments -- verified,
+ * not assumed. pons has already changed `TokenParams` between these two factories
+ * though, and an approval event is no more permanent than that was. The failure when it
+ * stops being true is a silently mis-decoded approval, not an error.
+ */
+export function pairFactoryAbi(deployment = executableDeployment()): ethers.InterfaceAbi {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require(`./${deployment.abiPath}`) as ethers.InterfaceAbi;
+}
 
 const ERC20_METADATA_ABI = [
   'function symbol() view returns (string)',
@@ -37,6 +55,9 @@ const DEFAULT_CHUNK = 1_000_000;
 export interface ChainPairTokenSourceOptions {
   provider: ethers.Provider;
   factoryAddress: string;
+  /** Which registry entry `factoryAddress` belongs to, so decoding and addressing
+   *  cannot drift apart. Defaults to the executable deployment. */
+  deployment?: import('./deployments').PonsDeployment;
   /** Lowest block to scan. Below the factory's deployment there is nothing to find. */
   fromBlock?: number;
   chunkSize?: number;
@@ -46,7 +67,11 @@ export class ChainPairTokenSource implements PairTokenSource {
   private factory: ethers.Contract;
 
   constructor(private opts: ChainPairTokenSourceOptions) {
-    this.factory = new ethers.Contract(opts.factoryAddress, PONS_V2_FACTORY_ABI, opts.provider);
+    this.factory = new ethers.Contract(
+      opts.factoryAddress,
+      pairFactoryAbi(opts.deployment),
+      opts.provider
+    );
   }
 
   /** Events already scanned, and the block they were scanned up to.

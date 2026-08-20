@@ -49,3 +49,40 @@ describe('pair approvals follow the deployment', () => {
     expect(await discoverPairAssets(source)).toEqual([]);
   });
 });
+
+/**
+ * Which ABI the pair scanner decodes with.
+ *
+ * The address passed in has been the current factory since the registry landed, but the
+ * decoding used `abi/ponsV2LaunchFactory.json` -- the SUPERSEDED deployment's artifact,
+ * loaded by a module-level import that no address check can see.
+ *
+ * It happens to work: `PairTokenApprovalUpdated` and `PairTokenEconomicsUpdated` are
+ * byte-identical across both deployments, verified rather than assumed. That is exactly
+ * what makes it worth fixing before it stops being true. pons has already changed
+ * `TokenParams` between these two factories; an approval event is no more permanent, and
+ * the failure would be a silently mis-decoded approval rather than an error.
+ */
+describe('the pair scanner decodes with the deployment it is scanning', () => {
+  it('binds the executable deployment’s ABI, not the superseded artifact', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const code: string = fs.readFileSync(path.join(__dirname, '../src/pairTokenSource.ts'), 'utf8');
+    const stripped = code
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .filter((l: string) => !l.trim().startsWith('//'))
+      .join('\n');
+    expect(stripped).not.toMatch(/from '\.\/abi\/ponsV2LaunchFactory\.json'/);
+  });
+
+  it('the two approval events really are identical, which is why this was invisible', () => {
+    const { ethers } = require('ethers');
+    const sigs = (file: string) =>
+      new ethers.Interface(require(`../src/abi/${file}`)).fragments
+        .filter((f: any) => f.type === 'event' && /Pair/.test(f.name))
+        .map((f: any) => f.format('sighash'))
+        .sort();
+    expect(sigs('ponsV2LaunchFactory.json')).toEqual(sigs('ponsV2CurrentLaunchFactory.json'));
+  });
+});
