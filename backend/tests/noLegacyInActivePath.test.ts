@@ -163,17 +163,40 @@ describe('no module on the active path names the legacy deployment', () => {
     'orchestrator.ts',
   ];
 
+  /**
+   * Operator scripts that move real money, held to the same rule.
+   *
+   * They live outside `src/`, which is exactly why they were missed. Both spend or
+   * recover funds: `phase-b-launch.ts` performs a launch, and `collect-and-split-v2.ts`
+   * claims a creator's fees. A launch script aimed at the superseded factory is a
+   * landmine for the first person to run it, and the collector was worse -- it REFUSES
+   * when a splitter's escrow differs from the configured one, and since the config
+   * default is the legacy escrow while every current splitter binds the current one, it
+   * would have refused every real claim while reporting the splitter as the wrong half.
+   */
+  const ACTIVE_SCRIPTS = ['phase-b-launch.ts', 'collect-and-split-v2.ts'];
+
   /** Comments are stripped first: these files deliberately explain what they used to
    *  read and why it was dangerous, and a check that cannot tell an explanation from an
    *  instruction forces the explanation out. That is how the reason for a guard is lost
    *  while the guard survives. */
-  function codeOf(file: string): string {
-    const raw = fs.readFileSync(path.join(__dirname, '../src', file), 'utf8');
+  function stripComments(raw: string): string {
     return raw
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split(/\r?\n/)
       .filter((l) => !l.trim().startsWith('//'))
       .join('\n');
+  }
+
+  const codeOf = (file: string) =>
+    stripComments(fs.readFileSync(path.join(__dirname, '../src', file), 'utf8'));
+
+  for (const file of ACTIVE_SCRIPTS) {
+    it(`scripts/${file} does not read the legacy config defaults`, () => {
+      const code = stripComments(fs.readFileSync(path.join(__dirname, '../scripts', file), 'utf8'));
+      expect(code).not.toMatch(/config\.PONS_V2_FACTORY_ADDRESS/);
+      expect(code).not.toMatch(/config\.PONS_V2_FEE_ESCROW_ADDRESS/);
+    });
   }
 
   for (const file of ACTIVE_MODULES) {
@@ -193,3 +216,43 @@ describe('no module on the active path names the legacy deployment', () => {
     });
   }
 });
+
+/**
+ * The setting that caused all of this, removed rather than merely unused.
+ *
+ * Nobody ever wrote `0x7E1EAbd5…` into a code path. They read
+ * `config.PONS_V2_FACTORY_ADDRESS`, whose DEFAULT was it -- which is why every review
+ * of the code looked clean and every guard was aimed at the wrong contract anyway.
+ *
+ * With the last reader gone the setting is harmless today and a loaded gun tomorrow: it
+ * still parses, still resolves, and still hands back a superseded address to anyone who
+ * reaches for the obvious-looking name. A default nobody reads is one import away from
+ * being read again.
+ */
+describe('the config no longer ships a superseded address as a default', () => {
+  it('does not define PONS_V2_FACTORY_ADDRESS at all', () => {
+    const code = stripCommentsTop(fs.readFileSync(path.join(__dirname, '../src/config.ts'), 'utf8'));
+    expect(code).not.toMatch(/PONS_V2_FACTORY_ADDRESS/);
+  });
+
+  it('does not define PONS_V2_FEE_ESCROW_ADDRESS at all', () => {
+    const code = stripCommentsTop(fs.readFileSync(path.join(__dirname, '../src/config.ts'), 'utf8'));
+    expect(code).not.toMatch(/PONS_V2_FEE_ESCROW_ADDRESS/);
+  });
+
+  it('holds no superseded address as any default', () => {
+    const code = stripCommentsTop(
+      fs.readFileSync(path.join(__dirname, '../src/config.ts'), 'utf8')
+    ).toLowerCase();
+    expect(code).not.toContain(LEGACY_FACTORY);
+    expect(code).not.toContain(LEGACY_ESCROW);
+  });
+});
+
+function stripCommentsTop(raw: string): string {
+  return raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+}

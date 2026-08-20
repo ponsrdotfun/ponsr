@@ -37,6 +37,7 @@ import { createLaunchTarget } from '../src/launchTarget';
 import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
 import { PairAssetRegistry } from '../src/pairTokens';
 import { ChainPairTokenSource } from '../src/pairTokenSource';
+import { executableDeployment } from '../src/deployments';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -82,7 +83,15 @@ async function main() {
   console.log('Chain');
   line('rpc', config.RPC_URL);
   line('chainId', `${network.chainId}${network.chainId === 4663n ? '  (Robinhood Chain MAINNET)' : ''}`);
-  line('factory', config.PONS_FACTORY_VERSION === 'v2' ? config.PONS_V2_FACTORY_ADDRESS : config.PONS_FACTORY_ADDRESS);
+  // From the registry, never from configuration. This is the script that would perform
+  // the first real launch on the current factory, and `config.PONS_V2_FACTORY_ADDRESS`
+  // still defaults to the deployment pons replaced -- a landmine for whoever ran it.
+  line(
+    'factory',
+    config.PONS_FACTORY_VERSION === 'v2'
+      ? `${executableDeployment().factory}  (${executableDeployment().id})`
+      : config.PONS_FACTORY_ADDRESS
+  );
   console.log();
 
   console.log('Treasury');
@@ -221,7 +230,7 @@ async function main() {
     const registry = new PairAssetRegistry(
       new ChainPairTokenSource({
         provider,
-        factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
+        factoryAddress: executableDeployment().factory,
         fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
       })
     );

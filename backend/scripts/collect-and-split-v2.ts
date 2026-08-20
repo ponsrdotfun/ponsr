@@ -29,7 +29,7 @@
 import { ethers } from 'ethers';
 import { config, requireConfig } from '../src/config';
 import { createProvider } from '../src/chainClient';
-import v2FactoryAbi from '../src/abi/ponsV2LaunchFactory.json';
+import { DEPLOYMENTS } from '../src/deployments';
 
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -98,17 +98,37 @@ async function main() {
   line('creator', await splitter.creator());
   line('treasury', await splitter.treasury());
 
-  if (escrowAddress.toLowerCase() !== config.PONS_V2_FEE_ESCROW_ADDRESS.toLowerCase()) {
-    console.error('\nThis splitter points at a different escrow than the configured one.');
-    console.error(`  splitter: ${escrowAddress}`);
-    console.error(`  config:   ${config.PONS_V2_FEE_ESCROW_ADDRESS}`);
-    console.error('Refusing: one of the two is wrong, and guessing which would move real money.');
+  // Which DEPLOYMENT does this splitter belong to?
+  //
+  // This used to compare the splitter's escrow against
+  // `config.PONS_V2_FEE_ESCROW_ADDRESS` and refuse on any difference. That default is
+  // the SUPERSEDED escrow, while every splitter deployed for the current factory binds
+  // the current one -- so it refused every real claim, and told the operator that the
+  // splitter was the wrong half. Collectable fees would have sat uncollected behind a
+  // confident, inverted error message.
+  //
+  // A splitter's escrow identifies its deployment. Resolve it rather than judge it.
+  const owning = DEPLOYMENTS.find(
+    (d) => d.feeEscrow.toLowerCase() === escrowAddress.toLowerCase()
+  );
+  if (!owning) {
+    console.error('\nThis splitter points at an escrow no known deployment uses.');
+    console.error(`  splitter escrow: ${escrowAddress}`);
+    for (const d of DEPLOYMENTS) console.error(`  known:           ${d.id} ${d.feeEscrow}`);
+    console.error('Refusing: claiming against an unknown escrow would move real money on a guess.');
     process.exit(1);
   }
+  line('deployment', `${owning.id} (${owning.factory})`);
 
   // Fees arrive as both sides of the pair, so the pairing asset is read from the factory
   // rather than assumed to be WETH the way the v1 script can afford to.
-  const factory = new ethers.Contract(config.PONS_V2_FACTORY_ADDRESS, v2FactoryAbi as ethers.InterfaceAbi, provider);
+  // The factory of the deployment this splitter actually belongs to, with that
+  // deployment's own ABI -- not whichever one configuration happens to name.
+  const factory = new ethers.Contract(
+    owning.factory,
+    require(`../src/${owning.abiPath}`) as ethers.InterfaceAbi,
+    provider
+  );
   let pairToken: string | null = null;
   try {
     const launch = await factory.getLaunchedToken(launchedToken);
