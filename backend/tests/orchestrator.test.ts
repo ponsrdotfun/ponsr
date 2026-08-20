@@ -470,6 +470,8 @@ describe("X's 7-day crypto-address rule", () => {
 
   it('retries without the address when X refuses it, and that reply carries the link', async () => {
     const sent: string[] = [];
+    /** What X actually accepted, as opposed to what the bot tried to send. */
+    const delivered: string[] = [];
     await run(async (_id, text) => {
       sent.push(text);
       if (/0x/.test(text)) {
@@ -477,16 +479,32 @@ describe("X's 7-day crypto-address rule", () => {
           'X API 403 posting reply: {"detail":"Crypto addresses are prohibited for the first 7 days after authentication."}'
         );
       }
+      delivered.push(text);
       return { tweetId: 'ok' };
     });
 
     expect(sent).toHaveLength(2);
     expect(sent[0]).toContain('Token: 0x');
-    // The retry drops the labelled address and tx lines -- the part X objects to -- and keeps
-    // the link, which is keyed on the address so it cannot point at someone else's token.
-    expect(sent[1]).not.toContain('Token: 0x');
-    expect(sent[1]).not.toContain('Tx: 0x');
-    expect(sent[1]).toMatch(/\/token\/0x[0-9a-fA-F]+$/m);
+
+    // The retry must contain NO address anywhere -- including inside a URL.
+    //
+    // This test used to require the opposite: `expect(sent[1]).toMatch(/\/token\/0x…/)`.
+    // Read it against the mock directly above, which refuses any text matching /0x/, and
+    // the contradiction is plain -- the retry it demanded would have been refused too.
+    // `replySafely` catches that second failure, so `sent` still had two entries and the
+    // assertions still passed. The test was inspecting what was ATTEMPTED, never what was
+    // DELIVERED, and called a fallback that could not work a fallback that did.
+    expect(sent[1]).not.toMatch(/0x[0-9a-fA-F]{40}/);
+    expect(sent[1]).not.toMatch(/0x[0-9a-fA-F]{64}/);
+
+    // Delivered, not merely attempted. This is the assertion the old one was missing:
+    // under this mock, anything carrying an address raises and never lands.
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toBe(sent[1]);
+
+    // And still useful: it names the token and says where to look.
+    expect(sent[1]).toContain('MOON');
+    expect(sent[1]).toMatch(/https?:\/\/\S+/);
   });
 
   // A degraded reply is a quiet, partial success, which is the kind that stays
