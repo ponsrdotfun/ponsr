@@ -4,6 +4,8 @@ import { PONS_V2_FACTORY_ABI } from '../src/ponsV2Encoder';
 import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
 import { config } from '../src/config';
+import { executableDeployment, deploymentById } from '../src/deployments';
+import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
 
 /**
  * This is the seam between "which factory" and everything else, and it sits on the
@@ -40,9 +42,16 @@ const ECON = '0x' + 'ab'.repeat(32);
 const fakeProvider = {} as ethers.Provider;
 
 /** Stands in for the v2 factory's previewLaunchEconomics without a node. */
-function stubPreview(value: string | (() => never) = ECON) {
+function stubPreview(value: string | (() => never) = ECON, escrow?: string) {
   jest.spyOn(ethers, 'Contract').mockImplementation(
-    () => ({ previewLaunchEconomics: async () => (typeof value === 'function' ? value() : value) }) as any
+    () =>
+      ({
+        previewLaunchEconomics: async () => (typeof value === 'function' ? value() : value),
+        // The current target reads this before building and refuses on a mismatch.
+        // Defaulting to the registry's value keeps these tests about encoding; the
+        // mismatch itself is covered in escrowBinding.test.ts and below.
+        feeEscrow: async () => escrow ?? executableDeployment().feeEscrow,
+      }) as any
   );
 }
 
@@ -91,19 +100,48 @@ describe('createLaunchTarget', () => {
     });
   });
 
-  describe('v2', () => {
+  // Retargeted, not deleted. Every property below is still a real safety guarantee;
+  // what changed is which deployment it must hold for. The superseded V2 is no longer
+  // reachable from createLaunchTarget, and a test asserting its address would now be
+  // asserting that the bot still aims at a factory pons has replaced.
+  describe('current v2', () => {
     beforeEach(() => { (config as any).PONS_FACTORY_VERSION = 'v2'; });
 
-    it('builds a stock-paired call that decodes against the v2 ABI', async () => {
+    it('builds a stock-paired call that decodes against the current ABI', async () => {
       stubPreview();
       const t = createLaunchTarget(fakeProvider);
       const built = await t.build(req({ pairAsset: AAPL_ASSET }), FEE);
-      expect(t.version).toBe('v2');
-      expect(built.to).toBe(config.PONS_V2_FACTORY_ADDRESS);
-      const d = new ethers.Interface(PONS_V2_FACTORY_ABI).decodeFunctionData('launchToken', built.data);
+      expect(t.version).toBe('v2-current');
+      expect(built.to).toBe(executableDeployment().factory);
+      expect(built.data.slice(0, 10)).toBe('0xf35abbcf');
+      const d = new ethers.Interface(PONS_V2_CURRENT_ABI).decodeFunctionData(
+        executableDeployment().launchSignature,
+        built.data
+      );
       expect(d[2]).toBe(AAPL_ASSET.address);
       expect(d[0].creatorFeeRecipient).toBe(SPLITTER);
       expect(d[0].creatorTaxBps).toBe(0n);
+      expect(d[0].salt).toMatch(/^0x[0-9a-f]{64}$/);
+    });
+
+    // The migration's central failure: a splitter bound to an escrow the live factory
+    // does not use holds creator fees nothing can ever claim.
+    it('refuses to build when the factory reports a different escrow', async () => {
+      stubPreview(ECON, deploymentById('pons-v2-legacy-7e1').feeEscrow);
+      await expect(createLaunchTarget(fakeProvider).build(req({ pairAsset: AAPL_ASSET }), FEE))
+        .rejects.toThrow(/escrow/i);
+    });
+
+    // Same request, same address prediction -- which is what makes a retry collide
+    // rather than mint a second token.
+    it('derives a deterministic salt from the request', async () => {
+      stubPreview();
+      const t = createLaunchTarget(fakeProvider);
+      const a = await t.build(req({ tweetId: 't1', pairAsset: AAPL_ASSET }), FEE);
+      const b = await t.build(req({ tweetId: 't1', pairAsset: AAPL_ASSET }), FEE);
+      const c = await t.build(req({ tweetId: 't2', pairAsset: AAPL_ASSET }), FEE);
+      expect(a.data).toBe(b.data);
+      expect(a.data).not.toBe(c.data);
     });
 
     it('still pays the fee in ETH when the launch trades in stock', async () => {
@@ -115,7 +153,10 @@ describe('createLaunchTarget', () => {
     it('launches against ETH when nothing else was asked for', async () => {
       stubPreview();
       const built = await createLaunchTarget(fakeProvider).build(req(), FEE);
-      const d = new ethers.Interface(PONS_V2_FACTORY_ABI).decodeFunctionData('launchToken', built.data);
+      const d = new ethers.Interface(PONS_V2_CURRENT_ABI).decodeFunctionData(
+        executableDeployment().launchSignature,
+        built.data
+      );
       expect(d[2]).toBe(NATIVE_ETH);
     });
 
@@ -124,7 +165,10 @@ describe('createLaunchTarget', () => {
     it('pins the economics digest read at build time', async () => {
       stubPreview();
       const built = await createLaunchTarget(fakeProvider).build(req({ pairAsset: AAPL_ASSET }), FEE);
-      const d = new ethers.Interface(PONS_V2_FACTORY_ABI).decodeFunctionData('launchToken', built.data);
+      const d = new ethers.Interface(PONS_V2_CURRENT_ABI).decodeFunctionData(
+        executableDeployment().launchSignature,
+        built.data
+      );
       expect(d[0].expectedEconomics).toBe(ECON);
     });
 

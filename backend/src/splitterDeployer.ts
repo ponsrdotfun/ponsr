@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import feeSplitterArtifact from './feeSplitterArtifact.json';
 import { TreasurySigner } from './treasurySigner';
 import { config } from './config';
+import { PonsDeployment, executableDeployment } from './deployments';
 
 /**
  * Deploys one FeeSplitter per launch (see contracts/FeeSplitter.sol's header comment for why
@@ -39,6 +40,47 @@ function splitterArtifact(): { abi: any; bytecode: string; name: string } {
     );
   }
   return { abi: art.abi, bytecode: art.bytecode, name };
+}
+
+/**
+ * Which escrow a splitter for this deployment must be built against.
+ *
+ * Comes from the registry rather than configuration, because the escrow and the
+ * factory are not independently settable facts: each pons deployment credits its own
+ * escrow, and a splitter is bound to one at construction and cannot be repointed.
+ */
+export function splitterEscrowFor(deployment: PonsDeployment = executableDeployment()): string {
+  return deployment.feeEscrow;
+}
+
+/**
+ * Refuses to continue unless the chain agrees with the manifest.
+ *
+ * The manifest is a claim; `factory.feeEscrow()` is the fact. They can disagree in
+ * exactly one interesting way -- somebody edits an address, or pons migrates again --
+ * and the consequence is not a failed launch but a successful one whose fees are
+ * unreachable forever. The escrow is immutable in the splitter, escrow claims pay
+ * `msg.sender`, and no `claimFor` exists, so nothing recovers them afterwards: not
+ * the treasury, not the creator, not pons.
+ *
+ * Called before the splitter is deployed, so a mismatch costs nothing at all.
+ */
+export function assertEscrowMatches(deployment: PonsDeployment, liveEscrow: string): void {
+  const expected = deployment.feeEscrow.toLowerCase();
+  const actual = (liveEscrow ?? '').toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(actual) || /^0x0+$/.test(actual)) {
+    throw new Error(
+      `refusing to deploy a splitter: ${deployment.id} reported an unusable fee escrow "${liveEscrow}". ` +
+        `Expected ${deployment.feeEscrow}.`
+    );
+  }
+  if (expected !== actual) {
+    throw new Error(
+      `refusing to deploy a splitter: fee escrow mismatch for ${deployment.id}. ` +
+        `Manifest says ${deployment.feeEscrow}, the factory reports ${liveEscrow}. ` +
+        'A splitter built against the wrong escrow holds creator fees nothing can ever claim.'
+    );
+  }
 }
 
 export interface SplitterDeployResult {
