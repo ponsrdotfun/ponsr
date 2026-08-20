@@ -39,6 +39,13 @@ async function run() {
       };
       window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 
+      // jsdom has no fetch. Nothing in the suite should reach the network -- the ledger
+      // uses a fixture and the paused notice uses its own seam -- so this is a tripwire
+      // rather than a stub: if anything calls it, that is a page touching the network
+      // during a test and it should fail loudly rather than crash the runner.
+      window.__PONSR_PAUSED__ = false;
+      window.fetch = () => Promise.reject(new Error('the page reached for the network during a test'));
+
       // jsdom has no canvas: getContext returns null, so every card builder threw
       // and the whole share path -- wrapping, the shrink-to-fit loop, which story a
       // wallet is told -- was covered by nothing but opening a browser and looking.
@@ -716,6 +723,44 @@ async function run() {
     checks.push(['with no price the card shows a dash, not an invented value',
       drawn(priceless.canvas).includes('—'),
       'no price -> em dash']);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The paused notice
+  //
+  // The page invites people to tag the bot, and through the whole of pons's pause
+  // that invitation could not be honoured. The notice is driven by the chain so it
+  // clears itself; these assert both states, because a banner that never disappears
+  // is as wrong as one that never appears.
+  // ---------------------------------------------------------------------------
+  const note = doc.getElementById('pause-note');
+  checks.push(['a paused notice exists on the page', !!note, note ? '' : 'missing #pause-note']);
+
+  if (note) {
+    // Hidden by default matters: a failed chain read must leave the page saying
+    // nothing rather than claiming a pause that may have ended.
+    const freshDom = new JSDOM(html, { runScripts: 'outside-only' });
+    const fresh = freshDom.window.document.getElementById('pause-note');
+    checks.push(['the notice is hidden until the chain answers',
+      fresh ? fresh.hasAttribute('hidden') : false,
+      fresh ? '' : 'not found in raw markup']);
+
+    checks.push(['the notice names pons, lowercase, and blames nobody',
+      /pons/.test(note.textContent) && !/Pons/.test(note.textContent) &&
+        !/(down|broken|abandoned)/i.test(note.textContent),
+      note.textContent.trim().slice(0, 60) + '…']);
+
+    // Driven, not decorative.
+    const recheck = window.__PONSR_CHECK_PAUSED__;
+    window.__PONSR_PAUSED__ = true;
+    if (recheck) recheck();
+    const shownWhenPaused = !note.hidden;
+    window.__PONSR_PAUSED__ = false;
+    if (recheck) recheck();
+    const hiddenWhenOpen = note.hidden;
+    checks.push(['the notice follows the chain in both directions',
+      shownWhenPaused && hiddenWhenOpen,
+      `paused->${shownWhenPaused ? 'shown' : 'HIDDEN'}, open->${hiddenWhenOpen ? 'hidden' : 'SHOWN'}`]);
   }
 
   let failCount = 0;

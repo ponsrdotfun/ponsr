@@ -148,6 +148,15 @@
   /* Cursor glow */
   .cursor-glow { position: fixed; top: 0; left: 0; width: 460px; height: 460px; border-radius: 50%; pointer-events: none; z-index: 3; transform: translate(-50%,-50%); background: radial-gradient(circle, var(--glow-cool), transparent 62%); opacity: 0; transition: opacity 0.4s ease; will-change: transform; }
 
+  /* Paused notice. Deliberately quiet: this is information, not an apology. */
+  .pause-note { max-width: 780px; margin: 96px auto -40px; padding: 14px 18px; display: flex;
+    gap: 10px; flex-wrap: wrap; align-items: baseline; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px; background: rgba(255,255,255,0.04); font-size: 14px; line-height: 1.55;
+    color: var(--silver-dim); position: relative; z-index: 3; }
+  .pause-note strong { color: var(--silver-bright); font-weight: 600; }
+  .pause-note[hidden] { display: none !important; }
+  @media (max-width: 820px) { .pause-note { margin: 84px 16px -24px; } }
+
   /* Scroll progress */
   .scroll-progress { position: fixed; top: 0; left: 0; height: 2px; width: 0%; background: linear-gradient(90deg, var(--silver-dim), var(--silver-bright)); box-shadow: 0 0 14px var(--glow-silver); z-index: 60; transition: width 0.1s linear; }
 
@@ -770,6 +779,15 @@
 
 <main id="top">
 <div id="view-home">
+  <!-- Shown only when the chain says a launch cannot succeed. Hidden in the markup, so a
+       failed read leaves the page saying nothing rather than claiming a pause that ended. -->
+  <div class="pause-note" id="pause-note" role="status" hidden>
+    <strong>Launching is paused.</strong>
+    <span>pons has new launches switched off platform-wide, so nothing can launch through
+    them right now &mdash; Ponsr included. The ledger below is live, and this notice
+    disappears on its own when launching reopens.</span>
+  </div>
+
   <section class="hero" id="hero">
     <div class="hero-aura" aria-hidden="true"></div>
     <div class="container hero-inner">
@@ -1126,6 +1144,44 @@
       '0x08e01f1b3156a5d8fe42ed47f09df5156e7c74fa'  // Turnkey treasury, production
     ]
   };
+
+  /**
+   * Whether a launch could actually succeed right now.
+   *
+   * The page invites people to tag the bot, and for the whole of pons's pause that
+   * invitation could not be honoured: anyone following it was turned away. The bot
+   * answers honestly at that point, but by then the person has spent the effort.
+   *
+   * Read from the factory rather than hardcoded, so the notice appears and clears
+   * itself with no deploy. A whitelisted launcher can launch even while the global
+   * switch is off -- that is exactly the grant being requested -- so both are checked.
+   * A failed read hides the notice: silence beats a wrong claim in either direction.
+   */
+  function checkLaunchPaused() {
+    var note = document.getElementById('pause-note');
+    if (!note) return;
+
+    // The same kind of seam the ledger uses. The suite runs in jsdom with no network,
+    // and without this the notice would be the one thing on the page reaching for one.
+    if (typeof window !== 'undefined' && window.__PONSR_PAUSED__ !== undefined) {
+      note.hidden = !window.__PONSR_PAUSED__;
+      return;
+    }
+
+    // Function selectors: the first four bytes of keccak(signature). Fixed by the ABI,
+    // so hardcoding them is safe in a way hardcoding an address or a threshold is not.
+    var SEL_LAUNCH_ENABLED = '0x236a4afb';   // launchEnabled()
+    var SEL_WHITELISTED = '0xda3eda65';      // whitelistedLaunchers(address)
+    // The production treasury is the last entry; earlier ones are retired wallets kept
+    // so their launches still appear on the board.
+    var treasury = CHAIN.launchers[CHAIN.launchers.length - 1].replace(/^0x/, '');
+    Promise.all([
+      rpcCall('eth_call', [{ to: CHAIN.factoryV2, data: SEL_LAUNCH_ENABLED }, 'latest']),
+      rpcCall('eth_call', [{ to: CHAIN.factoryV2, data: SEL_WHITELISTED + '0'.repeat(24) + treasury }, 'latest'])
+    ]).then(function (r) {
+      note.hidden = hexToBig(r[0]) === 1n || hexToBig(r[1]) === 1n;
+    }).catch(function () { note.hidden = true; });
+  }
 
   function hexToBig(h) { return BigInt(h && h !== '0x' ? h : '0x0'); }
   function weiToEth(v) { return Number(v) / 1e18; }
@@ -3310,6 +3366,7 @@
   // Resolve the route immediately so a deep link lands on the right view, and
   // fill the board with shimmer placeholders while its data is in flight.
   applyRoute();
+  checkLaunchPaused();
   renderSkeletons(PAGE_SIZE);
   fetchLedger().then(renderLedger);
   playHeroSequence();
@@ -3331,6 +3388,10 @@
   // the suite drive them against a recording context and assert on the geometry;
   // the page itself never reads this object.
   if (typeof window !== 'undefined') {
+    // The paused notice, so the suite can drive it in both directions rather than
+    // asserting only whichever state it happens to boot in.
+    window.__PONSR_CHECK_PAUSED__ = checkLaunchPaused;
+
     window.__PONSR_CARD__ = {
       roastKind: roastKind,
       cardLines: cardLines,

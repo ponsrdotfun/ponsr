@@ -80,13 +80,14 @@ export async function deploySplitter(
       : await factory.getDeployTransaction(creatorWallet, treasuryWallet, tokenAddressPlaceholder);
 
   // Contract-creation transactions have no `to` field. TreasurySigner's interface is shaped
-  // around regular calls (to + data + value); for a raw-key signer this still works fine
-  // with `to` omitted, since ethers treats an unset/empty `to` as contract creation. When
-  // Turnkey's real signer is wired up (Phase 3 TODO in treasurySigner.ts), confirm its
-  // policy scope explicitly allows a null-`to` contract-creation transaction, since the
-  // policy is otherwise scoped to calling the Pons factory address specifically -- contract
-  // deployment is a distinct, deliberate exception to that scoping and should be reviewed
-  // as such, not assumed to fall under the same policy automatically.
+  // around regular calls (to + data + value); ethers treats an unset `to` as contract
+  // creation, so this works for both signers.
+  //
+  // The Turnkey policy allows it explicitly, and that was the point: the policy is
+  // otherwise scoped to the pons factory addresses, and a contract creation matches none
+  // of them. Confirmed live by scripts/turnkey-verify-policy.ts, which asserts contract
+  // creation ALLOWED alongside an arbitrary destination denied -- without that exception
+  // a launch would half-complete, splitter deployed and paid for, token never created.
   const sent = await signer.sendTransaction({
     to: '',
     data: deployTx.data as string,

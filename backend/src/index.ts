@@ -97,8 +97,10 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
   coldAddress: config.TREASURY_COLD_ADDRESS,
 });
 
-// Real dependencies -- see each module's TODO comments for what's still stubbed pending
-// account signups (Privy, Turnkey, twitterapi.io) per Phase 0 of the implementation roadmap.
+// Every external dependency here is live and verified against the real service, not a
+// stub: Privy creates real wallets, Turnkey signs under a policy that has been proven to
+// bite, and twitterapi.io returns correctly-mapped fields. The Phase 0 signups this
+// comment used to warn about were all completed on 2026-08-06.
 /**
  * Which assets a launch may be priced in.
  *
