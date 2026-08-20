@@ -53,19 +53,41 @@ function line(label: string, value: unknown) {
     type: 2,
   };
 
-  async function attempt(name: string, tx: any): Promise<boolean> {
+  /**
+   * Three outcomes, not two.
+   *
+   * This returned a boolean, and every failure became `false` -- which the report then
+   * printed as "denied". On 2026-08-20 the Turnkey organisation went over its signing
+   * quota, so every request failed for a reason that has nothing to do with policy,
+   * and the script announced NOT SAFE YET and told the operator to fix a policy that
+   * had just been created correctly.
+   *
+   * A verification tool that cannot tell "the policy said no" from "I could not ask"
+   * is worse than one that refuses to answer: it sends someone to change security
+   * configuration that was not broken.
+   */
+  type Outcome = 'allowed' | 'denied' | 'unknown';
+
+  async function attempt(name: string, tx: any): Promise<Outcome> {
     try {
       await signer.signTransaction(tx);
-      return true;
+      return 'allowed';
     } catch (err: any) {
       const msg = String(err?.message ?? err);
-      if (!/permission|policy/i.test(msg)) {
-        // Distinguish "the policy said no" from "the request was malformed" -- treating a
-        // bad request as a successful denial would be a false pass.
-        line(name + ' (error)', msg.slice(0, 90));
-      }
-      return false;
+      // A policy denial is the only failure that means "denied".
+      if (/permission|policy|not authorized/i.test(msg)) return 'denied';
+      // Everything else -- quota, network, a malformed request -- is unknown, and
+      // saying so is the whole point.
+      line(name + ' (could not ask)', msg.slice(0, 110));
+      return 'unknown';
     }
+  }
+
+  /** How an outcome reads in the report. */
+  function show(o: Outcome, expected: 'allowed' | 'denied'): string {
+    if (o === 'unknown') return 'UNKNOWN -- not asked, see the error above';
+    if (o === expected) return o === 'allowed' ? 'ALLOWED ✅' : 'denied ✅';
+    return o === 'allowed' ? 'ALLOWED ❌' : 'denied ❌';
   }
 
   console.log('=== VERIFYING THE BOT POLICY ===');
@@ -86,7 +108,7 @@ function line(label: string, value: unknown) {
     value: 500000000000000n,
     data: '0x12345678',
   });
-  line('1a. tx to the v1 factory', toV1 ? 'ALLOWED ✅' : 'denied ❌');
+  line('1a. tx to the v1 factory', show(toV1, 'allowed'));
 
   const toV2 = await attempt('launch v2', {
     ...base,
@@ -94,7 +116,7 @@ function line(label: string, value: unknown) {
     value: 500000000000000n,
     data: '0x12345678',
   });
-  line('1b. tx to the v2 factory', toV2 ? 'ALLOWED ✅' : 'denied ❌');
+  line('1b. tx to the v2 factory', show(toV2, 'allowed'));
 
   const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
   const toFactory = wantV2 ? toV2 : toV1;
@@ -104,7 +126,7 @@ function line(label: string, value: unknown) {
     data: '0x60806040523480156100',
     value: 0n,
   });
-  line('2. contract creation', deploy ? 'ALLOWED ✅' : 'denied ❌ (bot cannot deploy splitters)');
+  line('2. contract creation', show(deploy, 'allowed'));
 
   const elsewhere = await attempt('elsewhere', {
     ...base,
@@ -112,10 +134,23 @@ function line(label: string, value: unknown) {
     value: 1000000000000000000n,
     data: '0x',
   });
-  line('3. tx to an arbitrary address', elsewhere ? 'ALLOWED ❌ THE POLICY IS NOT RESTRICTING' : 'denied ✅');
+  line('3. tx to an arbitrary address', show(elsewhere, 'denied'));
 
   console.log('');
-  const good = toFactory && deploy && !elsewhere;
+  // Unknown anywhere means the run proves nothing, in either direction. Reporting
+  // PASSED on unanswered questions would be the same defect pointing the other way.
+  const unknowns = [toV1, toV2, deploy, elsewhere].filter((o) => o === 'unknown').length;
+  if (unknowns > 0) {
+    console.log('=== INCONCLUSIVE ===');
+    console.log(`  ${unknowns} of 4 checks could not be asked, so this run proves nothing.`);
+    console.log('  The most common cause is the Turnkey organisation being over its signing');
+    console.log('  quota, which disables signing for everything and is not a policy problem.');
+    console.log('  Nothing here says the policy is wrong, and nothing says it is right.');
+    process.exitCode = 1;
+    return;
+  }
+
+  const good = toFactory === 'allowed' && deploy === 'allowed' && elsewhere === 'denied';
   if (good) {
     console.log('=== PASSED ===');
     console.log(`The bot can launch on ${config.PONS_FACTORY_VERSION} and deploy splitters, and`);
@@ -123,7 +158,7 @@ function line(label: string, value: unknown) {
     console.log('A leak of this key now costs launches, not the treasury.');
     console.log('');
     console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
-    if (!toV2) {
+    if (toV2 !== 'allowed') {
       console.log('');
       console.log('NOTE: the v2 factory is still denied. That is fine while the bot runs v1,');
       console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
@@ -133,13 +168,13 @@ function line(label: string, value: unknown) {
     }
   } else {
     console.log('=== NOT SAFE YET ===');
-    if (!toFactory) {
+    if (toFactory !== 'allowed') {
       console.log(`  The bot launches through ${config.PONS_FACTORY_VERSION}, and that factory is DENIED.`);
       console.log('  It cannot launch anything at all.');
       if (wantV2) console.log('  Fix: bash scripts/apply-v2-policy.sh --execute');
     }
-    if (!deploy) console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
-    if (elsewhere) console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
+    if (deploy !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
+    if (elsewhere === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
   }
   process.exitCode = good ? 0 : 1;
 })().catch((err) => {
