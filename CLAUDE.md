@@ -62,7 +62,7 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is live at https://ponsr.fun** (53 smoke checks). Netlify, auto-deploying from
+- **Website is live at https://ponsr.fun** (78 smoke checks). Netlify, auto-deploying from
   `main` — a push publishes, there is no manual step. Three routes in one static file:
   `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
   still reads the old `?view=` / `?token=` forms, so existing links keep working.
@@ -108,10 +108,23 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   `eth_call`, and a forked rehearsal launches paired with AAPL, trades real AAPL, and claims the
   fee back out 95/5 with nothing stranded.
 
-  **Operator-gated before anything public:** the Turnkey policy still names the *superseded*
-  factory, so the bot cannot sign for the current one yet. `scripts/turnkey-allow-v2-factory.ts`
-  is now named per deployment so it will not collide with that stale rule. Production config,
-  the deployed backend, and the public availability claim are all unchanged.
+  **The Turnkey policy now allows the current factory** (2026-08-20). The operator created
+  `ponsr-bot: launch on pons-v2-current-7ed` (`ece2a399-…`) with root credentials, and
+  verification by signing — not by a config flag — shows the current factory ALLOWED, contract
+  creation ALLOWED, and an arbitrary destination **denied**. That last line is the one that
+  matters: a leak of the bot's key now costs launches, not the treasury.
+  `scripts/turnkey-allow-v2-factory.ts` is named per deployment so it cannot collide with the
+  older, still-present rule for the superseded factory.
+
+  Two things about that verification are worth carrying forward. The verifier had been reading
+  `PONS_V2_FACTORY_ADDRESS` and **passed for the superseded factory** — four green ticks about
+  the wrong contract; it reads the registry now. And when Turnkey disabled signing org-wide over
+  a quota, every check failed and the script reported them all as *denied*, sending the operator
+  to fix a policy that was correct. A failure to ask is not a denial, and the run now reports
+  INCONCLUSIVE rather than inventing a verdict.
+
+  Production config, the deployed backend, and the public availability claim are all unchanged.
+  `PONS_FACTORY_VERSION` has **not** been flipped.
 
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
@@ -166,11 +179,28 @@ problem would otherwise surface as a parse failure and send you to the system pr
 
 Still blocked on the owner:
 
-1. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
-2. ~~Move the Turnkey root key out of `~/ponsr-turnkey-root-key.txt`~~ — **done 2026-08-19**,
-   along with the dashboard's original `.json` download in `~/Downloads` holding the same key,
-   which was found by searching rather than by remembering. The bot never needed root: it runs
-   on a scoped key that can reach the pons factories and nothing else.
+1. ~~Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS`~~ — the variable
+   **is set** in `backend/.env` (verified 2026-08-20: a well-formed address, distinct from
+   the hot wallet, so boot-time validation passes). This entry stayed on the list after it
+   was done and was repeated back as an open blocker on 2026-08-20 without being checked.
+   What remains is an owner fact no code here can confirm: that the address is a wallet
+   whose key is genuinely held offline. A cold address that is merely a second hot wallet
+   passes every check in this repository and provides none of the protection.
+2. **Turnkey root key: a third copy exists and was used on 2026-08-20.** The 2026-08-19
+   cleanup removed `~/ponsr-turnkey-root-key.txt` and the dashboard's original `.json` in
+   `~/Downloads`, and was recorded here as done. It was not: a copy in
+   `~/Downloads/Telegram Desktop/` survived, and it is the one that created the v2 policy
+   on 2026-08-20. Two copies were found by searching; the third was found by needing it.
+
+   That is the lesson worth keeping, more than the file itself. A credential that has been
+   sent through a chat client exists wherever that client writes attachments, and "I
+   deleted it" describes the copies you remembered. Root bypasses the policy engine
+   entirely, so every surviving copy is a full bypass of the scoping the bot relies on.
+
+   Owner action: delete that file, and delete the root API key from the Turnkey dashboard.
+   Root keys are disposable — mint one with a passkey when an administrative act needs it.
+   The bot never needed root: it runs on a scoped key that can reach the pons factories and
+   nothing else.
 3. Backend hosting, for the listener to run 24/7.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
@@ -216,7 +246,9 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 
   This added one owner action: **`TREASURY_COLD_ADDRESS` must be set** (checklist item 0.8).
   Boot-time validation refuses to call the setup healthy if it's missing or equals the hot
-  wallet — the latter being a split that looks real and isn't.
+  wallet — the latter being a split that looks real and isn't. **It is set** as of
+  2026-08-20. Note what that check can and cannot see: it proves the address is well-formed
+  and different, not that its key is offline.
 - ~~Listener reconciliation (Part 7 §5)~~ — **built 2026-07-30**, `src/reconciler.ts` with
   8 tests. Runs every 5 minutes from `index.ts`. `RealXClient.getRecentMentions` remains a
   stub until the twitterapi.io account exists.
@@ -228,7 +260,7 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 - External dependencies (parser, wallet resolver, X client, treasury signer) are always
   injected via interfaces with a `Mock*` implementation for tests. Follow this pattern for any
   new external integration rather than hardcoding a real client into business logic.
-- The website has its own suite: `node website/smoke-test.js` (45 checks, no install needed).
+- The website has its own suite: `node website/smoke-test.js` (**78 checks**, no install needed).
   Several of those checks exist because a specific bug was found and fixed — read the comment
   above a check before changing it.
 - The contract test workaround (`contracts-test/README.md`) exists for a sandbox network

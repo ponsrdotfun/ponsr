@@ -1170,3 +1170,72 @@ uses.
 **An address is not an identity.** A deployment is an ABI, an escrow, a selector, a schema, and
 hashes proving the chain matches the description. That is what `backend/src/deployments.ts` now
 holds, with exactly one entry executable and the rest indexable forever.
+
+### 11.6 The hashes were recorded and never read (2026-08-20)
+
+§11.5 ends by saying a deployment is "an ABI, an escrow, a selector, a schema, and hashes
+proving the chain matches the description." The registry did hold all of that. **Nothing read
+the hashes.** They sat in `deployments.ts` as accurate, checked-in, inert data while the launch
+path went on resolving a factory by address.
+
+So the fix for "an address is not an identity" had, for a week, exactly the same shape as the
+bug: a description that looked authoritative and was never checked against the chain.
+
+`backend/src/deploymentIdentity.ts` closes it. Four axes, and the source of truth for each
+matters more than the check:
+
+| axis | truth comes from | catches |
+|---|---|---|
+| runtime length + sha256 | the chain, `getCode` | an upgrade, a redeployment, a wrong address, the wrong chain |
+| fee escrow | the chain, `feeEscrow()` | the mismatch with no recovery |
+| ABI sha256 | the file on disk | a regenerated or edited artifact |
+| launch selector | derived **from that ABI** | a manifest claiming a selector the ABI does not produce |
+
+The last one is the one worth stating: comparing the manifest's selector string to itself would
+prove nothing. It is recomputed from the signature against the loaded ABI, so a drifting ABI and
+a stale selector cannot quietly agree with each other.
+
+It runs in `readCurrentReadiness()`, ahead of every permission. **A green `canLaunch` from an
+unexpected contract is not reassurance — it is the most dangerous reading available.**
+
+Verified live against mainnet, all three deployments `IDENTITY OK`, with the executable one
+matching the audit's independently recorded values exactly: runtime `24177` bytes /
+`226a042e…`, ABI `1d424e7b…`, escrow `0xd3AFEB2a…`, selector `0xf35abbcf`.
+
+**Two false alarms it raised first, both the guard's fault.** Pointed at real mainnet it
+reported `pons-v1` as drifted on two axes, and the manifest was right both times: v1's ABI file
+wraps its array in provenance metadata (`_source`, `_note`, …) and the recorded hash covers the
+inner array; and v1 exposes no `feeEscrow()` at all, because it pushes fees from the locker.
+Reading that revert as drift condemned a contract for lacking a function it was never meant to
+have.
+
+Both are fixed, and the second produced a schema change worth keeping: `feeModel` is now an
+explicit field (`push-from-locker` | `escrow-credit`) rather than a comment above `feeEscrow`.
+One field had been holding a different *kind* of thing per deployment — the same overloading,
+one level down, that this whole registry replaced.
+
+A guard that cries wolf about correct data is worse than no guard: it gets rationalised on first
+sight, and the rationalisation is what survives to meet the real mismatch.
+
+### 11.7 The verifier passed for a factory the bot never calls (2026-08-20)
+
+`turnkey-verify-policy.ts` read `PONS_V2_FACTORY_ADDRESS` and reported **PASSED** for
+`0x7E1EAbd5…` — four green ticks, none of them about the launch path, ending in "safe to set
+`TURNKEY_POLICY_CONFIRMED=true`". §11's own lesson, inside the tool written to apply it.
+
+It now takes the factory from the registry and sends the deployment's real launch selector
+rather than a placeholder.
+
+Two related fixes from the same afternoon:
+
+- **A failure is not a denial.** Every error had been classified as "denied", so when Turnkey
+  disabled signing org-wide over quota, the script announced NOT SAFE YET and sent the operator
+  to fix a policy created correctly minutes earlier. There are three outcomes now — `allowed`,
+  `denied`, `unknown` — and any unknown makes the whole run INCONCLUSIVE. *Nothing here says the
+  policy is wrong, and nothing says it is right* is a real result; a green tick on an unasked
+  question is not.
+- **`turnkey-read-policies.ts`** reads the rules without signing anything, because signing is
+  exactly what disappears when quota runs out — precisely when you most want to know what the
+  policies say. It reports rule *text*, and says so: a policy engine failing open would print
+  the same thing.
+
