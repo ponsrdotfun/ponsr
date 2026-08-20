@@ -21,6 +21,8 @@ import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
 import { createLaunchTarget } from './launchTarget';
+import { executableDeployment } from './deployments';
+import { readCurrentReadiness } from './currentReadiness';
 import { FixedWindowRateLimit } from './webhookRateLimit';
 
 const app = express();
@@ -108,16 +110,25 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
  * and no reason to spend a log scan finding that out. The set is discovered once at
  * boot (below) and refreshed on an hourly TTL.
  */
-const pairAssets =
-  config.PONS_FACTORY_VERSION === 'v2'
-    ? new PairAssetRegistry(
-        new ChainPairTokenSource({
-          provider,
-          factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
-          fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
-        })
-      )
-    : undefined;
+const pairAssets = (() => {
+  const d = executableDeployment();
+  // v1 prices every launch from its launch config, so there is nothing to discover
+  // and no reason to spend a log scan finding that out.
+  if (config.PONS_FACTORY_VERSION === 'v1') return undefined;
+  return new PairAssetRegistry(
+    new ChainPairTokenSource({
+      provider,
+      // From the registry, not from configuration. Approvals belong to the deployment
+      // that emitted them: the superseded factory approved eight assets, the current
+      // one approves twenty-three and has already revoked one. Reading the old
+      // factory's log would offer a set that is both too small and, for anything
+      // revoked, wrong -- and wrong here means a launch that reverts after the
+      // splitter has been deployed and paid for.
+      factoryAddress: d.factory,
+      fromBlock: d.startBlock,
+    })
+  );
+})();
 
 const launchTarget = createLaunchTarget(provider);
 
@@ -267,7 +278,27 @@ app.get('/status', async (_req, res) => {
       getBlockNumber: () => provider.getBlockNumber(),
       getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
       getLiveFeeWei: deps.getLiveFeeWei,
-      getLaunchReadiness: deps.getLaunchReadiness,
+      // Read from the deployment the bot launches through, using that contract's own
+      // canLaunch predicate. Reading a superseded factory is precisely how /status
+      // reported the launchpad closed for a week while it was open.
+      getLaunchReadiness: async () => {
+        const d = launchTarget.deployment;
+        if (!d) return deps.getLaunchReadiness();
+        const r = await readCurrentReadiness(
+          provider,
+          await treasurySigner.address(),
+          config.PONS_LAUNCH_CONFIG_ID,
+          '0x0000000000000000000000000000000000000000',
+          d
+        );
+        return {
+          launchEnabled: r.launchEnabled,
+          whitelisted: r.whitelisted,
+          canLaunch: r.canLaunch,
+          durable: r.durable,
+          detail: r.reason ? `${r.reason}` : r.detail,
+        };
+      },
       // The same window the circuit breaker counts, so the page cannot disagree
       // with the thing actually refusing launches.
       spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
@@ -278,6 +309,8 @@ app.get('/status', async (_req, res) => {
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
       factoryVersion: config.PONS_FACTORY_VERSION,
+      deploymentId: launchTarget.deployment?.id,
+      deploymentFactory: launchTarget.deployment?.factory,
       listPairAssets: pairAssets ? async () => (await pairAssets.list()).map((a) => a.symbol) : undefined,
     });
     res.status(statusHttpCode(report)).json(report);
