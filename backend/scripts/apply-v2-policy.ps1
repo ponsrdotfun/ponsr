@@ -46,14 +46,26 @@ if (-not $Execute) {
 }
 
 if (-not (Test-Path $KeyFile)) {
-    Write-Host "Root key file not found: $KeyFile" -ForegroundColor Red
+    Write-Host "Root key file not found: $KeyFile" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "If you have already moved it into a password manager (good), set the two"
-    Write-Host "values for this session instead and run the script directly:"
+    Write-Host "That is very likely correct, and not a problem. The file was deleted"
+    Write-Host "deliberately on 2026-08-19: a root credential sitting in plaintext beside"
+    Write-Host "the bot undoes the entire reason the bot's own key is scoped."
     Write-Host ""
-    Write-Host '  $env:TURNKEY_ROOT_PUBLIC_KEY = "..."'
-    Write-Host '  $env:TURNKEY_ROOT_PRIVATE_KEY = "..."'
-    Write-Host '  npx tsx scripts\turnkey-allow-v2-factory.ts --execute'
+    Write-Host "Root API keys are disposable. Mint one, use it once, delete it:"
+    Write-Host ""
+    Write-Host "  1. Open the Turnkey dashboard and sign in with your passkey."
+    Write-Host "  2. Create a new API key for the ROOT user. Copy both halves."
+    Write-Host "  3. Set them for this session only, then run the script directly:"
+    Write-Host ""
+    Write-Host '     $env:TURNKEY_ROOT_PUBLIC_KEY = "..."'
+    Write-Host '     $env:TURNKEY_ROOT_PRIVATE_KEY = "..."'
+    Write-Host '     npx tsx scripts\turnkey-allow-v2-factory.ts --execute'
+    Write-Host ""
+    Write-Host "  4. Delete that API key from the dashboard afterwards. It has done its"
+    Write-Host "     job, and a root key that no longer exists cannot leak."
+    Write-Host ""
+    Write-Host "Closing the window clears both variables. Nothing is written to disk."
     exit 1
 }
 
