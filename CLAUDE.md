@@ -9,16 +9,17 @@ survives in historical notes.
 
 ## Read these first, in this order
 
-1. **`docs/pons-v2-findings.md` — start at §11, then §10, then §9.** **§11 (2026-08-20) is the
-   most important section here right now**: Ponsr had been reading a *superseded* pons factory.
-   The current one has been open since 2026-08-03 and has taken over 1,900 launches. Everything
-   §10 concluded about a "closed launchpad" was true of a contract nobody uses. Sections 1–8 are what was believed
-   from documentation; §9 onward is what the verified contracts and two real mainnet launches
-   actually showed, and **§10 (2026-08-18) supersedes §7 outright** — v2 now approves eight
-   pairing assets, six of them tokenised stocks, and both the ETH exemption and the whitelist
-   bypass are settled from source rather than inferred. Where they disagree, the later section
-   wins. §9.10 is an incident report worth reading
-   before touching the deploy path.
+1. **`docs/pons-v2-findings.md` — read §11 first, then §10, then §9.**
+
+   **§11 (2026-08-20) is the most important section in this repository right now.** Ponsr had
+   been reading a *superseded* pons factory. The current one has been open since 2026-08-03 and
+   has taken over 1,900 launches, so everything §10 concluded about a "closed launchpad" was
+   true of a contract nobody uses. §11 also carries the lesson that generalises: an address is
+   not an identity.
+
+   Sections 1–8 are what was believed from documentation. §9 onward is what the verified
+   contracts and real mainnet launches actually showed. Where two sections disagree, the later
+   one wins. §9.10 is an incident report worth reading before touching the deploy path.
 2. `BUILD-STATUS.md` — what's real/tested vs. a clearly-marked stub right now.
 3. `docs/action-checklist.md` — everything that requires the owner's direct action (account
    signups, API keys, emails). Nothing here should be "completed" past a stub without the
