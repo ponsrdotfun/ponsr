@@ -85,8 +85,18 @@ desktop.ini
 .netlify
 
 # Review artifacts, regenerated on demand from the branch itself.
+#
 # Never committed: a bundle or patch that lives inside the diff it describes changes
 # that diff, so the artifact and its own hash can never agree.
-ponsr-current-v2-review.bundle
-ponsr-current-v2-review.patch
-ponsr-current-v2-commits.txt
+#
+# Patterns rather than the three literal filenames this started as. Those covered
+# exactly the artifacts that existed the day they were written, so the first variant --
+# `ponsr-current-v2-full.bundle`, a --all bundle made for the same review -- landed as
+# untracked and dirtied the tree again. A rule that only knows yesterday's filenames
+# fails on the next one, and the next one is always about to be made.
+#
+# `*.bundle` is deliberately broad: a git bundle is a copy of the repository's own
+# history, so there is no version of "commit it into that repository" that makes sense.
+*.bundle
+ponsr-*-review.patch
+ponsr-*-commits.txt
