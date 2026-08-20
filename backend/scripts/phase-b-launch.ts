@@ -38,6 +38,7 @@ import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
 import { PairAssetRegistry } from '../src/pairTokens';
 import { ChainPairTokenSource } from '../src/pairTokenSource';
 import { executableDeployment } from '../src/deployments';
+import { assertDeploymentIdentity } from '../src/deploymentIdentity';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -103,6 +104,23 @@ async function main() {
 
   // --- Preflight: every guard the factory would apply, read before spending anything ---
   console.log('Preflight');
+
+  // Identity FIRST, ahead of every permission.
+  //
+  // This script had none. It read permissions through `getLaunchReadiness`, which asks
+  // whether pons would allow a launch and nothing about WHICH contract it is asking --
+  // leaving the one path here that spends real money as the only one with no check that
+  // the chain matches the registry. The bot has three; this had zero.
+  //
+  // A green `canLaunch` from an unexpected contract is not reassurance. It is the most
+  // dangerous reading available, because everything after it looks like a go-ahead.
+  if (config.PONS_FACTORY_VERSION === 'v2') {
+    const d = executableDeployment();
+    await assertDeploymentIdentity(d, provider);
+    line('deployment', `${d.id} (${d.factory})`);
+    line('identity', 'chain id, runtime hash, ABI hash, selector and escrow all match');
+  }
+
   const readiness = await getLaunchReadiness(provider, treasury, config.PONS_LAUNCH_CONFIG_ID, config.PONS_DEX_ID);
   line('launchEnabled', readiness.launchEnabled);
   line('whitelisted', readiness.whitelisted);
@@ -160,7 +178,15 @@ async function main() {
 
   // --- Execute ---
   console.log('1/2  Deploying FeeSplitter (creator == treasury == this wallet)...');
-  const { splitterAddress, deployTxHash } = await deploySplitter(signer, treasury, treasury, ethers.ZeroAddress);
+  // The provider is not optional here in spirit: without it `deploySplitter` skips its
+  // own identity check, and the splitter is the first artifact that cannot be undone.
+  const { splitterAddress, deployTxHash } = await deploySplitter(
+    signer,
+    treasury,
+    treasury,
+    ethers.ZeroAddress,
+    provider
+  );
   line('splitter', splitterAddress);
   line('tx', deployTxHash);
 

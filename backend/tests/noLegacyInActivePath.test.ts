@@ -256,3 +256,34 @@ function stripCommentsTop(raw: string): string {
     .filter((l) => !l.trim().startsWith('//'))
     .join('\n');
 }
+
+/**
+ * The launch script verifies identity before it spends anything.
+ *
+ * `phase-b-launch.ts` is the script that would perform the first real launch on the
+ * current factory. It read readiness through the older `getLaunchReadiness` helper --
+ * which asks about permissions and nothing about identity -- and called `deploySplitter`
+ * with no provider, so the pre-deploy guard did not run either.
+ *
+ * That left the one code path in this repository that spends real money as the only one
+ * with no check that the contract on chain is the one the registry describes. The bot
+ * has three; the script had none.
+ *
+ * A static check, deliberately. Running this script broadcasts transactions, so the test
+ * for it cannot execute it -- what it can do is refuse to let the guard be dropped.
+ */
+describe('the operator launch script cannot skip the identity guard', () => {
+  const code = stripCommentsTop(
+    fs.readFileSync(path.join(__dirname, '../scripts/phase-b-launch.ts'), 'utf8')
+  );
+
+  it('asserts deployment identity somewhere before launching', () => {
+    expect(code).toMatch(/assertDeploymentIdentity\(/);
+  });
+
+  it('hands deploySplitter a provider, so the pre-deploy check runs', () => {
+    // Without a provider the guard inside deploySplitter is skipped entirely, and the
+    // splitter -- the first durable artifact -- is deployed unchecked.
+    expect(code).toMatch(/deploySplitter\([\s\S]{0,200}provider/);
+  });
+});
