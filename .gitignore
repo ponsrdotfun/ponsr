@@ -83,3 +83,10 @@ desktop.ini
 # local state). Added by `netlify sites:create`; it is per-machine, not source.
 # ---------------------------------------------------------------------------
 .netlify
+
+# Review artifacts, regenerated on demand from the branch itself.
+# Never committed: a bundle or patch that lives inside the diff it describes changes
+# that diff, so the artifact and its own hash can never agree.
+ponsr-current-v2-review.bundle
+ponsr-current-v2-review.patch
+ponsr-current-v2-commits.txt
