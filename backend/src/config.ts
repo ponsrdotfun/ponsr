@@ -129,15 +129,15 @@ const ConfigSchema = z.object({
    * `PONS_FACTORY_VERSION` still selects v1 vs current-v2. Which contract "v2" means is
    * the registry's answer, not a setting's.
    */
-  /**
-   * Where to begin scanning for `PairTokenApprovalUpdated`.
+  /*
+   * PONS_V2_APPROVALS_FROM_BLOCK was REMOVED on 2026-08-21, for the same reason as the
+   * two addresses above: a separately settable number that must agree with a deployment
+   * but was free not to. Set below the deployment it scanned millions of empty blocks;
+   * set above it, it silently missed approvals -- which looks exactly like pons never
+   * having granted them.
    *
-   * The approvals sit around block 23.58M, so this is a little below them. Set it
-   * too high and an approval is missed, which shows up as the bot quietly refusing
-   * an asset pons does support -- indistinguishable from never having approved it.
-   * Set it to 0 and every refresh scans 370 windows for nothing.
+   * The scanner takes the deployment's own startBlock now.
    */
-  PONS_V2_APPROVALS_FROM_BLOCK: z.coerce.number().default(23_400_000),
   /** What a launch pairs against when the person did not ask for anything. ETH keeps
    *  today's behaviour, and is the only pairing that needs no approval. */
   DEFAULT_PAIR_ASSET: z.string().default('ETH'),
