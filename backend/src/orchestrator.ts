@@ -12,7 +12,7 @@ import { executableDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
-import { launchSalt } from './ponsV2CurrentEncoder';
+import { launchSalt, decodeCurrentV2Launch, extractCurrentV2LaunchDetails } from './ponsV2CurrentEncoder';
 import { composeSuccessReply, composeRejectionReply, composeOnChainFailureReply } from './replyComposer';
 import { TreasuryMonitor } from './monitor';
 import { config } from './config';
@@ -283,6 +283,15 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // somewhere else, with every tick green. A check for one deployment must never
     // authorise a transaction to another.
     const selected = launchTarget.deployment;
+    if (!selected) {
+      // A target that cannot say which deployment it addresses is one the identity check
+      // cannot be aimed at, and the only alternative -- falling back to a global -- is
+      // the defect this whole binding exists to remove. Refuse before the splitter.
+      throw new Error(
+        `launch target (${launchTarget.version}) names no deployment, so its identity cannot be ` +
+          'verified. Refusing before anything is deployed or spent.'
+      );
+    }
     const verifyIdentity =
       deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
     await verifyIdentity(deps.provider);
@@ -333,8 +342,34 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // Written before the transaction is sent, so a launch that reverts still leaves
     // evidence of which deployment it was aimed at -- the case where knowing that
     // matters most, because the reason is usually that it was aimed at the wrong one.
-    if (launchTarget.deployment) {
-      const d = launchTarget.deployment;
+    {
+      const d = selected;
+
+      /**
+       * Read out of the calldata that is about to be sent, not recomputed.
+       *
+       * These fields used to come from the registry and from global config: the
+       * selector was `d.launchSelector`, the salt was recomputed from the tweet id, and
+       * the launch config was `config.PONS_LAUNCH_CONFIG_ID` even when the request
+       * carried an override. All three describe what the code MEANT to build, written
+       * beside a transaction hash as though they described what went out.
+       *
+       * If the encoder and the registry ever disagree -- the exact class of failure this
+       * migration is about -- a record derived from the registry agrees with the bug and
+       * hides it. `data` is the only witness to what was actually sent.
+       *
+       * Decoding is best-effort by deployment schema: v1 has a different shape, and a
+       * record that says less is better than one that says something untrue.
+       */
+      let decoded: ReturnType<typeof decodeCurrentV2Launch> | null = null;
+      if (d.tokenParamsVersion === 'v2-salt') {
+        try {
+          decoded = decodeCurrentV2Launch(data, d);
+        } catch (err: any) {
+          console.error(`[provenance] could not decode launch calldata: ${err?.message ?? err}`);
+        }
+      }
+
       deps.db.recordLaunchProvenance(launchId, {
         deploymentId: d.id,
         factory: d.factory,
@@ -344,19 +379,24 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
         // its caller as the launch's deployer; the user receives the creator share
         // through the splitter. No reply or document may say otherwise.
         originalDeployer: treasuryAddress,
-        pairToken: pairAsset.address,
-        launchConfigId: String(config.PONS_LAUNCH_CONFIG_ID),
-        salt: launchSalt(d, mention.tweetId),
-        economicsDigest: null,
+        pairToken: decoded?.pairToken ?? pairAsset.address,
+        launchConfigId:
+          decoded?.launchConfigId ??
+          String(config.PONS_LAUNCH_CONFIG_ID),
+        salt: decoded?.salt ?? (d.tokenParamsVersion === 'v2-salt' ? launchSalt(d, mention.tweetId) : ''),
+        // Null only when it genuinely could not be read -- a v1 launch, or calldata this
+        // deployment's ABI cannot decode. Never null merely because nobody wired it up.
+        economicsDigest: decoded?.expectedEconomics ?? null,
+        // Filled in from the receipt once the launch confirms. A curve address does not
+        // exist before the transaction lands, so recording one here would be a guess.
         curve: null,
         // The splitter, because it is the only address that can ever claim this
         // launch's fees out of the escrow: claims pay `msg.sender` and there is no
         // `claimFor`. Recovering it later from a receipt is possible and is exactly
         // the archaeology nobody performs when a creator asks where their fees went.
         splitter: splitterAddress,
-        // How the calldata was built, so this row can be replayed or audited without
-        // assuming it used whatever encoding happens to be current at read time.
-        launchSelector: d.launchSelector,
+        // The four bytes that are actually going out.
+        launchSelector: decoded?.selector ?? data.slice(0, 10),
         tokenParamsVersion: d.tokenParamsVersion,
       });
     }

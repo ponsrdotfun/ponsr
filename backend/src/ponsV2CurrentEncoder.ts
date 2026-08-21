@@ -165,3 +165,63 @@ export function extractCurrentV2LaunchDetails(
 export function isNativePair(pairToken: string): boolean {
   return pairToken.toLowerCase() === NATIVE_ETH;
 }
+
+/** What a launch's calldata actually says, read back out of the bytes. */
+export interface DecodedCurrentV2Launch {
+  selector: string;
+  salt: string;
+  expectedEconomics: string;
+  launchConfigId: string;
+  pairToken: string;
+  creatorFeeRecipient: string;
+  tokenName: string;
+  tokenSymbol: string;
+}
+
+/**
+ * Decodes the transaction this bot is about to send.
+ *
+ * WHY PROVENANCE MUST NOT RECOMPUTE
+ * ---------------------------------
+ * The launch record used to store the registry's selector, a salt recomputed from the
+ * tweet id, and the launch config read from global configuration. All three describe
+ * what the code MEANT to build, written down beside a transaction hash as though they
+ * described what went out.
+ *
+ * If the encoder and the registry ever disagree -- which is exactly the class of failure
+ * this migration exists to fix -- a record derived from the registry agrees with the bug
+ * and makes it invisible. The bytes are the only witness to what was actually sent.
+ *
+ * It also catches the mundane case: a request carrying a launch-config override was
+ * recorded against the global config, attributing the launch to terms it was not built
+ * against.
+ */
+export function decodeCurrentV2Launch(
+  data: string,
+  deployment: PonsDeployment = executableDeployment()
+): DecodedCurrentV2Launch {
+  const selector = data.slice(0, 10);
+  if (selector !== deployment.launchSelector) {
+    throw new Error(
+      `calldata selector ${selector} is not ${deployment.id}'s ${deployment.launchSelector}; ` +
+        'refusing to decode it as a launch for that deployment'
+    );
+  }
+
+  const iface = new ethers.Interface(PONS_V2_CURRENT_ABI);
+  const [params, launchConfigId, pairToken] = iface.decodeFunctionData(
+    deployment.launchSignature,
+    data
+  );
+
+  return {
+    selector,
+    salt: String(params.salt),
+    expectedEconomics: String(params.expectedEconomics),
+    launchConfigId: String(launchConfigId),
+    pairToken: String(pairToken),
+    creatorFeeRecipient: String(params.creatorFeeRecipient),
+    tokenName: String(params.name),
+    tokenSymbol: String(params.symbol),
+  };
+}

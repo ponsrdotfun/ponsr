@@ -9,6 +9,7 @@ import { handleMention } from '../src/orchestrator';
 import { InboundMention, ParsedIntent } from '../src/types';
 import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 import { config } from '../src/config';
+import { deploymentById } from '../src/deployments';
 
 const TEST_DB_PATH = './data/test-orchestrator.sqlite';
 
@@ -615,6 +616,10 @@ describe('launching paired against an approved asset', () => {
       built,
       target: {
         version: 'v2' as const,
+        // It builds v1-SHAPED calldata (see below), so v1 is what it honestly is. A
+        // target must name the deployment it addresses: the orchestrator verifies THAT
+        // one's identity, and a stub with no deployment is a stub the guard cannot aim.
+        deployment: deploymentById('pons-v1'),
         factoryAddress: '0x' + '77'.repeat(20),
         supportsPairing,
         // Real v1-shaped calldata, because FakeTreasurySigner decodes what it is

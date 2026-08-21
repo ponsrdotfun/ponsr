@@ -115,3 +115,75 @@ describe('launchSalt', () => {
     expect(launchSalt(d, 'tweet_1')).not.toBe(saltForTweet('tweet_1'));
   });
 });
+
+/**
+ * Reading a launch back out of the bytes that were actually sent.
+ *
+ * Provenance recorded intentions: the selector came from the registry, the salt was
+ * recomputed from the tweet id, and the launch config came from global configuration
+ * even when the request carried an override. Every one of those is a statement about
+ * what the code MEANT to build, recorded next to a transaction hash as though it
+ * described what went out.
+ *
+ * The distinction is the whole point of the record. If the encoder ever disagrees with
+ * the registry -- which is precisely the failure this migration is about -- a provenance
+ * row derived from the registry agrees with the bug and hides it.
+ */
+describe('decodeCurrentV2Launch', () => {
+  const { decodeCurrentV2Launch, buildCurrentV2LaunchCalldata, launchSalt } = require('../src/ponsV2CurrentEncoder');
+  const { executableDeployment } = require('../src/deployments');
+
+  const d = executableDeployment();
+  const ECON = '0x' + 'cd'.repeat(32);
+  const AAPL = '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9';
+
+  function built(over: Record<string, unknown> = {}) {
+    return buildCurrentV2LaunchCalldata(
+      {
+        tokenName: 'Moon Coin',
+        tokenSymbol: 'MOON',
+        logo: '',
+        description: '',
+        socials: { twitter: '', telegram: '', discord: '', website: '', farcaster: '' },
+        feeWallet: '0x1111111111111111111111111111111111111111',
+        launchConfigId: 7n,
+        pairToken: AAPL,
+        creatorTaxBps: 0,
+        buybackEnabled: false,
+        expectedEconomics: ECON,
+        salt: launchSalt(d, 'tweet-9'),
+        ...over,
+      },
+      500_000_000_000_000n,
+      d
+    );
+  }
+
+  it('returns the salt that is actually in the calldata', () => {
+    const decoded = decodeCurrentV2Launch(built().data, d);
+    expect(decoded.salt).toBe(launchSalt(d, 'tweet-9'));
+  });
+
+  it('returns the economics digest that is actually in the calldata', () => {
+    expect(decodeCurrentV2Launch(built().data, d).expectedEconomics).toBe(ECON);
+  });
+
+  // The override case: recording the global config here would attribute the launch to a
+  // config it was not built against.
+  it('returns the launch config that was actually encoded, override included', () => {
+    expect(decodeCurrentV2Launch(built().data, d).launchConfigId).toBe('7');
+  });
+
+  it('returns the pair token that was actually encoded', () => {
+    expect(decodeCurrentV2Launch(built().data, d).pairToken.toLowerCase()).toBe(AAPL.toLowerCase());
+  });
+
+  it('returns the selector from the bytes, not from the manifest', () => {
+    expect(decodeCurrentV2Launch(built().data, d).selector).toBe(built().data.slice(0, 10));
+  });
+
+  it('refuses calldata whose selector is not this deployment’s', () => {
+    const foreign = '0xa41d5f2b' + built().data.slice(10);
+    expect(() => decodeCurrentV2Launch(foreign, d)).toThrow(/selector/i);
+  });
+});
