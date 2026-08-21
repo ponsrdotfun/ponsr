@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import { Db } from '../src/db';
 import { config } from '../src/config';
+import { deploymentById } from '../src/deployments';
 import {
   EMPTY_SOCIALS,
   buildLaunchCalldata,
@@ -112,7 +113,11 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       // an environment variable does not mean the same thing on two machines.
       launchTarget: {
         version: 'v1' as const,
-        factoryAddress: config.PONS_FACTORY_ADDRESS,
+        // The deployment this stub addresses, stated. It is required on the interface
+        // now precisely so a target cannot be built without saying which contract it
+        // means -- the identity check reads it rather than a global.
+        deployment: deploymentById('pons-v1'),
+        factoryAddress: deploymentById('pons-v1').factory,
         supportsPairing: false,
         build: async (req: any, feeWei: bigint) => {
           const { data, value } = buildLaunchCalldata(

@@ -274,8 +274,17 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     //
     // Injected like every other chain-facing dependency in this file, so the
     // orchestration tests can state plainly that they are not exercising it.
+    // The deployment THIS launch is going to, taken from the target that will build the
+    // calldata -- never from `executableDeployment()`.
+    //
+    // Those two can differ. `createLaunchTarget` returns V1 under rollback, and
+    // `deps.launchTarget` can be injected outright. Reading the global here verified the
+    // current V2 factory's hashes, escrow and chain and then sent a transaction
+    // somewhere else, with every tick green. A check for one deployment must never
+    // authorise a transaction to another.
+    const selected = launchTarget.deployment;
     const verifyIdentity =
-      deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(executableDeployment(), p));
+      deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
     await verifyIdentity(deps.provider);
 
     const { splitterAddress, deployTxHash } = await deploySplitter(
@@ -286,7 +295,11 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       // Nothing here: identity was asserted just above, through the injected
       // `verifyIdentity`, so passing the provider again would repeat the same four RPC
       // calls for the same answer.
-      undefined
+      undefined,
+      // The SELECTED deployment, so the escrow baked immutably into this splitter comes
+      // from the same place the calldata will. Reading module state here was how a
+      // splitter could be bound to the current escrow during a v1 rollback.
+      selected
     );
 
     const liveFee = await deps.getLiveFeeWei();

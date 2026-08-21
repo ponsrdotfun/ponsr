@@ -7,7 +7,7 @@ import {
   extractCurrentV2LaunchDetails,
   launchSalt,
 } from './ponsV2CurrentEncoder';
-import { PonsDeployment, executableDeployment } from './deployments';
+import { PonsDeployment, executableDeployment, deploymentById } from './deployments';
 import { assertEscrowMatches } from './splitterDeployer';
 import { NATIVE_ETH, PairAsset } from './pairTokens';
 
@@ -51,8 +51,17 @@ export interface BuiltLaunch {
 
 export interface LaunchTarget {
   version: 'v1' | 'v2' | 'v2-current';
-  /** Which registry entry this builds for, so a launch record can name it. */
-  deployment?: PonsDeployment;
+  /**
+   * Which registry entry this builds for. REQUIRED, and that is the point.
+   *
+   * It was optional, and `V1Target` supplied nothing. So the rollback path had no
+   * deployment to verify, and the identity check quietly fell back to
+   * `executableDeployment()` -- verifying the current V2 factory's hashes, escrow and
+   * chain immediately before sending a V1 transaction. A check for one deployment
+   * authorising a transaction to another is not a weaker guard; it is a guard aimed at
+   * the wrong contract, which is this migration's own bug one level up.
+   */
+  deployment: PonsDeployment;
   factoryAddress: string;
   /** True when this target can price a launch in something other than ETH. */
   supportsPairing: boolean;
@@ -63,7 +72,16 @@ export interface LaunchTarget {
 
 class V1Target implements LaunchTarget {
   version = 'v1' as const;
-  factoryAddress = config.PONS_FACTORY_ADDRESS;
+  /**
+   * Rollback, stated explicitly.
+   *
+   * `pons-v1` is `executable: false` and stays that way -- it is not where launches go.
+   * Carrying it here says which contract THIS target addresses, which is a different
+   * question from which deployment the registry routes to by default. Representing
+   * rollback as its own deployment beats bypassing the registry's invariant.
+   */
+  deployment = deploymentById('pons-v1');
+  factoryAddress = deploymentById('pons-v1').factory;
   supportsPairing = false;
 
   async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {

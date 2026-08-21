@@ -119,12 +119,15 @@ export async function deploySplitter(
    * Omit it and the caller is asserting that nothing could have changed since readiness
    * -- true in the unit tests, which have no chain at all.
    */
-  provider?: ethers.Provider
+  provider?: ethers.Provider,
+  /** The deployment this splitter is being built for. Defaults to the executable one;
+   *  the orchestrator passes the SELECTED target's, which can differ under rollback. */
+  deployment: PonsDeployment = executableDeployment()
 ): Promise<SplitterDeployResult> {
   if (provider) {
     // Throws rather than returning a flag: after this function returns there is already
     // a durable side effect, so the refusal has to happen before anything is sent.
-    await assertDeploymentIdentity(executableDeployment(), provider);
+    await assertDeploymentIdentity(deployment, provider);
   }
   const { abi, bytecode, name } = splitterArtifact();
   const factory = new ethers.ContractFactory(abi, bytecode);
@@ -140,7 +143,7 @@ export async function deploySplitter(
   // calldata was correct, the transaction confirmed -- and only the splitter would
   // have been bound to the wrong escrow. That is the failure with no recovery: fees
   // credited to an address the splitter cannot claim from, forever.
-  const escrow = splitterEscrowFor();
+  const escrow = splitterEscrowFor(deployment);
   const deployTx =
     name === 'FeeSplitterV2'
       ? await factory.getDeployTransaction(
