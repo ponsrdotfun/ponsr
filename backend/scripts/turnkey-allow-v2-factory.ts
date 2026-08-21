@@ -46,6 +46,7 @@
  */
 import { config } from '../src/config';
 import { executableDeployment, deploymentById } from '../src/deployments';
+import { findEquivalentPolicy, sameNameDifferentMeaning } from '../src/turnkeyPolicyMatch';
 
 const EXECUTE = process.argv.includes('--execute');
 /**
@@ -153,11 +154,37 @@ async function main() {
   // make the next person wonder which one is live, and wondering is how a policy
   // gets deleted for being redundant when it is not.
   const existing = await client.getPolicies({ organizationId });
-  const already = (existing.policies || []).find((p: any) => p.policyName === policyNameFor(target.id));
+  const wanted = {
+    organizationId,
+    effect: 'EFFECT_ALLOW',
+    consensus: `approvers.any(user, user.id == '${bot.userId}')`,
+    condition: `eth.tx.to == '${v2}'`,
+    policyName: policyNameFor(target.id),
+  };
+
+  // Equivalence by MEANING, not by name.
+  //
+  // This compared `policyName`, the one field that has nothing to do with what a policy
+  // permits, and it fails in both directions. Right name with the wrong condition
+  // reports "nothing to do" and leaves the bot unable to sign for the factory it
+  // launches through -- `ponsr-bot: launch on the v2 factory` already exists and names
+  // the SUPERSEDED deployment. A different name with an identical condition is missed,
+  // and a duplicate appears that nobody can tell apart from the live one.
+  const already = findEquivalentPolicy(existing.policies || [], wanted);
   if (already) {
     line('existing policy', `found (${already.policyId}) — nothing to do`);
-    console.log('\nAlready in place. Verify with:  npx tsx scripts/turnkey-verify-policy.ts');
+    line('  its name', String(already.policyName));
+    line('  its condition', String(already.condition));
+    console.log('\nAlready in place, matched by condition rather than by name.');
+    console.log('Verify with:  npx tsx scripts/turnkey-verify-policy.ts');
     return;
+  }
+
+  // Not an error -- Turnkey permits duplicate names -- but an operator should see it
+  // before a second rule appears under a name they already recognise.
+  for (const clash of sameNameDifferentMeaning(existing.policies || [], wanted)) {
+    line('NAME COLLISION', `${clash.policyId} is also called "${clash.policyName}"`);
+    line('  but permits', String(clash.condition));
   }
 
   console.log('\nPolicy this will create');
