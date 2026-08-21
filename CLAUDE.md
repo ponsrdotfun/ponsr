@@ -112,7 +112,15 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   `ponsr-bot: launch on pons-v2-current-7ed` (`ece2a399-…`) with root credentials, and
   verification by signing — not by a config flag — shows the current factory ALLOWED, contract
   creation ALLOWED, and an arbitrary destination **denied**. That last line is the one that
-  matters: a leak of the bot's key now costs launches, not the treasury.
+  matters: an arbitrary DESTINATION is refused.
+
+  **That is not the same as the treasury being safe, and this file said it was.** The
+  policy also allows `eth.tx.to == ''` -- a contract creation, needed for the splitter --
+  with no constraint on value. Measured 2026-08-21: Turnkey signs a creation carrying
+  1 ETH. A creation's value lands in the contract being created and the sender writes
+  that contract, so one transaction empties the hot wallet while every destination-only
+  check still reports green. See `docs/TURNKEY-CREATION-AUTHORITY.md`. **Open, and an
+  operator action.**
   `scripts/turnkey-allow-v2-factory.ts` is named per deployment so it cannot collide with the
   older, still-present rule for the superseded factory.
 

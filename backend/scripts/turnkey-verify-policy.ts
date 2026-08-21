@@ -17,6 +17,7 @@
  */
 import { config } from '../src/config';
 import { deploymentById, executableDeployment } from '../src/deployments';
+import { classifyTurnkeyOutcome, describeOutcome, Outcome } from '../src/turnkeyOutcome';
 
 const ARBITRARY = '0x000000000000000000000000000000000000dEaD';
 
@@ -55,41 +56,31 @@ function line(label: string, value: unknown) {
   };
 
   /**
-   * Three outcomes, not two.
+   * Three outcomes, not two -- and decided from structured fields, never from prose.
    *
-   * This returned a boolean, and every failure became `false` -- which the report then
-   * printed as "denied". On 2026-08-20 the Turnkey organisation went over its signing
-   * quota, so every request failed for a reason that has nothing to do with policy,
-   * and the script announced NOT SAFE YET and told the operator to fix a policy that
-   * had just been created correctly.
+   * This returned a boolean, and every failure became `false`, printed as "denied". On
+   * 2026-08-20 the organisation went over its signing quota, so every request failed
+   * for a reason unrelated to policy, and the script announced NOT SAFE YET and sent
+   * the operator to fix a policy created correctly minutes earlier.
    *
-   * A verification tool that cannot tell "the policy said no" from "I could not ask"
-   * is worse than one that refuses to answer: it sends someone to change security
-   * configuration that was not broken.
+   * The first repair kept the guess and only widened it: `/permission|policy|not
+   * authorized/i` against the message. Every Turnkey error carries a link to
+   * `docs.turnkey.com/concepts/policies/`, so that rule reads a network timeout as a
+   * refusal. Classification now lives in `src/turnkeyOutcome.ts` and reads gRPC code 7
+   * plus the policy engine's own error type. See its header for the evidence.
    */
-  type Outcome = 'allowed' | 'denied' | 'unknown';
-
   async function attempt(name: string, tx: any): Promise<Outcome> {
     try {
       await signer.signTransaction(tx);
-      return 'allowed';
-    } catch (err: any) {
-      const msg = String(err?.message ?? err);
-      // A policy denial is the only failure that means "denied".
-      if (/permission|policy|not authorized/i.test(msg)) return 'denied';
-      // Everything else -- quota, network, a malformed request -- is unknown, and
-      // saying so is the whole point.
-      line(name + ' (could not ask)', msg.slice(0, 110));
-      return 'unknown';
+      return { kind: 'allowed' };
+    } catch (err) {
+      const outcome = classifyTurnkeyOutcome(err);
+      if (outcome.kind === 'unknown') line(name + ' (could not ask)', outcome.detail.slice(0, 100));
+      return outcome;
     }
   }
 
-  /** How an outcome reads in the report. */
-  function show(o: Outcome, expected: 'allowed' | 'denied'): string {
-    if (o === 'unknown') return 'UNKNOWN -- not asked, see the error above';
-    if (o === expected) return o === 'allowed' ? 'ALLOWED ✅' : 'denied ✅';
-    return o === 'allowed' ? 'ALLOWED ❌' : 'denied ❌';
-  }
+  const show = describeOutcome;
 
   // From the registry, because a config address is how this went wrong twice.
   //
@@ -148,13 +139,34 @@ function line(label: string, value: unknown) {
   });
   line('3. tx to an arbitrary address', show(elsewhere, 'denied'));
 
+  /**
+   * The check this script was missing, and the reason its verdict was wrong.
+   *
+   * Cases 1-3 all ask about a DESTINATION. A contract creation has none -- that is what
+   * makes `eth.tx.to == ''` a workable rule and what makes it dangerous. `value` rides
+   * along on a creation exactly as it does on a transfer, and it lands in the contract
+   * being created, whose code the sender writes.
+   *
+   * So a key that may create contracts with value attached may move the whole balance in
+   * one transaction, and case 3 will still print `denied ✅` because no arbitrary address
+   * was ever named. Measured 2026-08-21: Turnkey signed a creation carrying 1 ETH.
+   */
+  const fundedCreation = await attempt('funded creation', {
+    ...base,
+    data: '0x60806040523480156100',
+    value: 1000000000000000000n,
+  });
+  line('4. contract creation CARRYING FUNDS', show(fundedCreation, 'denied'));
+
   console.log('');
   // Unknown anywhere means the run proves nothing, in either direction. Reporting
   // PASSED on unanswered questions would be the same defect pointing the other way.
-  const unknowns = [toV1, toCurrent, deploy, elsewhere].filter((o) => o === 'unknown').length;
+  const unknowns = [toV1, toCurrent, deploy, elsewhere, fundedCreation].filter(
+    (o) => o.kind === 'unknown'
+  ).length;
   if (unknowns > 0) {
     console.log('=== INCONCLUSIVE ===');
-    console.log(`  ${unknowns} of 4 checks could not be asked, so this run proves nothing.`);
+    console.log(`  ${unknowns} of 5 checks could not be asked, so this run proves nothing.`);
     console.log('  The most common cause is the Turnkey organisation being over its signing');
     console.log('  quota, which disables signing for everything and is not a policy problem.');
     console.log('  Nothing here says the policy is wrong, and nothing says it is right.');
@@ -162,15 +174,18 @@ function line(label: string, value: unknown) {
     return;
   }
 
-  const good = toFactory === 'allowed' && deploy === 'allowed' && elsewhere === 'denied';
+  const good =
+    toFactory.kind === 'allowed' &&
+    deploy.kind === 'allowed' &&
+    elsewhere.kind === 'denied' &&
+    fundedCreation.kind === 'denied';
   if (good) {
     console.log('=== PASSED ===');
     console.log(`The bot can launch on ${target.id} and deploy splitters, and`);
-    console.log('cannot move funds anywhere else.');
-    console.log('A leak of this key now costs launches, not the treasury.');
+    console.log('cannot move funds anywhere else, including by attaching them to a deploy.');
     console.log('');
     console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
-    if (toCurrent !== 'allowed') {
+    if (toCurrent.kind !== 'allowed') {
       console.log('');
       console.log(`NOTE: ${target.id} is still denied. That is fine while the bot runs v1,`);
       console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
@@ -180,13 +195,22 @@ function line(label: string, value: unknown) {
     }
   } else {
     console.log('=== NOT SAFE YET ===');
-    if (toFactory !== 'allowed') {
+    if (fundedCreation.kind === 'allowed') {
+      console.log('  THE TREASURY IS DRAINABLE BY THIS KEY.');
+      console.log('  Turnkey signed a contract creation carrying funds. A creation has no');
+      console.log('  destination, so the arbitrary-address check above cannot see it: the value');
+      console.log('  lands in a contract whose code the sender chooses. One transaction empties');
+      console.log('  the hot wallet, and every destination-only check still reports green.');
+      console.log('  Do NOT claim anywhere that a leak of this key costs only launches.');
+      console.log('  Closing it is an operator action -- see docs/TURNKEY-CREATION-AUTHORITY.md');
+    }
+    if (toFactory.kind !== 'allowed') {
       console.log(`  The bot launches through ${target.id}, and that factory is DENIED.`);
       console.log('  It cannot launch anything at all.');
       if (wantV2) console.log('  Fix: powershell -File scripts\\apply-v2-policy.ps1 -Execute');
     }
-    if (deploy !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
-    if (elsewhere === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
+    if (deploy.kind !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
+    if (elsewhere.kind === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
   }
   process.exitCode = good ? 0 : 1;
 })().catch((err) => {

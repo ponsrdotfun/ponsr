@@ -327,7 +327,9 @@ Every one of these can be checked on-chain by anyone, which is why they are safe
 - The bot's wallet is restricted by a policy that allows it to do **only** two things: launch on
   the pons factories, and deploy a fee splitter. It cannot send funds anywhere else — not to an
   attacker, not to another exchange, not even to the project's own cold wallet. A leak of that
-  key costs launches, not the treasury.
+  key costs launches. It does NOT mean the treasury is out of reach: the same policy
+  permits a contract creation with no value limit, and that path was measured open on
+  2026-08-21. Never write copy claiming the treasury is protected from a key leak.
 - Ponsr takes **no creator tax** on v2 launches, even though the launchpad allows up to 10%.
 - Terms and disclaimer are public at **ponsr.fun/terms**.
 
