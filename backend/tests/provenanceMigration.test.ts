@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Db } from '../src/db';
 
 /**
@@ -25,8 +27,23 @@ import { Db } from '../src/db';
  * through it -- and the new code only ever sees it as a file on disk.
  */
 
-const LEGACY_PATH = './data/test-legacy-provenance.sqlite';
+/**
+ * A per-run temporary directory, created here rather than assumed.
+ *
+ * These files used to live in `./data/`, which is gitignored -- so from a pristine
+ * checkout the directory does not exist and every test in this file failed with ENOENT.
+ * They passed on this machine only because an earlier run had happened to create it.
+ *
+ * A fixture that depends on a directory nobody creates is a fixture that works until
+ * somebody clones the repository.
+ */
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-migration-'));
+const LEGACY_PATH = path.join(TMP_DIR, 'legacy-provenance.sqlite');
 const BACKUP_PATH = LEGACY_PATH + '.bak';
+
+afterAll(() => {
+  fs.rmSync(TMP_DIR, { recursive: true, force: true });
+});
 
 /** The schema exactly as it stood before splitter/selector/version were added. */
 const LEGACY_SCHEMA = [
