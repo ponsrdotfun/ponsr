@@ -40,6 +40,7 @@ import { ChainPairTokenSource } from '../src/pairTokenSource';
 import { executableDeployment } from '../src/deployments';
 import { assertDeploymentIdentity } from '../src/deploymentIdentity';
 import { extractLaunchFromReceipt } from '../src/launchAssertions';
+import { resolveCanaryPair } from '../src/canaryPreflight';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -190,6 +191,42 @@ async function main() {
   line('value', `${formatEth(fee)} ETH   <- exactly the fee, so the factory performs no dev buy`);
   console.log();
 
+  /**
+   * The pairing, settled BEFORE anything durable exists.
+   *
+   * This used to run AFTER the splitter was deployed, and the dry run returned before
+   * reaching it at all -- so the run whose whole purpose is to surface problems could not
+   * surface this one, and execute bought a splitter before finding out the pair was
+   * refused. The script even said "the splitter above is deployed but unused", which is an
+   * accurate description of money already gone.
+   *
+   * `resolveCanaryPair` also re-reads the live approval: the registry caches for an hour
+   * and pons revokes assets, RIVN among them.
+   */
+  const factoryForPairs = new ethers.Contract(
+    selected.factory,
+    ['function approvedPairTokens(address) view returns (bool)'],
+    provider
+  );
+  let pairAsset: PairAsset;
+  try {
+    const resolvedPair = await resolveCanaryPair(process.env.PAIR_WITH, {
+      deployment: selected,
+      supportsPairing: target.supportsPairing,
+      resolve: (typed) =>
+        new PairAssetRegistry(
+          new ChainPairTokenSource({ provider, deployment: selected })
+        ).resolve(typed),
+      isApprovedNow: (addr) => factoryForPairs.approvedPairTokens(addr) as Promise<boolean>,
+    });
+    pairAsset = resolvedPair.asset;
+    line('paired against', `${pairAsset.symbol}  (${resolvedPair.source})`);
+  } catch (err: any) {
+    console.error('\n' + (err?.message ?? err));
+    console.error('Nothing was deployed and nothing was sent.');
+    process.exit(1);
+  }
+
   if (!EXECUTE) {
     console.log('Dry run complete. Nothing was sent.');
     console.log('Re-run with --execute to deploy the splitter and launch.');
@@ -200,12 +237,31 @@ async function main() {
   console.log('1/2  Deploying FeeSplitter (creator == treasury == this wallet)...');
   // The provider is not optional here in spirit: without it `deploySplitter` skips its
   // own identity check, and the splitter is the first artifact that cannot be undone.
+  // Both checks again, with nothing between them and the first durable artifact.
+  //
+  // The dry run above proved them minutes ago. Minutes is an interval, and a factory
+  // upgrade or a revocation landing inside it produces a paid-for splitter bound to a
+  // launch that must revert.
+  await assertDeploymentIdentity(selected, provider);
+  if (pairAsset.address.toLowerCase() !== NATIVE_ETH) {
+    const stillApproved = await factoryForPairs.approvedPairTokens(pairAsset.address);
+    if (!stillApproved) {
+      console.error(`\n${pairAsset.symbol} was revoked since the preflight. Nothing deployed.`);
+      process.exit(1);
+    }
+  }
+
   const { splitterAddress, deployTxHash } = await deploySplitter(
     signer,
     treasury,
     treasury,
     ethers.ZeroAddress,
-    provider
+    provider,
+    // The SELECTED deployment. Omitted, this defaults to executableDeployment() -- so
+    // under rollback or an injected target the identity, readiness and calldata followed
+    // `selected` while the splitter's IMMUTABLE escrow followed something else. The
+    // escrow is the one that cannot be repaired afterwards.
+    selected
   );
   line('splitter', splitterAddress);
   line('tx', deployTxHash);
@@ -266,39 +322,7 @@ async function main() {
   line('factory version', target.version);
   line('factory address', target.factoryAddress);
 
-  // Resolve the pairing asset the same way the bot does, so a self-dealt launch is
-  // the same shape as a user's. PAIR_WITH is a symbol or an address; unset means ETH,
-  // which is what v1 always uses and what v2 defaults to.
-  let pairAsset: PairAsset = {
-    address: NATIVE_ETH, symbol: 'ETH', name: 'Ether', decimals: 18, graduationThreshold: null,
-  };
-  const wanted = process.env.PAIR_WITH;
-  if (wanted && target.supportsPairing) {
-    const registry = new PairAssetRegistry(
-      new ChainPairTokenSource({
-        provider,
-        // The deployment, so the ABI and start block come with the address. This read
-        // `PONS_V2_APPROVALS_FROM_BLOCK` -- a separately settable number that can sit
-        // below the deployment (scanning millions of empty blocks) or above it
-        // (silently missing approvals, which looks identical to never being granted).
-        deployment: selected,
-      })
-    );
-    const resolved = await registry.resolve(wanted);
-    if (!resolved.ok) {
-      console.error(`
-PAIR_WITH="${wanted}" is not an approved pairing asset: ${resolved.detail}`);
-      console.error('Nothing was launched. The splitter above is deployed but unused.');
-      process.exit(1);
-    }
-    pairAsset = resolved.asset;
-  } else if (wanted && !target.supportsPairing) {
-    console.error(`
-PAIR_WITH is set but ${target.version} takes its pairing from the launch config.`);
-    console.error('Set PONS_FACTORY_VERSION=v2, or unset PAIR_WITH to launch against ETH.');
-    process.exit(1);
-  }
-  line('paired against', pairAsset.symbol);
+
 
   const { to, data, value } = await target.build(
     {
