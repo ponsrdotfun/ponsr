@@ -124,6 +124,18 @@ function depsWithLogs(db: Db, logs: unknown[], replies: string[]) {
     provider: {} as never,
     launchTarget: realTarget(),
     verifyIdentity: async () => {},
+    // The factory's post-receipt record, agreeing with the selected factory's own event.
+    // These tests are about WHICH log names the token; the confirmation gate has its own
+    // file. Supplying a matching record says that plainly rather than leaving the real
+    // read to fail against a stubbed provider and call every case an incident.
+    readLaunchRecord: async (_d: unknown, token: string) => ({
+      token,
+      curve: REAL_CURVE,
+      deployer: TREASURY,
+      creatorFeeRecipient: SPLITTER,
+      pairToken: '0x' + '00'.repeat(20),
+      exists: true,
+    }),
     getLiveFeeWei: async () => LIVE_FEE,
     getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
     getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),

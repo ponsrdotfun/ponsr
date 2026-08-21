@@ -12,9 +12,11 @@ import { executableDeployment, PonsDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
-import { launchSalt, DecodedCurrentV2Launch } from './ponsV2CurrentEncoder';
+import { launchSalt, DecodedCurrentV2Launch, PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
 import {
   assertPairStillApproved,
+  verifyLaunchConfirmation,
+  FactoryLaunchRecord,
   assertOutgoingLaunch,
   extractLaunchFromReceipt,
   reconcileReceipt,
@@ -90,6 +92,17 @@ export interface OrchestratorDeps {
    * chain-facing dependency, and defaulted to the real read.
    */
   assertPairApproved?: (deployment: PonsDeployment, pairToken: string) => Promise<void>;
+  /**
+   * The factory's own record of a launch, read AFTER the receipt.
+   *
+   * The receipt is what the factory announced; this is what it will tell anyone who
+   * asks later, and it carries `creatorFeeRecipient` -- the field a creator's share
+   * depends on for the life of the token. Injected like every other chain read.
+   */
+  readLaunchRecord?: (
+    deployment: PonsDeployment,
+    token: string
+  ) => Promise<FactoryLaunchRecord | null>;
 }
 
 /** Alerting must never change a launch outcome. If the notifier is down, that is
@@ -171,7 +184,16 @@ export type OrchestratorOutcome =
   | { kind: 'duplicate' }
   | { kind: 'rejected'; reason: string }
   | { kind: 'launched'; tokenAddress: string; txHash: string }
-  | { kind: 'onchain_failure'; detail: string };
+  | { kind: 'onchain_failure'; detail: string }
+  /**
+   * The transaction landed but the sources disagree about what it did.
+   *
+   * Distinct from `onchain_failure` on purpose: nothing failed. A token exists and
+   * the fee is spent. What is missing is agreement between the calldata, the event
+   * and the factory's record -- so nobody can yet say what was launched. Reporting
+   * that as a failure would be a second, larger error.
+   */
+  | { kind: 'incident'; detail: string; txHash: string; tokenAddress: string | null };
 
 export async function handleMention(mention: InboundMention, deps: OrchestratorDeps): Promise<OrchestratorOutcome> {
   // --- Step 1: idempotency, atomic, before anything else runs ---
@@ -521,6 +543,93 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       const replyText = composeOnChainFailureReply({ reasonSummary: 'could not confirm the deployed token address' });
       await replySafely(deps, mention.tweetId, replyText, { stage: 'no_token_address', txHash: sent.hash });
       return { kind: 'onchain_failure', detail: 'token address not found in logs' };
+    }
+
+    /**
+     * Everything must agree before the word "confirmed" is used.
+     *
+     * The row used to be marked confirmed here, and reconciliation ran afterwards --
+     * logging on disagreement while the success reply went out anyway. So "confirmed"
+     * meant "an event of the right shape arrived from the right address", and a clean
+     * launch was indistinguishable in the database from one nobody had checked.
+     *
+     * Three sources: the calldata we sent, the event the factory announced, and the
+     * record the factory will give anyone who asks later. The record is the one that
+     * decides where a creator's fees go.
+     */
+    if (selected.tokenParamsVersion === 'v2-salt' && scoped && sentCalldata) {
+      const readRecord =
+        deps.readLaunchRecord ??
+        (async (d: PonsDeployment, token: string) => {
+          const f = new ethers.Contract(d.factory, PONS_V2_CURRENT_ABI, deps.provider);
+          const raw = await f.getLaunchedToken(token);
+          return {
+            token: String(raw.token ?? raw[0]),
+            curve: String(raw.curve ?? raw[1]),
+            deployer: String(raw.deployer ?? raw[2]),
+            creatorFeeRecipient: String(raw.creatorFeeRecipient ?? raw[3]),
+            pairToken: String(raw.pairToken ?? raw[4]),
+            exists: Boolean(raw.exists ?? raw[14]),
+          };
+        });
+
+      let record: FactoryLaunchRecord | null = null;
+      try {
+        record = await readRecord(selected, scoped.token);
+      } catch (err: any) {
+        // Left null deliberately. "I could not read it" is a distinct answer from "it
+        // disagrees", and the verdict below says so rather than assuming either.
+        console.error(`[confirm] could not read the launch record: ${err?.message ?? err}`);
+      }
+
+      const verdict = verifyLaunchConfirmation({
+        receipt: scoped,
+        sent: sentCalldata,
+        record,
+        splitterAddress,
+        treasuryAddress,
+      });
+
+      if (!verdict.ok) {
+        // The transaction landed and the token exists. Recording it as `failed` would be
+        // a lie in the other direction, so the row keeps the hash and the token it saw
+        // and is marked for a person to look at.
+        const detail = verdict.problems.join('; ');
+        deps.db.updateLaunchStatus(launchId, 'failed', {
+          tokenAddress,
+          txHash: sent.hash,
+          feeWeiPaid: liveFee.toString(),
+        });
+        deps.db.recordRejection(mention.tweetId, mention.authorXUserId, `INCIDENT: ${detail}`);
+
+        console.error(`[confirm] ${launchId} landed but does not reconcile:`);
+        for (const p of verdict.problems) console.error(`  - ${p}`);
+        notify(deps, (m) =>
+          m.onReplyFailed(mention.tweetId, 'launch landed but does not reconcile', {
+            stage: 'confirm_gate',
+            txHash: sent.hash,
+            tokenAddress,
+            problems: verdict.problems,
+          })
+        );
+
+        // Said plainly, and without the normal success wording: something happened, it
+        // is being looked at, and no claim is made about what was launched.
+        await replySafely(
+          deps,
+          mention.tweetId,
+          composeOnChainFailureReply({
+            reasonSummary: 'the launch went through but the records do not yet agree',
+          }),
+          { stage: 'confirm_gate', txHash: sent.hash }
+        );
+        return {
+          kind: 'incident',
+          detail,
+          txHash: sent.hash,
+          tokenAddress,
+        };
+      }
     }
 
     deps.db.updateLaunchStatus(launchId, 'confirmed', {

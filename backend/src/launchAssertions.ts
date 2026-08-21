@@ -206,3 +206,114 @@ export async function assertPairStillApproved(
     );
   }
 }
+
+/** The factory's post-receipt record of a launch. */
+export interface FactoryLaunchRecord {
+  token: string;
+  curve: string;
+  deployer: string;
+  creatorFeeRecipient: string;
+  pairToken: string;
+  exists: boolean;
+}
+
+export interface ConfirmationVerdict {
+  /** True only when every source agrees. Anything else is an incident. */
+  ok: boolean;
+  problems: string[];
+}
+
+/**
+ * Whether a landed transaction may be called confirmed.
+ *
+ * The row used to be marked `confirmed` the moment a `TokenLaunched` from the selected
+ * factory decoded; reconciliation ran afterwards, logged on disagreement, and the
+ * success reply went out regardless. So "confirmed" meant "an event of the right shape
+ * came from the right address" -- not that the token matched the calldata, not that the
+ * factory agreed who the creator fee recipient is. Reading the database, a clean launch
+ * and an unreconciled one looked identical.
+ *
+ * Three sources have to agree before that word is used:
+ *
+ *   the CALLDATA   what we asked for
+ *   the RECEIPT    what the factory announced
+ *   the RECORD     what the factory will tell anyone who asks later
+ *
+ * The third matters most for money: `creatorFeeRecipient` in the record is what pays
+ * fees for the life of the token, and it is the field a creator's share depends on.
+ *
+ * A disagreement does NOT mean the token is imaginary -- the transaction landed and the
+ * fee is spent. It means nobody can yet say what was launched, which is an incident with
+ * evidence worth preserving.
+ */
+export function verifyLaunchConfirmation(params: {
+  receipt: ReceiptLaunch;
+  sent: DecodedCurrentV2Launch;
+  record: FactoryLaunchRecord | null;
+  splitterAddress: string;
+  treasuryAddress: string;
+}): ConfirmationVerdict {
+  const { receipt, sent, record, splitterAddress, treasuryAddress } = params;
+  const problems: string[] = [];
+  const eq = (a?: string, b?: string) => Boolean(a && b && a.toLowerCase() === b.toLowerCase());
+  const zero = (a?: string) => !a || /^0x0+$/i.test(a);
+
+  // --- the receipt, on its own -------------------------------------------------------
+  if (zero(receipt.token)) problems.push('the factory announced a zero token address');
+  if (zero(receipt.curve)) {
+    // A launch without a curve has nowhere to trade. Whatever happened, it is not the
+    // thing this bot set out to do.
+    problems.push('the factory announced a zero curve address');
+  }
+
+  // --- the receipt against what we sent ----------------------------------------------
+  problems.push(...reconcileReceipt(receipt, sent, treasuryAddress));
+
+  // --- the record ---------------------------------------------------------------------
+  if (!record) {
+    // Unknown is not the same as fine. Saying so plainly is the whole point: the
+    // alternative is a row that claims more than anybody checked.
+    problems.push(
+      'the factory record could not be read, so nothing about this launch is confirmed ' +
+        'beyond the transaction landing'
+    );
+    return { ok: false, problems };
+  }
+  if (!record.exists) {
+    problems.push('the factory has no record of this token, yet its own event announced one');
+  }
+  if (!eq(record.token, receipt.token)) {
+    problems.push(`record token ${record.token} does not match the announced ${receipt.token}`);
+  }
+  if (!eq(record.curve, receipt.curve)) {
+    problems.push(`record curve ${record.curve} does not match the announced ${receipt.curve}`);
+  }
+  if (!eq(record.pairToken, receipt.pairToken)) {
+    problems.push(
+      `record pair token ${record.pairToken} does not match the announced ${receipt.pairToken}`
+    );
+  }
+  if (record.deployer && !eq(record.deployer, treasuryAddress)) {
+    problems.push(
+      `record deployer ${record.deployer} is not the treasury ${treasuryAddress}. Through the ` +
+        'direct path these must be the same address.'
+    );
+  }
+
+  // The one the creator's money depends on, checked against BOTH the splitter that was
+  // deployed and the calldata that named it.
+  if (!eq(record.creatorFeeRecipient, splitterAddress)) {
+    problems.push(
+      `record creator fee recipient ${record.creatorFeeRecipient} is not the splitter deployed ` +
+        `for this launch (${splitterAddress}). These fees are not ours to claim.`
+    );
+  }
+  if (!eq(record.creatorFeeRecipient, sent.creatorFeeRecipient)) {
+    problems.push(
+      `record creator fee recipient ${record.creatorFeeRecipient} is not the one the calldata ` +
+        `named (${sent.creatorFeeRecipient})`
+    );
+  }
+
+  return { ok: problems.length === 0, problems };
+}
