@@ -12,7 +12,12 @@ import { executableDeployment, PonsDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
-import { launchSalt, decodeCurrentV2Launch, extractCurrentV2LaunchDetails } from './ponsV2CurrentEncoder';
+import { launchSalt, DecodedCurrentV2Launch } from './ponsV2CurrentEncoder';
+import {
+  assertOutgoingLaunch,
+  extractLaunchFromReceipt,
+  reconcileReceipt,
+} from './launchAssertions';
 import { composeSuccessReply, composeRejectionReply, composeOnChainFailureReply } from './replyComposer';
 import { TreasuryMonitor } from './monitor';
 import { config } from './config';
@@ -184,6 +189,10 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     notify(deps, (m) => m.onParserFailed(mention.tweetId, detail));
     return { kind: 'rejected', reason: 'PARSER_UNAVAILABLE' };
   }
+
+  /** The calldata actually sent, decoded, so the receipt can be reconciled against
+   *  it rather than against what the code intended. */
+  let sentCalldata: DecodedCurrentV2Launch | null = null;
 
   // --- Step 2: choose the deployment, BEFORE anything is asked about it ---
   //
@@ -384,13 +393,20 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
        * Decoding is best-effort by deployment schema: v1 has a different shape, and a
        * record that says less is better than one that says something untrue.
        */
-      let decoded: ReturnType<typeof decodeCurrentV2Launch> | null = null;
+      let decoded: DecodedCurrentV2Launch | null = null;
       if (d.tokenParamsVersion === 'v2-salt') {
-        try {
-          decoded = decodeCurrentV2Launch(data, d);
-        } catch (err: any) {
-          console.error(`[provenance] could not decode launch calldata: ${err?.message ?? err}`);
-        }
+        // MANDATORY, and it throws.
+        //
+        // This used to be best-effort: a decode failure was logged and provenance fell
+        // back to recomputed intentions. Wrong direction. If the encoder produced bytes
+        // this deployment's ABI cannot read, the bytes are not what anyone thinks they
+        // are, and the answer to "I cannot read what I am about to send" is to stop.
+        //
+        // It also checks the destination and that the calldata names the splitter just
+        // deployed -- the field that decides where a creator's fees go for the life of
+        // the token.
+        decoded = assertOutgoingLaunch({ to, data, value }, splitterAddress, d);
+        sentCalldata = decoded;
       }
 
       deps.db.recordLaunchProvenance(launchId, {
@@ -460,8 +476,46 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // `curve` was documented as lineage while being permanently null, which is worse
     // than an admitted gap.
     if (selected.tokenParamsVersion === 'v2-salt') {
-      const details = extractCurrentV2LaunchDetails(receipt.logs ?? []);
-      if (details?.curve) deps.db.updateLaunchProvenanceCurve(launchId, details.curve);
+      // Logs ONLY from the factory that was addressed.
+      //
+      // A receipt carries every log every contract in the transaction raised, and
+      // `TokenLaunched` has one signature across both V2 deployments -- so a log of that
+      // shape from any contract would decode cleanly and be read as this launch's token.
+      const fromFactory = extractLaunchFromReceipt((receipt.logs ?? []) as any, selected);
+
+      if (!fromFactory) {
+        // The launch confirmed, so this is not a failure of the launch. It is a failure
+        // to account for it, which an operator has to see.
+        console.error(
+          `[receipt] ${launchId} confirmed but ${selected.id} raised no TokenLaunched we could read`
+        );
+        notify(deps, (m) =>
+          m.onReplyFailed(mention.tweetId, 'no TokenLaunched from the selected factory', {
+            stage: 'receipt_reconcile',
+            txHash: sent.hash,
+          })
+        );
+      } else {
+        if (fromFactory.curve) deps.db.updateLaunchProvenanceCurve(launchId, fromFactory.curve);
+
+        // What came back, against what went out. A disagreement does not make the launch
+        // untrue -- the token exists and the fee is spent -- it means the record is wrong
+        // or the event is not ours. Either is an incident, not a partial success.
+        if (sentCalldata) {
+          const problems = reconcileReceipt(fromFactory, sentCalldata, treasuryAddress);
+          if (problems.length > 0) {
+            console.error(`[receipt] ${launchId} does not reconcile with what was sent:`);
+            for (const p of problems) console.error(`  - ${p}`);
+            notify(deps, (m) =>
+              m.onReplyFailed(mention.tweetId, 'launch receipt does not reconcile', {
+                stage: 'receipt_reconcile',
+                txHash: sent.hash,
+                problems,
+              })
+            );
+          }
+        }
+      }
     }
     deps.db.recordTreasurySpend(launchId, liveFee);
     notify(deps, (m) => m.onLaunchRecorded());

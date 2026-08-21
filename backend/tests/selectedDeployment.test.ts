@@ -258,3 +258,122 @@ describe('splitter type follows the deployment, not the flag', () => {
     }
   });
 });
+
+/**
+ * For a current-V2 launch, the outgoing bytes must be readable before they are sent.
+ *
+ * Provenance decoding was best-effort: a failure logged and fell back to recomputed
+ * intentions. That is the wrong direction. If the encoder produced calldata this
+ * deployment's own ABI cannot decode, the bytes are not what anyone thinks they are --
+ * and the response to "I cannot read what I am about to send" is to stop, not to write
+ * down what I meant instead.
+ */
+describe('current-V2 sends only calldata it can read back', () => {
+  const { assertOutgoingLaunch } = require('../src/launchAssertions');
+  const { buildCurrentV2LaunchCalldata, launchSalt } = require('../src/ponsV2CurrentEncoder');
+
+  const D = executableDeployment();
+  const SPLITTER = '0x2222222222222222222222222222222222222222';
+  const AAPL = '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9';
+  const ECON = '0x' + 'cd'.repeat(32);
+
+  function good() {
+    return buildCurrentV2LaunchCalldata(
+      {
+        tokenName: 'Moon', tokenSymbol: 'MOON', logo: '', description: '',
+        socials: { twitter: '', telegram: '', discord: '', website: '', farcaster: '' },
+        feeWallet: SPLITTER, launchConfigId: 0n, pairToken: AAPL,
+        creatorTaxBps: 0, buybackEnabled: false, expectedEconomics: ECON,
+        salt: launchSalt(D, 'tw-1'),
+      },
+      500_000_000_000_000n,
+      D
+    );
+  }
+
+  it('accepts calldata that decodes and matches', () => {
+    const built = good();
+    expect(() => assertOutgoingLaunch(built, SPLITTER, D)).not.toThrow();
+  });
+
+  it('refuses when the destination is not the selected factory', () => {
+    const built = { ...good(), to: deploymentById('pons-v2-legacy-7e1').factory };
+    expect(() => assertOutgoingLaunch(built, SPLITTER, D)).toThrow(/destination|factory/i);
+  });
+
+  /**
+   * The one that would send a creator's fees to the wrong contract: calldata naming a
+   * splitter other than the one just deployed and paid for.
+   */
+  it('refuses when the encoded fee recipient is not the deployed splitter', () => {
+    const built = good();
+    expect(() => assertOutgoingLaunch(built, '0x' + '77'.repeat(20), D)).toThrow(/recipient|splitter/i);
+  });
+
+  it('refuses calldata it cannot decode at all', () => {
+    const built = { ...good(), data: '0xf35abbcf' + 'ff'.repeat(64) };
+    expect(() => assertOutgoingLaunch(built, SPLITTER, D)).toThrow(/decode|read/i);
+  });
+
+  it('refuses a foreign selector rather than falling back', () => {
+    const built = good();
+    const foreign = { ...built, data: '0xa41d5f2b' + built.data.slice(10) };
+    expect(() => assertOutgoingLaunch(foreign, SPLITTER, D)).toThrow(/selector|decode|read/i);
+  });
+
+  it('returns the decoded fields, so provenance records bytes rather than intentions', () => {
+    const decoded = assertOutgoingLaunch(good(), SPLITTER, D);
+    expect(decoded.salt).toBe(launchSalt(D, 'tw-1'));
+    expect(decoded.expectedEconomics).toBe(ECON);
+    expect(decoded.pairToken.toLowerCase()).toBe(AAPL.toLowerCase());
+  });
+});
+
+/**
+ * Receipt logs are accepted only from the factory that was addressed.
+ *
+ * A transaction touches many contracts and a receipt carries every log any of them
+ * raised. `TokenLaunched` has one signature across both V2 deployments, so a log from
+ * ANY contract that emits that shape would decode cleanly -- and be read as this
+ * launch's token.
+ */
+describe('receipt decoding is scoped to the selected factory', () => {
+  const { extractLaunchFromReceipt } = require('../src/launchAssertions');
+  const { ethers } = require('ethers');
+  const { PONS_V2_CURRENT_ABI } = require('../src/ponsV2CurrentEncoder');
+
+  const D = executableDeployment();
+  const TOKEN = '0x3333333333333333333333333333333333333333';
+  const CURVE = '0x4444444444444444444444444444444444444444';
+  const DEPLOYER = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
+  const AAPL = '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9';
+
+  function launchedLog(address: string) {
+    const enc = new ethers.Interface(PONS_V2_CURRENT_ABI).encodeEventLog('TokenLaunched', [
+      TOKEN, CURVE, DEPLOYER, AAPL, 0n, 0n,
+    ]);
+    return { address, topics: enc.topics, data: enc.data };
+  }
+
+  it('reads a launch from the selected factory', () => {
+    const r = extractLaunchFromReceipt([launchedLog(D.factory)], D);
+    expect(r?.token).toBe(TOKEN);
+    expect(r?.curve).toBe(CURVE);
+  });
+
+  it('ignores an identically shaped event from another contract', () => {
+    const impostor = '0x' + '99'.repeat(20);
+    expect(extractLaunchFromReceipt([launchedLog(impostor)], D)).toBeNull();
+  });
+
+  it('matches the factory address case-insensitively', () => {
+    const upper = D.factory.toUpperCase().replace('0X', '0x');
+    expect(extractLaunchFromReceipt([launchedLog(upper)], D)?.token).toBe(TOKEN);
+  });
+
+  it('tolerates a log with no address field rather than crashing', () => {
+    const l: any = launchedLog(D.factory);
+    delete l.address;
+    expect(extractLaunchFromReceipt([l], D)).toBeNull();
+  });
+});

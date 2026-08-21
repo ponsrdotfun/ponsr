@@ -39,6 +39,7 @@ import { PairAssetRegistry } from '../src/pairTokens';
 import { ChainPairTokenSource } from '../src/pairTokenSource';
 import { executableDeployment } from '../src/deployments';
 import { assertDeploymentIdentity } from '../src/deploymentIdentity';
+import { extractLaunchFromReceipt } from '../src/launchAssertions';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -303,9 +304,63 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
     process.exit(1);
   }
 
-  const details = extractLaunchDetails(receipt.logs);
+  const selected = executableDeployment();
+  const isV2 = config.PONS_FACTORY_VERSION === 'v2';
+
   console.log();
   console.log('=== LAUNCHED ===');
+
+  if (isV2) {
+    /**
+     * V2 handoff.
+     *
+     * This branch did not exist. After a V2 launch the script read the receipt with the
+     * V1 extractor -- a different event shape from a different factory -- and then told
+     * the operator to call `locker.collectFees` and `splitter.splitERC20`, neither of
+     * which applies. V2 credits an escrow that pays `msg.sender`; there is no collect to
+     * call, and following those instructions would end in confusion at best.
+     */
+    const found = extractLaunchFromReceipt(receipt.logs as any, selected);
+    if (!found) {
+      console.error(`ABORTING: ${selected.id} raised no TokenLaunched we could read.`);
+      console.error('The transaction confirmed, so something launched -- but this receipt');
+      console.error('carries no event from the factory we addressed. Investigate before');
+      console.error('treating this launch as done.');
+      process.exit(1);
+    }
+
+    line('deployment', `${selected.id} (${selected.factory})`);
+    line('token', found.token);
+    line('curve', found.curve);
+    line('pairToken', found.pairToken);
+    line('deployer', found.deployer);
+    line('creator recipient', splitterAddress);
+
+    // The treasury must never buy into a token it launched for somebody else. Anything
+    // above the fee is treated by the factory as an initial buy, so an overpayment is a
+    // position taken on a stranger's launch -- fatal, not a warning.
+    const overpaid = value - fee;
+    if (overpaid !== 0n) {
+      console.error();
+      console.error(`ABORTING: the launch carried ${overpaid} wei above the live fee.`);
+      console.error('The factory treats anything above the fee as an initial buy, so the');
+      console.error('treasury has taken a position in a token it launched for someone else.');
+      process.exit(1);
+    }
+
+    console.log();
+    console.log('Next, by hand:');
+    console.log('  1. Trade against the curve a few times to generate real fees.');
+    console.log(`  2. npx tsx scripts/collect-and-split-v2.ts ${splitterAddress} --token=${found.token}`);
+    console.log('     (dry run first; add --execute to claim)');
+    console.log('  3. Require RECONCILED -- exact 95/5 and nothing left in escrow or splitter.');
+    console.log();
+    console.log('  Do NOT call locker.collectFees or splitter.splitERC20 here. Those are v1:');
+    console.log('  v2 credits an escrow that pays msg.sender, and there is nothing to collect.');
+    return;
+  }
+
+  const details = extractLaunchDetails(receipt.logs);
   line('token', details?.token ?? '(TokenLaunched not found in logs)');
   line('pool', details?.pool ?? '-');
   line('pairToken', details?.pairToken ?? '-');
@@ -313,9 +368,12 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
   line('initialBuyAmount', `${details?.initialBuyAmount?.toString() ?? '-'}   <- must be 0`);
   console.log();
 
+  // Fatal on v1 too. A nonzero initial buy means the treasury bought into a token it
+  // launched for somebody else, and a warning printed after the fact changes nothing.
   if (details && details.initialBuyAmount !== 0n) {
-    console.error('⚠️  initialBuyAmount is NOT zero. The treasury just bought into this token.');
-    console.error('   That means msg.value exceeded launchFee -- investigate before launching again.');
+    console.error('ABORTING: initialBuyAmount is NOT zero. The treasury bought into this token.');
+    console.error('msg.value exceeded launchFee. Do not launch again until that is understood.');
+    process.exit(1);
   }
 
   console.log('Next, by hand:');

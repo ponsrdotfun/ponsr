@@ -103,6 +103,19 @@ export class ChainPairTokenSource implements PairTokenSource {
     this.factoryAddress = this.deployment.factory;
     // The deployment's own start block, not a separately configurable number that can
     // drift below it (scanning nothing) or above it (silently missing approvals).
+    // An override may scan MORE history, never less.
+    //
+    // Above the deployment's start block, approvals granted earlier are silently absent
+    // -- which looks exactly like pons never having granted them, so the bot refuses an
+    // asset pons does support and the refusal is indistinguishable from a correct one.
+    // Below it merely costs time: empty blocks scanned for nothing.
+    if (opts.fromBlock !== undefined && opts.fromBlock > this.deployment.startBlock) {
+      throw new Error(
+        `pair scanner was told to start at block ${opts.fromBlock}, after ${this.deployment.id} ` +
+          `began at ${this.deployment.startBlock}. Approvals before that would be invisible, ` +
+          'and an invisible approval is indistinguishable from one pons never granted.'
+      );
+    }
     this.fromBlock = opts.fromBlock ?? this.deployment.startBlock;
 
     this.factory = new ethers.Contract(

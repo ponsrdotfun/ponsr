@@ -139,3 +139,58 @@ describe('the pair scanner cannot be pointed at a mismatched pair', () => {
     expect(src.fromBlock).toBe(d.startBlock);
   });
 });
+
+/**
+ * An override may scan MORE history, never less.
+ *
+ * `fromBlock` defaulted to the deployment's start block but an override could sit above
+ * it, and above is the dangerous direction: approvals granted before that block are
+ * silently absent, which looks exactly like pons never having granted them. The bot then
+ * refuses an asset pons does support, and the refusal is indistinguishable from a correct
+ * one.
+ *
+ * Below the start block is merely slower -- empty blocks scanned for nothing -- so it is
+ * allowed and noted rather than refused.
+ */
+describe('the scanner cannot be told to skip a deployment’s early history', () => {
+  const { ChainPairTokenSource } = require('../src/pairTokenSource');
+  const { executableDeployment } = require('../src/deployments');
+  const provider = {} as never;
+
+  it('defaults to the deployment’s own start block', () => {
+    const d = executableDeployment();
+    expect(new ChainPairTokenSource({ provider, deployment: d }).fromBlock).toBe(d.startBlock);
+  });
+
+  it('refuses an override later than the deployment start', () => {
+    const d = executableDeployment();
+    expect(
+      () => new ChainPairTokenSource({ provider, deployment: d, fromBlock: d.startBlock + 1 })
+      // The refusal must say WHY, not merely that it refused: an operator who set this
+      // number believed it was safe, and the message is what corrects that belief.
+    ).toThrow(/invisible|began at/i);
+  });
+
+  it('names both blocks when it refuses, so the mistake is visible', () => {
+    const d = executableDeployment();
+    try {
+      new ChainPairTokenSource({ provider, deployment: d, fromBlock: d.startBlock + 5000 });
+      throw new Error('should have refused');
+    } catch (e: any) {
+      expect(e.message).toContain(String(d.startBlock));
+    }
+  });
+
+  it('allows an earlier override, which only costs time', () => {
+    const d = executableDeployment();
+    const src = new ChainPairTokenSource({ provider, deployment: d, fromBlock: d.startBlock - 1000 });
+    expect(src.fromBlock).toBe(d.startBlock - 1000);
+  });
+
+  it('allows exactly the start block', () => {
+    const d = executableDeployment();
+    expect(
+      new ChainPairTokenSource({ provider, deployment: d, fromBlock: d.startBlock }).fromBlock
+    ).toBe(d.startBlock);
+  });
+});

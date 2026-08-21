@@ -18,6 +18,7 @@
 import { config } from '../src/config';
 import { deploymentById, executableDeployment } from '../src/deployments';
 import { classifyTurnkeyOutcome, describeOutcome, Outcome } from '../src/turnkeyOutcome';
+import { splitterArtifactFor } from '../src/splitterDeployer';
 
 const ARBITRARY = '0x000000000000000000000000000000000000dEaD';
 
@@ -121,12 +122,39 @@ function line(label: string, value: unknown) {
   });
   line('1b. tx to the CURRENT factory', show(toCurrent, 'allowed'));
 
+  /**
+   * Which deployment the ROLLOUT needs, not which one config currently names.
+   *
+   * With the flag still on v1 this script would PASS while the current V2 factory was
+   * denied -- and the runbook's very next step flips to v2. A gate that goes green
+   * immediately before the change that invalidates it is not a gate.
+   *
+   *   --target-deployment pons-v2-current-7ed
+   *
+   * Given one, that deployment being denied is fatal regardless of the flag.
+   */
+  const targetArg = process.argv
+    .find((a) => a.startsWith('--target-deployment='))
+    ?.slice('--target-deployment='.length);
+  const rolloutTarget = targetArg ? deploymentById(targetArg) : null;
+  if (rolloutTarget) line('rollout target', `${rolloutTarget.id}  <- must be ALLOWED`);
+
   const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
   const toFactory = wantV2 ? toCurrent : toV1;
+  // The rollout target, when named, is checked in addition to whatever config says.
+  const rolloutOk =
+    !rolloutTarget ||
+    (rolloutTarget.id === target.id ? toCurrent.kind === 'allowed' : toV1.kind === 'allowed');
 
+  // The ACTUAL splitter initcode, not a ten-byte prefix.
+  //
+  // A prefix proves a creation is allowed in general. If exact-initcode binding is ever
+  // chosen -- it is one of the two designs for closing the funded-creation finding --
+  // a prefix would pass a rule that the real deployment then fails, which is the worst
+  // possible time to discover the difference.
   const deploy = await attempt('deploy', {
     ...base,
-    data: '0x60806040523480156100',
+    data: splitterArtifactFor(target).bytecode,
     value: 0n,
   });
   line('2. contract creation', show(deploy, 'allowed'));
@@ -153,7 +181,7 @@ function line(label: string, value: unknown) {
    */
   const fundedCreation = await attempt('funded creation', {
     ...base,
-    data: '0x60806040523480156100',
+    data: splitterArtifactFor(target).bytecode,
     value: 1000000000000000000n,
   });
   line('4. contract creation CARRYING FUNDS', show(fundedCreation, 'denied'));
@@ -175,6 +203,7 @@ function line(label: string, value: unknown) {
   }
 
   const good =
+    rolloutOk &&
     toFactory.kind === 'allowed' &&
     deploy.kind === 'allowed' &&
     elsewhere.kind === 'denied' &&
@@ -195,6 +224,12 @@ function line(label: string, value: unknown) {
     }
   } else {
     console.log('=== NOT SAFE YET ===');
+    if (rolloutTarget && !rolloutOk) {
+      console.log(`  The rollout target ${rolloutTarget.id} is DENIED by the policy.`);
+      console.log('  Config still says ' + config.PONS_FACTORY_VERSION + ', so this run would');
+      console.log('  otherwise have passed -- and the next runbook step flips to that target,');
+      console.log('  producing a bot refused by its own signer after the splitter is paid for.');
+    }
     if (fundedCreation.kind === 'allowed') {
       console.log('  THE TREASURY IS DRAINABLE BY THIS KEY.');
       console.log('  Turnkey signed a contract creation carrying funds. A creation has no');
