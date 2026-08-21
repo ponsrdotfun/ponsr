@@ -81,7 +81,9 @@ had grown past 500 -- and a stale number looks exactly like evidence.
 - **Contract:** `npm test` at the root (`contracts-test/`)
 - **Website:** `node website/smoke-test.js`
 - **Backend:** `cd backend && npm test` (`backend/tests/`)
-- **Total: 232 automated checks, all run and passing.**
+No total is given here on purpose. Every hardcoded figure in this repository has been
+wrong within a week -- this line said 232 while the three suites together had passed 670 --
+and a stale number reads exactly like evidence. Run them; they print their own counts.
 
 All three suites were executed to produce those numbers — none of it is a claim taken on
 faith. Re-run any of them with the commands above (`backend/` needs `npm install` first,

@@ -38,6 +38,14 @@ expect the activity entries, and do not repeat them to "check again". The keyles
 alternatives -- `npm run read:policies` for what the rules say, `npm run verify:ethcall`
 for the chain -- answer most questions without signing anything.
 
+**Never run an admin or mutation script here.** `turnkey-allow-v2-factory.ts`,
+`turnkey-scope-bot-user.ts` and `turnkey-policy-probe.ts` change the live Turnkey
+organisation -- the last one creates a deny-everything policy that stops the whole
+organisation signing while it exists. None of them belongs in install, tests, audit or
+rollout verification. Running one is a separate operator ceremony that names the exact
+script and the exact mutation, and it is not part of this runbook. The authority matrix
+is in [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md).
+
 The first row blocks everything else. A bot key that can attach funds to a contract
 creation can empty the hot wallet, so shipping the launch path before closing it makes
 the treasury reachable by anyone who obtains that key.
@@ -52,16 +60,22 @@ database are exactly the launches you would be restoring to recover.
 Stop the writer, or use SQLite's online backup. Stopping is simpler and this is a
 planned change:
 
+**Do not scale to zero and then SSH.** With no machines there is nothing to SSH into, so
+the backup you just started cannot be taken and the restore you might need cannot be run.
+An earlier version of this runbook did exactly that; the sequence was unexecutable.
+
+Quiesce the WRITER while keeping the machine, then use SQLite's own online backup:
+
 ```bash
-# 1. Stop the only writer.
-fly scale count 0 --yes
+# 1. Stop the application process, KEEPING the machine and its volume reachable.
+#    The Fly machine stays up; only the writer inside it stops.
+fly ssh console -C "supervisorctl stop app || pkill -f 'node dist/index.js' || true"
+fly ssh console -C "pgrep -f 'node dist/index.js' || echo 'writer stopped'"
 
 # 2. Consistent copy, checkpointed and timestamped.
-#    WRITE THIS PATH DOWN. Rollback restores this exact file and nothing else.
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP=/data/bot.sqlite.$STAMP
 fly ssh console -C "sqlite3 /data/bot.sqlite \".backup '$BACKUP'\""
-echo "BACKUP=$BACKUP"    # record alongside the checksum below
 
 # 3. Prove the copy is a database, not a file of the right size.
 fly ssh console -C "sqlite3 $BACKUP 'PRAGMA integrity_check;'"
@@ -69,7 +83,15 @@ fly ssh console -C "sqlite3 $BACKUP 'PRAGMA foreign_key_check;'"
 
 # 4. Record what you have, so a restore can be checked against it later.
 fly ssh console -C "sha256sum $BACKUP; ls -l $BACKUP; stat -c '%U:%G %a' $BACKUP"
+
+# 5. A MANIFEST, off the machine. $BACKUP dies with this shell; a restore may happen
+#    days later, from a different terminal, possibly by someone else.
+fly ssh console -C "stat -c '%n %s %U %G %a' $BACKUP; sha256sum $BACKUP" \
+  | tee "./backup-manifest-$STAMP.txt"
 ```
+
+The manifest is the artifact that matters. Restore reads it; it does not rely on a
+variable from a session that has since closed.
 
 Required before continuing:
 
@@ -181,9 +203,28 @@ Abort criteria, any one of them:
 After the canary has traded at least once:
 
 ```bash
-npm run collect:v2 -- <splitterAddress> --token=<launchedToken>              # dry run
-npm run collect:v2 -- <splitterAddress> --token=<launchedToken> --execute
+cd backend
+
+# Dry run. Reads only -- no key is read, nothing is signed, nothing is sent.
+npm run collect:v2 -- <splitterAddress> --token=<launchedToken>
+
+# Execute. This SIGNS and BROADCASTS a claim transaction.
+COLLECTOR_OPERATOR_PRIVATE_KEY=0x... \
+  npm run collect:v2 -- <splitterAddress> --token=<launchedToken> --execute
 ```
+
+The dry run needs no credential at all, and demanding one would be backwards -- it would
+make the safe path require the dangerous input.
+
+Execute is an operator ceremony. `claimAndSplit` is **permissionless**: anyone may call
+it, and it pays only the creator and treasury addresses fixed immutably when the splitter
+was deployed. So any funded wallet you control works, and the sender gains nothing by
+being the treasury.
+
+**Do not use the bot's key.** `TREASURY_SIGNER_PRIVATE_KEY` is testnet-only, refuses to
+run under `NODE_ENV=production`, and belongs to the identity whose Turnkey policy exists
+precisely so it cannot move funds freely. Supply the key inline for the one command, as
+above, so it is not written to a file. Nothing here prints or persists it.
 
 `--token` is required unless the launch records are on the same machine. Every splitter
 the bot deploys carries `token()` = zero -- it is created before the token exists -- so
@@ -247,12 +288,30 @@ the canary to have completed §4 and §5 cleanly.
 
 ## Rollback
 
+Record these BEFORE §2, while the current state is still the good one:
+
+```bash
+fly releases --json | jq -r '.[0] | "RELEASE=\(.Version)  IMAGE=\(.ImageRef)"' \
+  | tee ./rollback-target.txt
+git rev-parse HEAD | tee -a ./rollback-target.txt        # the website commit to revert to
+```
+
 | what | how | owner |
 |---|---|---|
 | config only | `fly secrets set PONS_FACTORY_VERSION=v1` | operator, no approval needed |
-| code | `fly deploy` the previous release | operator |
-| database | restore `$BACKUP` from §1 — see the ordered procedure below | operator |
-| website | revert the merge commit and push | operator |
+| code | `fly deploy --image <IMAGE from rollback-target.txt>` — never "the previous release", which is not a thing you can type | operator |
+| database | restore from `backup-manifest-<STAMP>.txt` — ordered procedure below | operator |
+| website | `git revert -m 1 <merge commit>` then push; Netlify republishes from `main` | operator |
+
+After a code rollback, prove it went back rather than assuming:
+
+```bash
+curl -s https://<backend>/status | jq -e '.checks[] | select(.name=="deployment")
+  | select(.detail | test("pons-v1"))'
+```
+
+"Deploy the previous release" is not an executable instruction. An image digest and a
+release number are.
 
 ### Restoring the database
 
@@ -263,28 +322,51 @@ path no step produces, so the instruction would have failed at the worst possibl
 Order matters, because a live writer and a file swap do not mix:
 
 ```bash
-# 1. Stop the writer FIRST. Restoring under a running process corrupts both.
-fly scale count 0 --yes
+# 0. Read the manifest written in §1. Everything below comes from it -- no variable
+#    from an earlier shell, no remembered path.
+MANIFEST=./backup-manifest-<STAMP>.txt
+BACKUP=$(awk 'NR==1{print $1}' "$MANIFEST")
+WANT_SHA=$(awk 'END{print $1}' "$MANIFEST")
+OWNER=$(awk 'NR==1{print $3":"$4}' "$MANIFEST")
+MODE=$(awk 'NR==1{print $5}' "$MANIFEST")
+echo "restoring $BACKUP  sha=$WANT_SHA  owner=$OWNER  mode=$MODE"
 
-# 2. Confirm the artifact is the one you checksummed in §1.
-fly ssh console -C "sha256sum $BACKUP"
+# 1. Stop the WRITER, keeping the machine reachable. Never scale to zero here: the
+#    restore itself needs a shell on the volume.
+fly ssh console -C "supervisorctl stop app || pkill -f 'node dist/index.js' || true"
+fly ssh console -C "pgrep -f 'node dist/index.js' || echo 'writer stopped'"
 
-# 3. Replace, and clear the WAL siblings -- a stale -wal against a restored
-#    database is a torn state that opens and then disagrees with itself.
+# 2. Confirm the artifact is the one the manifest describes, before touching anything.
+fly ssh console -C "sha256sum $BACKUP" | grep -q "$WANT_SHA" \
+  && echo 'checksum matches' || { echo 'CHECKSUM MISMATCH -- stop'; exit 1; }
+
+# 3. PRESERVE the current file before replacing it. Whatever went wrong, that database
+#    is the only record of everything since the backup, and it is also the evidence.
+FAILED=/data/bot.sqlite.failed-$(date -u +%Y%m%dT%H%M%SZ)
+fly ssh console -C "cp /data/bot.sqlite $FAILED && echo preserved $FAILED"
+
+# 4. Replace, clearing the WAL siblings -- a stale -wal against a restored database is
+#    a torn state that opens and then disagrees with itself.
 fly ssh console -C "rm -f /data/bot.sqlite /data/bot.sqlite-wal /data/bot.sqlite-shm"
 fly ssh console -C "cp $BACKUP /data/bot.sqlite"
 
-# 4. Ownership and mode, to whatever step 4 of §1 recorded.
-fly ssh console -C "chown <user>:<group> /data/bot.sqlite && chmod 644 /data/bot.sqlite"
+# 5. Ownership and mode replayed from the manifest, not guessed.
+fly ssh console -C "chown $OWNER /data/bot.sqlite && chmod $MODE /data/bot.sqlite"
 
-# 5. Prove it before starting anything.
+# 6. Prove it before starting anything.
 fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA integrity_check;'"
 fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA foreign_key_check;'"
+fly ssh console -C "sqlite3 /data/bot.sqlite 'SELECT COUNT(*) FROM launches;'"
 
-# 6. Restart, then check health rather than assuming it.
-fly scale count 1 --yes
-curl -s https://<backend>/status | jq -e '.checks[] | select(.name=="database")'
+# 7. Restart the writer and check health rather than assuming it.
+fly ssh console -C "supervisorctl start app || fly machine restart"
+curl -s https://<backend>/status | jq -e '.checks[] | select(.state!="down")'
 ```
+
+A restore that lands root-owned when the app runs unprivileged produces a process that
+starts, listens, and cannot write -- which looks exactly like health until the first
+launch it fails to record. That is why step 5 replays the recorded owner rather than
+assuming one.
 
 The database restore is the only rollback with a deadline: rows written after the
 migration carry provenance columns the old code does not select, which is harmless — but
@@ -300,10 +382,14 @@ permanently. Everything above this line is reversible; that is not.
 Two things in the repository disagreed before this was written, and both are settled here:
 
 - **signer state.** `RawKeyTreasurySigner` refuses to run under `NODE_ENV=production` and
-  `TREASURY_SIGNER_PRIVATE_KEY` must not be set there. But `collect-and-split-v2.ts`
-  requires that key. It is an **operator-run script for testnet and for local dry runs**;
-  on mainnet the claim is permissionless, so anyone — including a wallet the owner
-  controls directly — can call `claimAndSplit`. It does not need the bot's key.
+  `TREASURY_SIGNER_PRIVATE_KEY` must not be set there.
+
+  <!-- historical -->
+  This entry used to say `collect-and-split-v2.ts` requires that key and is for local dry
+  runs. That stopped being true on 2026-08-21 and the entry did not: the collector reads
+  with a provider and no credential at all, and asks for
+  `COLLECTOR_OPERATOR_PRIVATE_KEY` only under `--execute`.
+  <!-- /historical -->
 - **removed env variables.** `PONS_V2_FACTORY_ADDRESS` and `PONS_V2_FEE_ESCROW_ADDRESS`
   were deleted on 2026-08-20. They may still sit in a `.env` somewhere; they are read by
   nothing. `PONS_V2_APPROVALS_FROM_BLOCK` is likewise no longer read — the scanner takes

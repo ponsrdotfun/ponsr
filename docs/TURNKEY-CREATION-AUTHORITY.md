@@ -48,11 +48,13 @@ still prints green on the way past, because no arbitrary address was ever named.
 
 Until this is closed, these statements are **wrong** and have been corrected in place:
 
+<!-- historical -->
 - `CLAUDE.md` — "a leak of the bot's key now costs launches, not the treasury"
 - `BUILD-STATUS.md` — "A leak of that key costs launches, not the treasury."
 - `docs/MIGRATION-ACCEPTANCE-2026-08-20.md` §6
 - `docs/WRITER-BOT-BRIEF.md`
 - `scripts/turnkey-verify-policy.ts` — printed it on PASS
+<!-- /historical -->
 
 The verifier now runs the funded-creation case as check 4 and **cannot report PASSED**
 while it is allowed.
@@ -136,4 +138,35 @@ and a wrong-selector mutation must be denied. Until then it is a proposal, not a
 4. Run `npm run signer:verify-policy` and require PASSED.
 5. Only then may any document say a leaked bot key cannot reach the treasury.
 
-Nothing in this repository performs steps 1–2, by design.
+### What this repository CAN do, stated plainly
+
+An earlier version of this line said nothing here performs steps 1-2. That was wrong, and
+the correction matters more than the sentence: three scripts can change the live Turnkey
+organisation, and one of them used to do it without being asked.
+
+| script | reads | signs | mutates | writes credentials |
+|---|:--:|:--:|:--:|:--:|
+| `turnkey-read-policies.ts` | ✓ | | | |
+| `turnkey-verify-policy.ts` | ✓ | ✓ | | |
+| `turnkey-probe-creation.ts` | ✓ | ✓ | | |
+| `turnkey-allow-v2-factory.ts` | ✓ | | **createPolicy** | |
+| `turnkey-scope-bot-user.ts` | ✓ | | **createUser, createApiKeys, createPolicy** | **rewrites `backend/.env`** |
+| `turnkey-policy-probe.ts` | ✓ | ✓ | **createPolicy(DENY-ALL), deletePolicy** | |
+
+The last row is the dangerous one. It applies a deny-everything policy to find out whether
+policies bite, then removes it in a `finally`. **While that policy exists nothing in the
+organisation can sign** -- and if the process dies in between, or the delete fails, it
+stays that way. That is the same outage that cost a day on 2026-08-20, reached from the
+other direction.
+
+It ran on its name alone until 2026-08-21. It now requires `--execute` **and**
+`--acknowledge=I-UNDERSTAND-THIS-DISABLES-SIGNING`, prints the policy id unmistakably
+before anything can be lost, and verifies the deletion by re-reading the policy list
+rather than trusting that `deletePolicy` returned. If it cannot prove the deletion it
+raises an incident and exits non-zero.
+
+`tests/turnkeyAuthority.test.ts` holds this matrix and fails if a mutation entrypoint
+stops asking, or if a script classified read-only grows a mutating call.
+
+**None of these scripts belong in ordinary install, test, audit or rollout verification.**
+Running one is an operator ceremony that names the exact script and the exact mutation.
