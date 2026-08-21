@@ -164,29 +164,18 @@ describe('provenance records the full lineage', () => {
     expect(back.tokenParamsVersion).toBe('v2-salt');
   });
 
-  // Forward-safe: a database created before these columns existed must open, keep its
-  // rows, and read them back with the new fields empty rather than guessed.
-  it('adds the columns to a database that predates them, without losing rows', () => {
-    const path = './data/test-provenance-migrate.sqlite';
-    if (fs.existsSync(path)) fs.unlinkSync(path);
-    const older = new Db(path);
-    older.claimTweetForProcessing('tw-old');
-    older.insertLaunch({
-      id: 'old1', sourceTweetId: 'tw-old', xUserId: 'u1',
-      tokenName: 'Old', tokenSymbol: 'OLD', status: 'confirmed', createdAt: new Date().toISOString(),
-      splitterAddress: null, tokenAddress: null, txHash: null, rejectionReason: null, feeWeiPaid: null,
-    } as any);
-    // Drop the new columns to simulate the older schema exactly.
-    (older as any).raw?.exec?.('ALTER TABLE launch_provenance DROP COLUMN splitter');
-    older.close();
-
-    const reopened = new Db(path);
-    try {
-      // The row survives the schema change; provenance for it is simply absent, which
-      // is the honest answer for a launch made before these columns existed.
-      expect(reopened.getLaunchProvenance('old1')).toBeNull();
-    } finally {
-      reopened.close();
-    }
+  it('migration is covered in tests/provenanceMigration.test.ts', () => {
+    // Moved to tests/provenanceMigration.test.ts, and rewritten there, because the
+    // version that lived here was a false green.
+    //
+    // It built the fixture with the CURRENT `Db` class -- which creates the new schema --
+    // then tried to remove a column with
+    // `(older as any).raw?.exec?.('ALTER TABLE ...')`. There is no `raw` property, so the
+    // optional chain evaluated to `undefined` and the ALTER never ran. It opened a modern
+    // database with modern code, asserted that worked, and proved nothing about migration.
+    //
+    // Optional chaining on a property nobody verified turns "this step did not happen"
+    // into silence, and in a test silence reads as success.
+    expect(true).toBe(true);
   });
 });
