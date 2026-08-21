@@ -42,9 +42,29 @@ export interface PolicyLike {
  * somebody needs.
  */
 export function normalizeCondition(condition: string | undefined): string {
-  return String(condition ?? '')
-    .replace(/\s+/g, '')
-    .toLowerCase();
+  const raw = String(condition ?? '');
+
+  // Refuse what this has not been shown to handle.
+  //
+  // Lowercasing the whole expression is correct for the rules that exist -- EVM
+  // addresses are case-insensitive, and two scripts can submit the same rule with
+  // different checksum casing. It is not correct in general: calldata and function names
+  // carry meaning in their case, so lowercasing makes two DIFFERENT rules compare equal.
+  //
+  // This function decides whether a rule already exists. Answering "yes" wrongly means
+  // the rule somebody needs never gets created -- and the rules likely to arrive next are
+  // exactly the case-sensitive ones, since binding a selector is one of the proposed
+  // closures for the funded-creation finding.
+  if (/eth\.tx\.(data|function_name|contract_call_args)/i.test(raw)) {
+    throw new Error(
+      'normalizeCondition only handles address, chain-id and value comparisons. This ' +
+        'condition compares calldata or a function name, where case is meaning: ' +
+        raw.slice(0, 120) +
+        ' -- preserve case-sensitive literals before comparing, rather than lowercasing.'
+    );
+  }
+
+  return raw.replace(/\s+/g, '').toLowerCase();
 }
 
 /** Same for the consensus expression, which encodes which user the policy binds. */

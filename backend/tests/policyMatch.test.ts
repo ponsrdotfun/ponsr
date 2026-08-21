@@ -98,3 +98,55 @@ describe('findEquivalentPolicy', () => {
     expect(found?.policyId).toBe('p6');
   });
 });
+
+/**
+ * Normalisation is scoped to what it was proven safe for.
+ *
+ * `normalizeCondition` lowercases the WHOLE expression. That is correct for the rules
+ * that exist -- `eth.tx.to == '0x…'`, where EVM addresses are case-insensitive and two
+ * scripts can submit the same rule with different checksum casing.
+ *
+ * It is not correct in general. The moment a condition carries a selector or calldata
+ * comparison, lowercasing makes two DIFFERENT rules look identical, and this function's
+ * job is to decide whether a rule already exists. Answering "yes" wrongly means the rule
+ * somebody needs never gets created.
+ *
+ * So it refuses conditions it has not been shown to handle rather than guessing.
+ */
+describe('normalizeCondition refuses what it cannot safely compare', () => {
+  it('handles the address-only rules it was written for', () => {
+    expect(() => normalizeCondition("eth.tx.to == '0xAbCd'")).not.toThrow();
+    expect(() => normalizeCondition("eth.tx.to == '0xaa' || eth.tx.to == ''")).not.toThrow();
+  });
+
+  it('accepts a chain id comparison, which is numeric', () => {
+    expect(() => normalizeCondition("eth.tx.to == '0xaa' && eth.tx.chain_id == 4663")).not.toThrow();
+  });
+
+  it('accepts a value ceiling, also numeric', () => {
+    expect(() => normalizeCondition("eth.tx.to == '0xaa' && eth.tx.value <= 2000000000000000")).not.toThrow();
+  });
+
+  /**
+   * The one that matters: calldata is case-sensitive in a way addresses are not, and a
+   * selector comparison lowercased is a selector comparison that can collide.
+   */
+  it('refuses a calldata comparison rather than lowercasing it', () => {
+    expect(() => normalizeCondition("eth.tx.data[0..10] == '0xF35ABBCF'")).toThrow(/case|calldata|data/i);
+  });
+
+  it('refuses a function-name comparison, where case is meaning', () => {
+    // `launchToken` and `launchtoken` are different functions as far as an ABI is
+    // concerned; treating them as one would match a rule that does not exist.
+    expect(() => normalizeCondition("eth.tx.function_name == 'launchToken'")).toThrow(/case|function/i);
+  });
+
+  it('says what to do rather than only refusing', () => {
+    try {
+      normalizeCondition("eth.tx.data[0..10] == '0xF35ABBCF'");
+      throw new Error('should have refused');
+    } catch (e: any) {
+      expect(e.message).toMatch(/case-sensitive|preserve/i);
+    }
+  });
+});

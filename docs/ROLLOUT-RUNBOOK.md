@@ -12,11 +12,20 @@ happened.
 
 | gate | how | abort if |
 |---|---|---|
-| Turnkey creation authority | `npx tsx scripts/turnkey-probe-creation.ts` | case 2 is **ALLOWED** — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). This is currently open. |
-| Policy verified | `npx tsx scripts/turnkey-verify-policy.ts` | anything other than **PASSED** |
+| Turnkey creation authority | `npm run probe:creation` | case 2 is **ALLOWED** — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). This is currently open. |
+| Policy verified **for the rollout target** | `npm run verify:policy -- --target-deployment=pons-v2-current-7ed` | anything other than **PASSED** |
 | Artifacts reproduce | `node scripts/verify-artifacts-reproducible.js` | **NOT REPRODUCIBLE** |
 | Suites | `cd backend && npm run build && npx jest`, `npm test`, `node website/smoke-test.js` | any failure |
-| Live identity | `RPC_URL=… CHAIN_ID=4663 npx tsx scripts/verify-current-ethcall.ts` | anything but **PASSED** |
+| Live identity | `RPC_URL=… CHAIN_ID=4663 npm run verify:ethcall` | anything but **PASSED** |
+| Fresh install | `npm ci` at root **and** `backend/` | any resolution error |
+
+Every command above runs a **pinned local binary** through an npm script. Do not type
+`npx` during a rollout: it fetches whatever the registry serves at that moment, and
+this sequence moves treasury funds.
+
+The `--target-deployment` flag is not optional. Without it the verifier passes on
+whatever `PONS_FACTORY_VERSION` currently names -- and §3 flips that setting minutes
+later, so a gate that went green about the old value proves nothing about the new one.
 
 The first row blocks everything else. A bot key that can attach funds to a contract
 creation can empty the hot wallet, so shipping the launch path before closing it makes
@@ -24,17 +33,55 @@ the treasury reachable by anyone who obtains that key.
 
 ## 1. Back up
 
+**Do not `cp` a live SQLite file.** The database runs in WAL mode, so at any instant the
+`.sqlite` file is missing whatever sits in `-wal` and a plain copy is a torn snapshot:
+it opens, it looks fine, and it is missing the most recent writes -- which for this
+database are exactly the launches you would be restoring to recover.
+
+Stop the writer, or use SQLite's online backup. Stopping is simpler and this is a
+planned change:
+
 ```bash
-fly ssh console -C "cp /data/bot.sqlite /data/bot.sqlite.pre-v2"
+# 1. Stop the only writer.
+fly scale count 0 --yes
+
+# 2. Consistent copy, checkpointed and timestamped.
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+fly ssh console -C "sqlite3 /data/bot.sqlite \".backup '/data/bot.sqlite.$STAMP'\""
+
+# 3. Prove the copy is a database, not a file of the right size.
+fly ssh console -C "sqlite3 /data/bot.sqlite.$STAMP 'PRAGMA integrity_check;'"
+fly ssh console -C "sqlite3 /data/bot.sqlite.$STAMP 'PRAGMA foreign_key_check;'"
+
+# 4. Record what you have, so a restore can be checked against it later.
+fly ssh console -C "sha256sum /data/bot.sqlite.$STAMP; ls -l /data/bot.sqlite.$STAMP"
 ```
 
-The provenance migration is **additive and in-place**. There is nothing to undo, so this
-copy *is* the rollback plan — see `tests/provenanceMigration.test.ts`, which proves a
-copy taken beforehand restores the legacy schema exactly, and that pre-migration queries
-still work against a migrated file.
+Required before continuing:
 
-Verify the copy is non-zero before continuing. A backup nobody checked is a backup
-nobody has.
+- `integrity_check` returns exactly `ok`;
+- `foreign_key_check` returns nothing;
+- the size is non-zero and the checksum is written down somewhere outside the machine.
+
+`.backup` is SQLite's own online backup: it checkpoints the WAL and produces a single
+consistent file. `sqlite3 X ".backup Y"` on a stopped writer is belt and braces, and it
+is what makes step 3 meaningful.
+
+**Verify the restore in isolation before you need it**, on a scratch path rather than
+over the live file:
+
+```bash
+fly ssh console -C "cp /data/bot.sqlite.$STAMP /data/restore-test.sqlite"
+fly ssh console -C "sqlite3 /data/restore-test.sqlite 'SELECT COUNT(*) FROM launches;'"
+fly ssh console -C "rm /data/restore-test.sqlite"
+```
+
+A backup nobody has restored is a backup nobody has.
+
+The provenance migration is **additive and in-place**. There is nothing to undo, so this
+copy *is* the rollback plan -- `tests/provenanceMigration.test.ts` proves a copy taken
+beforehand restores the legacy schema exactly, and that pre-migration queries still work
+against a migrated file.
 
 ## 2. Order: code before config
 
@@ -90,8 +137,8 @@ The first launch goes to a wallet the owner controls. Not a user's.
 
 ```bash
 cd backend
-PAIR_WITH=ETH npx tsx scripts/phase-b-launch.ts            # dry run first
-PAIR_WITH=ETH npx tsx scripts/phase-b-launch.ts --execute
+PAIR_WITH=ETH npm run launch:canary                # dry run first
+PAIR_WITH=ETH npm run launch:canary -- --execute
 ```
 
 Spend ceiling for the canary: **0.002 ETH** (`TREASURY_MAX_FEE_WEI`). The live launch fee
@@ -115,14 +162,22 @@ Abort criteria, any one of them:
 After the canary has traded at least once:
 
 ```bash
-npx tsx scripts/collect-and-split-v2.ts <splitterAddress>            # dry run
-npx tsx scripts/collect-and-split-v2.ts <splitterAddress> --execute
+npm run collect:v2 -- <splitterAddress> --token=<launchedToken>              # dry run
+npm run collect:v2 -- <splitterAddress> --token=<launchedToken> --execute
 ```
 
-Required: the split matches the contract's own arithmetic — creator floor(95%), treasury
-the remainder — and **zero residue** in both the splitter and the escrow afterwards. The
-fork rehearsal produces exactly this shape; anything else means the escrow binding is
-wrong, which is the failure with no recovery.
+`--token` is required unless the launch records are on the same machine. Every splitter
+the bot deploys carries `token()` = zero -- it is created before the token exists -- so
+the collector cannot infer it, and refuses to guess rather than claiming against nothing.
+The canary output in §4 prints the exact command with the token filled in.
+
+The script now **reconciles rather than reports**: it measures both recipients' balances
+before and after, requires creator = floor(claimed x 9500/10000) with the remainder to
+the treasury, requires zero left in the splitter and the escrow, prints machine-readable
+evidence, and exits non-zero on any mismatch. A reverted claim is fatal, not narrated.
+
+Require the final line to read **RECONCILED**. Anything else means the fee path is not
+settled, and the escrow binding failure has no recovery.
 
 Remember the locker takes 30% first, so the creator's real share of trading fees is
 **66.5%** and the treasury's is **3.5%**. Those two numbers are the only ones that may
@@ -140,6 +195,29 @@ with no manual step. Two consequences:
 
 There is no separate website deploy step, and no way to ship the backend without shipping
 the site. If they must be staged apart, merge the website change on its own commit first.
+
+## 6b. Remove retired secrets
+
+Three settings were deleted from the code. They are read by nothing, so leaving them set
+changes no behaviour -- but an operator reading `fly secrets list` cannot tell a live
+setting from a dead one, and that ambiguity is what makes somebody "fix" a value that
+does nothing.
+
+Do this **after** the backup in §1, so a mistake is recoverable:
+
+```bash
+# What is actually set right now.
+fly secrets list
+
+# Remove the three that no longer have a reader. Safe to run if they are absent.
+fly secrets unset PONS_V2_FACTORY_ADDRESS PONS_V2_FEE_ESCROW_ADDRESS PONS_V2_APPROVALS_FROM_BLOCK
+
+# Locally, if a developer .env still carries them.
+grep -nE '^(PONS_V2_FACTORY_ADDRESS|PONS_V2_FEE_ESCROW_ADDRESS|PONS_V2_APPROVALS_FROM_BLOCK)=' backend/.env
+```
+
+`fly secrets unset` restarts the app, so do it in the same window as another restart
+rather than on its own. Confirm afterwards that `fly secrets list` no longer names them.
 
 ## 7. Public launching
 

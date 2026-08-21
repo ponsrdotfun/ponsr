@@ -74,7 +74,9 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 | Orchestrator (`orchestrator.ts`) | ✅ | Full pipeline tested end-to-end with mocks for every external dependency, including the specific prompt-injection scenario from Part 9 and an on-chain-revert failure path. |
 | Reply composer (`replyComposer.ts`) | ✅ | Covered by orchestrator integration tests. |
 
-**Backend test suite: 151/151 passing.** Run `cd backend && npm test` to verify yourself.
+**Backend test suite: run it rather than trust a number here.** `cd backend && npm test`.
+A hardcoded count in a document is stale the next time somebody adds a test, and this one
+said 151 while the suite had grown past 500 -- a figure that looks like evidence and is not.
 
 ## Website
 

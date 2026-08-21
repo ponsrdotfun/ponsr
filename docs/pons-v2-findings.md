@@ -1238,4 +1238,3 @@ Two related fixes from the same afternoon:
   exactly what disappears when quota runs out — precisely when you most want to know what the
   policies say. It reports rule *text*, and says so: a policy engine failing open would print
   the same thing.
-
