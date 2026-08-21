@@ -114,9 +114,19 @@ try {
   console.log('');
   let treeDiffers = false;
   for (const rel of TRACKED) {
-    const onDisk = fs.readFileSync(path.join(ROOT, rel));
-    const base = committed(rel);
-    const same = Buffer.compare(base, onDisk) === 0;
+    // Asked of git, not by comparing raw bytes.
+    //
+    // The first version read the file and compared it to `git show HEAD:`, and reported
+    // MODIFIED in a freshly cloned tree that `git status` called clean. Git normalises
+    // line endings on checkout; the blob is LF and the file on a Windows disk is CRLF.
+    // Byte equality is not the question -- "does git consider this changed" is, because
+    // that is what "uncommitted local edit" actually means.
+    let same = true;
+    try {
+      execFileSync('git', ['diff', '--quiet', 'HEAD', '--', rel], { cwd: ROOT, stdio: 'pipe' });
+    } catch {
+      same = false;
+    }
     console.log(`  ${same ? 'committed' : 'MODIFIED '}  ${rel}  (working tree vs HEAD)`);
     if (!same) treeDiffers = true;
   }
