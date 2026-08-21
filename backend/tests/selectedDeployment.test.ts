@@ -377,3 +377,60 @@ describe('receipt decoding is scoped to the selected factory', () => {
     expect(extractLaunchFromReceipt([l], D)).toBeNull();
   });
 });
+
+/**
+ * The canary resolves the deployment ONCE.
+ *
+ * `phase-b-launch.ts` answered "which deployment" six separate times: identity from
+ * `executableDeployment()`, readiness and fee from global defaults, the target created
+ * partway down, pair scanning from another global read, and the receipt decoded from a
+ * third. Six answers to one question, each free to differ -- in the run that spends real
+ * money for the first time.
+ *
+ * Static, because executing this script signs and broadcasts. What a test can do is
+ * refuse to let the single answer be split apart again.
+ */
+describe('the canary threads one selected deployment', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const raw: string = fs.readFileSync(path.join(__dirname, '../scripts/phase-b-launch.ts'), 'utf8');
+  const code = raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .filter((l: string) => !l.trim().startsWith('//'))
+    .join('\n');
+
+  it('never calls executableDeployment() in executable code', () => {
+    // The registry's default is a different question from "which deployment is THIS run
+    // using", and conflating them is what produced six answers.
+    expect(code).not.toMatch(/executableDeployment\(\)/);
+  });
+
+  it('creates exactly one launch target', () => {
+    expect((code.match(/createLaunchTarget\(/g) ?? []).length).toBe(1);
+  });
+
+  it('derives the selected deployment from that target', () => {
+    expect(code).toMatch(/const selected = target\.deployment/);
+  });
+
+  it('passes the selected deployment to identity, readiness and fee', () => {
+    expect(code).toMatch(/assertDeploymentIdentity\(\s*selected/);
+    expect(code).toMatch(/getLaunchReadiness\([\s\S]{0,200}selected/);
+    expect(code).toMatch(/getLiveFeeWei\(provider,\s*selected\)/);
+  });
+
+  it('scans pair approvals against the selected deployment', () => {
+    expect(code).toMatch(/deployment:\s*selected/);
+  });
+
+  it('decides the v1/v2 branch from the deployment, not the global flag', () => {
+    // config.PONS_FACTORY_VERSION answers which factory is the default. The branch here
+    // must follow the deployment actually selected, which under rollback is not that.
+    expect(code).toMatch(/const isV2 = selected\.tokenParamsVersion/);
+  });
+
+  it('decodes the receipt against the selected deployment', () => {
+    expect(code).toMatch(/extractLaunchFromReceipt\([\s\S]{0,60}selected\)/);
+  });
+});

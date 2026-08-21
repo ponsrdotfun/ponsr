@@ -88,12 +88,8 @@ async function main() {
   // From the registry, never from configuration. This is the script that would perform
   // the first real launch on the current factory, and `config.PONS_V2_FACTORY_ADDRESS`
   // still defaults to the deployment pons replaced -- a landmine for whoever ran it.
-  line(
-    'factory',
-    config.PONS_FACTORY_VERSION === 'v2'
-      ? `${executableDeployment().factory}  (${executableDeployment().id})`
-      : config.PONS_FACTORY_ADDRESS
-  );
+  // Printed from the target below, once it exists. Resolving it here as well was one
+  // of the six independent answers this script used to give.
   console.log();
 
   console.log('Treasury');
@@ -102,6 +98,22 @@ async function main() {
   line('address', treasury);
   line('balance', `${formatEth(balance)} ETH`);
   console.log();
+
+  /**
+   * ONE launch target, resolved before anything is asked about it.
+   *
+   * This script used to resolve the deployment six separate times: identity from
+   * `executableDeployment()`, readiness and fee from global defaults, the target created
+   * later, pair scanning from another global read, and the receipt decoded from a third.
+   * Six answers to one question, each free to differ from the others -- and the canary is
+   * the run that spends real money for the first time.
+   *
+   * Everything below reads `selected` and `target`. Nothing re-resolves.
+   */
+  const target = createLaunchTarget(provider);
+  const selected = target.deployment;
+  line('deployment', `${selected.id} (${selected.factory})`);
+  line('launch selector', selected.launchSelector);
 
   // --- Preflight: every guard the factory would apply, read before spending anything ---
   console.log('Preflight');
@@ -115,21 +127,28 @@ async function main() {
   //
   // A green `canLaunch` from an unexpected contract is not reassurance. It is the most
   // dangerous reading available, because everything after it looks like a go-ahead.
-  if (config.PONS_FACTORY_VERSION === 'v2') {
-    const d = executableDeployment();
-    await assertDeploymentIdentity(d, provider);
-    line('deployment', `${d.id} (${d.factory})`);
+  if (selected.tokenParamsVersion !== 'v1') {
+    await assertDeploymentIdentity(selected, provider);
     line('identity', 'chain id, runtime hash, ABI hash, selector and escrow all match');
   }
 
-  const readiness = await getLaunchReadiness(provider, treasury, config.PONS_LAUNCH_CONFIG_ID, config.PONS_DEX_ID);
+  // Asked of the SELECTED deployment. Read from a global it describes a contract this
+  // run is not calling.
+  const readiness = await getLaunchReadiness(
+    provider,
+    treasury,
+    config.PONS_LAUNCH_CONFIG_ID,
+    config.PONS_DEX_ID,
+    selected
+  );
   line('launchEnabled', readiness.launchEnabled);
   line('whitelisted', readiness.whitelisted);
   line('launchConfig usable', readiness.launchConfigUsable);
   line('dexConfig usable', readiness.dexConfigUsable);
   line('pairToken', readiness.pairToken);
 
-  const fee = await getLiveFeeWei(provider);
+  // Priced by the same contract that will be called.
+  const fee = await getLiveFeeWei(provider, selected);
   line('launchFee (live)', `${formatEth(fee)} ETH`);
 
   const problems: string[] = [];
@@ -242,7 +261,8 @@ async function main() {
   // splitter and then sent v1 calldata to the v1 factory. On v1 we are not
   // whitelisted, so the very launch this script exists to make would have reverted,
   // at the exact moment it mattered, for a reason that reads as "pons refused us".
-  const target = createLaunchTarget(provider);
+  // Resolved once at the top of this run; creating a second one here was how the same
+  // question came to have six answers.
   line('factory version', target.version);
   line('factory address', target.factoryAddress);
 
@@ -261,7 +281,7 @@ async function main() {
         // `PONS_V2_APPROVALS_FROM_BLOCK` -- a separately settable number that can sit
         // below the deployment (scanning millions of empty blocks) or above it
         // (silently missing approvals, which looks identical to never being granted).
-        deployment: executableDeployment(),
+        deployment: selected,
       })
     );
     const resolved = await registry.resolve(wanted);
@@ -304,8 +324,9 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
     process.exit(1);
   }
 
-  const selected = executableDeployment();
-  const isV2 = config.PONS_FACTORY_VERSION === 'v2';
+  // `selected` was resolved once at the top; this used to call executableDeployment()
+  // again, which is a different question from 'which deployment is this run using'.
+  const isV2 = selected.tokenParamsVersion !== 'v1';
 
   console.log();
   console.log('=== LAUNCHED ===');

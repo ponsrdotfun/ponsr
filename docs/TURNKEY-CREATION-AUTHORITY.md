@@ -129,11 +129,11 @@ and a wrong-selector mutation must be denied. Until then it is a proposal, not a
 
 1. Choose Option A or B. A is smaller; B is stronger.
 2. Apply it with a root credential, from the dashboard or a one-shot script.
-3. Run `npx tsx scripts/turnkey-probe-creation.ts` and require:
+3. Run `npm run signer:probe-creation` and require:
    - case 1 `ALLOWED` — the bot can still deploy its splitter;
    - case 2 `denied` — the finding is closed;
    - case 4 `denied` — the original control still holds.
-4. Run `npx tsx scripts/turnkey-verify-policy.ts` and require PASSED.
+4. Run `npm run signer:verify-policy` and require PASSED.
 5. Only then may any document say a leaked bot key cannot reach the treasury.
 
 Nothing in this repository performs steps 1–2, by design.

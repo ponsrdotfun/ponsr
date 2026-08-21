@@ -99,7 +99,37 @@ try {
     differs = true;
   }
 
+  /**
+   * A SECOND, separate question: is the file on disk the committed one?
+   *
+   * Everything above compares the rebuild against git. That proves the COMMITTED
+   * artifacts reproduce -- and says nothing about the bytes actually sitting in
+   * `backend/src/`, which is what the running backend imports. A dirty working tree can
+   * hold a modified artifact while the committed one reproduces perfectly.
+   *
+   * Reported separately rather than folded in, because the two failures mean different
+   * things: a committed mismatch is stale artifacts or a moved toolchain, a working-tree
+   * mismatch is uncommitted local edits.
+   */
   console.log('');
+  let treeDiffers = false;
+  for (const rel of TRACKED) {
+    const onDisk = fs.readFileSync(path.join(ROOT, rel));
+    const base = committed(rel);
+    const same = Buffer.compare(base, onDisk) === 0;
+    console.log(`  ${same ? 'committed' : 'MODIFIED '}  ${rel}  (working tree vs HEAD)`);
+    if (!same) treeDiffers = true;
+  }
+
+  console.log('');
+  if (treeDiffers && !differs) {
+    console.log('=== COMMITTED ARTIFACTS REPRODUCE, WORKING TREE IS MODIFIED ===');
+    console.log('  The rebuild matches what is committed, so the source and toolchain agree.');
+    console.log('  But a file on disk differs from HEAD, and the backend imports the file on');
+    console.log('  disk -- not the commit. Commit it or restore it before deploying.');
+    process.exit(1);
+  }
+
   if (differs) {
     console.log('=== NOT REPRODUCIBLE ===');
     console.log('  The committed artifacts are not what this source and this compiler produce.');
@@ -110,7 +140,8 @@ try {
   }
   console.log('=== REPRODUCIBLE ===');
   console.log('  Every committed artifact is byte-for-byte what this source compiles to,');
-  console.log('  compared against git rather than against a file this process wrote.');
+  console.log('  compared against git rather than against a file this process wrote,');
+  console.log('  and the working-tree copies match HEAD.');
 } finally {
   fs.rmSync(out, { recursive: true, force: true });
 }

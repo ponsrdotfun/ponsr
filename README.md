@@ -74,9 +74,13 @@ on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
 
 ## Test results
 
-- **Contract:** 28/28 passing (`contracts-test/`) — **run**
-- **Website:** 53/53 passing (`website/smoke-test.js`) — **run**
-- **Backend:** 151/151 passing (`backend/tests/`) — **run**
+Counts are deliberately not written here. Every hardcoded figure in this repository has
+been wrong within a week of being typed -- README said 151 backend tests while the suite
+had grown past 500 -- and a stale number looks exactly like evidence.
+
+- **Contract:** `npm test` at the root (`contracts-test/`)
+- **Website:** `node website/smoke-test.js`
+- **Backend:** `cd backend && npm test` (`backend/tests/`)
 - **Total: 232 automated checks, all run and passing.**
 
 All three suites were executed to produce those numbers — none of it is a claim taken on

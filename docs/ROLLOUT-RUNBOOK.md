@@ -12,10 +12,10 @@ happened.
 
 | gate | how | abort if |
 |---|---|---|
-| Turnkey creation authority | `npm run probe:creation` | case 2 is **ALLOWED** — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). This is currently open. |
-| Policy verified **for the rollout target** | `npm run verify:policy -- --target-deployment=pons-v2-current-7ed` | anything other than **PASSED** |
+| Turnkey creation authority **(signer-active)** | `npm run signer:probe-creation` | case 2 is **ALLOWED** — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). This is currently open. |
+| Policy verified for the rollout target **(signer-active)** | `npm run signer:verify-policy -- --target-deployment=pons-v2-current-7ed` | anything other than **PASSED** |
 | Artifacts reproduce | `node scripts/verify-artifacts-reproducible.js` | **NOT REPRODUCIBLE** |
-| Suites | `cd backend && npm run build && npx jest`, `npm test`, `node website/smoke-test.js` | any failure |
+| Suites | `cd backend && npm run build && npm test`, then `npm test` and `node website/smoke-test.js` at the root | any failure |
 | Live identity | `RPC_URL=… CHAIN_ID=4663 npm run verify:ethcall` | anything but **PASSED** |
 | Fresh install | `npm ci` at root **and** `backend/` | any resolution error |
 
@@ -26,6 +26,17 @@ this sequence moves treasury funds.
 The `--target-deployment` flag is not optional. Without it the verifier passes on
 whatever `PONS_FACTORY_VERSION` currently names -- and §3 flips that setting minutes
 later, so a gate that went green about the old value proves nothing about the new one.
+
+**Two of these gates SIGN.** `probe:creation` and `verify:policy` send real signing
+requests to Turnkey. They never broadcast and no value moves -- but they use the bot's
+API credential, consume signing quota, and appear in the Turnkey activity log as signer
+activity by that key. They are not read-only tests and must not be run as part of
+ordinary install verification or CI.
+
+Run them deliberately, once, as an operator ceremony: know why you are running them,
+expect the activity entries, and do not repeat them to "check again". The keyless
+alternatives -- `npm run read:policies` for what the rules say, `npm run verify:ethcall`
+for the chain -- answer most questions without signing anything.
 
 The first row blocks everything else. A bot key that can attach funds to a contract
 creation can empty the hot wallet, so shipping the launch path before closing it makes
@@ -46,15 +57,18 @@ planned change:
 fly scale count 0 --yes
 
 # 2. Consistent copy, checkpointed and timestamped.
+#    WRITE THIS PATH DOWN. Rollback restores this exact file and nothing else.
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-fly ssh console -C "sqlite3 /data/bot.sqlite \".backup '/data/bot.sqlite.$STAMP'\""
+BACKUP=/data/bot.sqlite.$STAMP
+fly ssh console -C "sqlite3 /data/bot.sqlite \".backup '$BACKUP'\""
+echo "BACKUP=$BACKUP"    # record alongside the checksum below
 
 # 3. Prove the copy is a database, not a file of the right size.
-fly ssh console -C "sqlite3 /data/bot.sqlite.$STAMP 'PRAGMA integrity_check;'"
-fly ssh console -C "sqlite3 /data/bot.sqlite.$STAMP 'PRAGMA foreign_key_check;'"
+fly ssh console -C "sqlite3 $BACKUP 'PRAGMA integrity_check;'"
+fly ssh console -C "sqlite3 $BACKUP 'PRAGMA foreign_key_check;'"
 
 # 4. Record what you have, so a restore can be checked against it later.
-fly ssh console -C "sha256sum /data/bot.sqlite.$STAMP; ls -l /data/bot.sqlite.$STAMP"
+fly ssh console -C "sha256sum $BACKUP; ls -l $BACKUP; stat -c '%U:%G %a' $BACKUP"
 ```
 
 Required before continuing:
@@ -71,12 +85,17 @@ is what makes step 3 meaningful.
 over the live file:
 
 ```bash
-fly ssh console -C "cp /data/bot.sqlite.$STAMP /data/restore-test.sqlite"
+fly ssh console -C "cp $BACKUP /data/restore-test.sqlite"
 fly ssh console -C "sqlite3 /data/restore-test.sqlite 'SELECT COUNT(*) FROM launches;'"
+fly ssh console -C "sqlite3 /data/restore-test.sqlite 'PRAGMA integrity_check;'"
 fly ssh console -C "rm /data/restore-test.sqlite"
 ```
 
 A backup nobody has restored is a backup nobody has.
+
+Also record the file's owner and mode from step 4. A restore that lands root-owned when
+the app runs unprivileged produces a process that starts, listens, and cannot write --
+which looks like health right up until the first launch it fails to record.
 
 The provenance migration is **additive and in-place**. There is nothing to undo, so this
 copy *is* the rollback plan -- `tests/provenanceMigration.test.ts` proves a copy taken
@@ -232,12 +251,44 @@ the canary to have completed §4 and §5 cleanly.
 |---|---|---|
 | config only | `fly secrets set PONS_FACTORY_VERSION=v1` | operator, no approval needed |
 | code | `fly deploy` the previous release | operator |
-| database | restore `/data/bot.sqlite.pre-v2` | operator |
+| database | restore `$BACKUP` from §1 — see the ordered procedure below | operator |
 | website | revert the merge commit and push | operator |
 
-The database restore is the only one with a deadline: rows written after the migration
-carry provenance columns the old code does not select, which is harmless — but rows
-written after the restore point are simply gone.
+### Restoring the database
+
+`$BACKUP` is the file created and checksummed in §1. Nothing else was ever created --
+an earlier version of this document told you to restore `/data/bot.sqlite.pre-v2`, a
+path no step produces, so the instruction would have failed at the worst possible time.
+
+Order matters, because a live writer and a file swap do not mix:
+
+```bash
+# 1. Stop the writer FIRST. Restoring under a running process corrupts both.
+fly scale count 0 --yes
+
+# 2. Confirm the artifact is the one you checksummed in §1.
+fly ssh console -C "sha256sum $BACKUP"
+
+# 3. Replace, and clear the WAL siblings -- a stale -wal against a restored
+#    database is a torn state that opens and then disagrees with itself.
+fly ssh console -C "rm -f /data/bot.sqlite /data/bot.sqlite-wal /data/bot.sqlite-shm"
+fly ssh console -C "cp $BACKUP /data/bot.sqlite"
+
+# 4. Ownership and mode, to whatever step 4 of §1 recorded.
+fly ssh console -C "chown <user>:<group> /data/bot.sqlite && chmod 644 /data/bot.sqlite"
+
+# 5. Prove it before starting anything.
+fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA integrity_check;'"
+fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA foreign_key_check;'"
+
+# 6. Restart, then check health rather than assuming it.
+fly scale count 1 --yes
+curl -s https://<backend>/status | jq -e '.checks[] | select(.name=="database")'
+```
+
+The database restore is the only rollback with a deadline: rows written after the
+migration carry provenance columns the old code does not select, which is harmless — but
+rows written after the restore point are simply gone.
 
 **A launched token cannot be rolled back.** Once §4 confirms, that token exists on chain
 permanently. Everything above this line is reversible; that is not.

@@ -9,12 +9,14 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest --runInBand",
-    "verify:policy": "tsx scripts/turnkey-verify-policy.ts",
-    "probe:creation": "tsx scripts/turnkey-probe-creation.ts",
     "read:policies": "tsx scripts/turnkey-read-policies.ts",
     "verify:ethcall": "tsx scripts/verify-current-ethcall.ts",
     "launch:canary": "tsx scripts/phase-b-launch.ts",
-    "collect:v2": "tsx scripts/collect-and-split-v2.ts"
+    "collect:v2": "tsx scripts/collect-and-split-v2.ts",
+    "signer:verify-policy": "tsx scripts/turnkey-verify-policy.ts",
+    "signer:probe-creation": "tsx scripts/turnkey-probe-creation.ts",
+    "verify:policy": "node -e \"console.error('renamed: this SIGNS. use npm run signer:verify-policy'); process.exit(1)\"",
+    "probe:creation": "node -e \"console.error('renamed: this SIGNS. use npm run signer:probe-creation'); process.exit(1)\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
