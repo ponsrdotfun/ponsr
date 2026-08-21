@@ -137,6 +137,18 @@ async function impersonate(address) {
   line('splitter', splitterAddress);
   must('splitter bound to current escrow', (await splitter.escrow()).toLowerCase() === d.feeEscrow.toLowerCase());
 
+  // The condition that broke fee recovery, reproduced rather than described.
+  //
+  // The orchestrator deploys the splitter BEFORE the launch that creates the token, so it
+  // passes ZeroAddress and `FeeSplitter` stores that immutably. `collect-and-split-v2.ts`
+  // read that field and called it the launched token, which meant it could not recover
+  // fees from a single bot launch. This asserts the field really is zero, so the
+  // resolution proven in step 7 is solving the real problem and not a hypothetical.
+  must(
+    'splitter token field is zero (as the bot deploys it)',
+    (await splitter.token()) === ethers.ZeroAddress
+  );
+
   console.log('\n3  Launching, with the backend’s own calldata');
   const build = (tweetId) =>
     JSON.parse(
@@ -233,6 +245,77 @@ async function impersonate(address) {
   must('split matches the contract exactly', toCreator === expectedCreator, `${toCreator} vs ${expectedCreator}`);
   must('nothing left in the splitter', (await aapl.balanceOf(splitterAddress)) === 0n);
   must('nothing left in escrow', (await splitter.claimableFromEscrow(AAPL)) === 0n);
+
+  console.log('\n7  Fee lineage, from a splitter whose token field is zero');
+  const { resolveLaunchedToken, assertLaunchLineage, reconcileClaim } =
+    require('../backend/dist/splitterLineage.js');
+
+  // Zero field, and no operator argument: this must refuse rather than guess.
+  let refusedWithNothing = false;
+  try {
+    resolveLaunchedToken({ splitterTokenField: ethers.ZeroAddress });
+  } catch {
+    refusedWithNothing = true;
+  }
+  must('refuses to guess a token from a zero field', refusedWithNothing);
+
+  // What the bot records: the token from the confirmed receipt.
+  const resolvedToken = resolveLaunchedToken({
+    splitterTokenField: ethers.ZeroAddress,
+    provenanceToken: token,
+  });
+  must('resolves the launched token from the launch record', resolvedToken.token === token);
+  line('source', resolvedToken.source);
+
+  const rec = await factory.getLaunchedToken(token);
+  const record = {
+    token: String(rec.token ?? rec[0]),
+    curve: String(rec.curve ?? rec[1]),
+    deployer: String(rec.deployer ?? rec[2]),
+    creatorFeeRecipient: String(rec.creatorFeeRecipient ?? rec[3]),
+    pairToken: String(rec.pairToken ?? rec[4]),
+    exists: Boolean(rec.exists ?? rec[14]),
+  };
+  must('factory record exists', record.exists === true);
+  must('factory names THIS splitter as creator fee recipient',
+    record.creatorFeeRecipient.toLowerCase() === splitterAddress.toLowerCase());
+  must('pair token comes from the factory record',
+    record.pairToken.toLowerCase() === AAPL.toLowerCase());
+
+  let lineageOk = true;
+  try {
+    assertLaunchLineage(record, splitterAddress, token, d);
+  } catch (e) {
+    lineageOk = false;
+    line('lineage refused', String(e.message).slice(0, 90));
+  }
+  must('lineage assertion passes for a real launch', lineageOk);
+
+  // And refuses when the factory names somebody else's splitter -- the case that would
+  // otherwise pay a stranger's creator.
+  let refusedForeign = false;
+  try {
+    assertLaunchLineage(
+      { ...record, creatorFeeRecipient: '0x' + '55'.repeat(20) },
+      splitterAddress,
+      token,
+      d
+    );
+  } catch {
+    refusedForeign = true;
+  }
+  must('lineage refuses a foreign creator recipient', refusedForeign);
+
+  console.log('\n8  Reconciliation, measured rather than described');
+  const recon = reconcileClaim({
+    claimed: claimable,
+    creatorDelta: toCreator,
+    treasuryDelta: toTreasury,
+    escrowRemaining: await splitter.claimableFromEscrow(AAPL),
+    splitterRemaining: await aapl.balanceOf(splitterAddress),
+  });
+  must('reconciles exactly', recon.ok, recon.problems.join('; '));
+  line('evidence', JSON.stringify(recon.evidence));
 
   console.log('');
   if (fails.length === 0) {

@@ -31,6 +31,8 @@ import { config, requireConfig } from '../src/config';
 import { createProvider } from '../src/chainClient';
 import { DEPLOYMENTS } from '../src/deployments';
 import { assertDeploymentIdentity } from '../src/deploymentIdentity';
+import { resolveLaunchedToken, assertLaunchLineage, reconcileClaim } from '../src/splitterLineage';
+import { Db } from '../src/db';
 
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -52,6 +54,8 @@ const ESCROW_ABI = ['function balanceOf(address) view returns (uint256)'];
 
 const EXECUTE = process.argv.includes('--execute');
 const [splitterArg] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+/** The launched token, for an operator claiming away from the bot's launch records. */
+const tokenArg = process.argv.find((a) => a.startsWith('--token='))?.slice('--token='.length);
 
 function line(label: string, value: unknown) {
   console.log(`  ${label.padEnd(24)} ${value}`);
@@ -93,7 +97,13 @@ async function main() {
     process.exit(1);
   }
 
-  const launchedToken = (await splitter.token()) as string;
+  // `splitter.token()` is a placeholder, not a record.
+  //
+  // The bot deploys the splitter BEFORE the launch that creates the token, so this field
+  // is ZeroAddress on every splitter it has ever produced. Reading it and calling the
+  // result "the launched token" is why this script could not recover fees from a single
+  // bot launch -- and that failure surfaces the day a creator asks where their money is.
+  const splitterTokenField = (await splitter.token()) as string;
   line('splitter', splitterAddress);
   line('escrow', escrowAddress);
   line('creator', await splitter.creator());
@@ -147,27 +157,60 @@ async function main() {
     require(`../src/${owning.abiPath}`) as ethers.InterfaceAbi,
     provider
   );
-  // The token must actually belong to this factory.
-  //
-  // Everything above establishes which deployment the SPLITTER points at. That is not
-  // the same claim as "this factory launched this token", and the two can differ if a
-  // splitter is ever reused or mis-recorded. `getLaunchedToken` reverting, or returning
-  // an empty record, is the factory saying it has never heard of this token.
-  let pairToken: string | null = null;
-  try {
-    const launch = await factory.getLaunchedToken(launchedToken);
-    const curve = String(launch.curve ?? launch[1] ?? ethers.ZeroAddress);
-    if (curve === ethers.ZeroAddress) {
-      console.error(`
-${owning.id} does not recognise token ${launchedToken}.`);
-      console.error('Refusing: the splitter names this deployment, but the factory has no');
-      console.error('record of launching this token. One of the two is wrong.');
-      process.exit(1);
+  // Which token, from somewhere durable.
+  const fromDb = (() => {
+    try {
+      const db = new Db(config.DATABASE_PATH);
+      try {
+        return db.getLaunchBySplitter(splitterAddress);
+      } finally {
+        db.close();
+      }
+    } catch {
+      // Running away from the bot's database is normal for an operator claiming by hand.
+      // It only means the token has to be stated explicitly.
+      return null;
     }
-    pairToken = String(launch.pairToken ?? launch[3]);
-  } catch {
-    console.warn('  (could not read the launch record; checking the launched token only)');
+  })();
+
+  const resolved = resolveLaunchedToken({
+    splitterTokenField,
+    explicitToken: tokenArg,
+    provenanceToken: fromDb?.tokenAddress ?? null,
+  });
+  const launchedToken = resolved.token;
+  line('launched token', `${launchedToken}  (from ${resolved.source})`);
+
+  // FAIL CLOSED from here.
+  //
+  // Every read below decides where money goes. The previous version caught a failed
+  // `getLaunchedToken` and continued with a warning, so an RPC blip, an ABI mismatch and
+  // an unknown token all ended the same way: a claim proceeding on less information than
+  // it needed. A warning is not a decision.
+  let record;
+  try {
+    const raw = await factory.getLaunchedToken(launchedToken);
+    record = {
+      token: String(raw.token ?? raw[0]),
+      curve: String(raw.curve ?? raw[1]),
+      deployer: String(raw.deployer ?? raw[2]),
+      creatorFeeRecipient: String(raw.creatorFeeRecipient ?? raw[3]),
+      pairToken: String(raw.pairToken ?? raw[4]),
+      exists: Boolean(raw.exists ?? raw[14]),
+    };
+  } catch (err: any) {
+    console.error(`\nCould not read the launch record from ${owning.id}: ${err?.message ?? err}`);
+    console.error('Refusing: without it there is no proof these fees belong to this splitter.');
+    process.exit(1);
   }
+
+  assertLaunchLineage(record, splitterAddress, launchedToken, owning);
+  line('curve', record.curve);
+  line('creator recipient', `${record.creatorFeeRecipient}  == this splitter`);
+
+  // From the factory's own record, never from configuration or a guess.
+  const pairToken: string = record.pairToken;
+  line('pair token', pairToken);
 
   const tokens = [launchedToken, ...(pairToken && !/^0x0+$/.test(pairToken) ? [pairToken] : [])];
   const nativePair = !!pairToken && /^0x0+$/.test(pairToken);
@@ -199,28 +242,112 @@ ${owning.id} does not recognise token ${launchedToken}.`);
     return;
   }
 
-  for (const c of claimable) {
-    if (c.amount === 0n) continue;
-    console.log(`\nclaimAndSplit(${c.symbol})...`);
-    const tx = await splitter['claimAndSplit(address)'](c.token);
+  const creatorAddress = (await splitter.creator()) as string;
+  const treasuryAddress = (await splitter.treasury()) as string;
+  const evidence: Record<string, unknown>[] = [];
+  let failed = false;
+
+  /** Both recipients' balances for one asset, so a claim can be measured rather than
+   *  described. A null token means native ETH. */
+  async function balances(token: string | null): Promise<{ creator: bigint; treasury: bigint }> {
+    if (token === null) {
+      return {
+        creator: await provider.getBalance(creatorAddress),
+        treasury: await provider.getBalance(treasuryAddress),
+      };
+    }
+    const erc = new ethers.Contract(token, ERC20_ABI, provider);
+    return {
+      creator: (await erc.balanceOf(creatorAddress)) as bigint,
+      treasury: (await erc.balanceOf(treasuryAddress)) as bigint,
+    };
+  }
+
+  async function claimAndReconcile(
+    label: string,
+    token: string | null,
+    decimals: number,
+    claimed: bigint,
+    send: () => Promise<any>
+  ): Promise<void> {
+    console.log(`\nclaim ${label}...`);
+    const before = await balances(token);
+
+    const tx = await send();
     const receipt = await tx.wait();
     line('tx', tx.hash);
-    line('status', receipt?.status === 1 ? 'ok ✅' : 'REVERTED ❌');
+
+    // Fatal, not printed. A reverted claim the script narrates and walks past is a script
+    // reporting success for money that never moved.
+    if (!receipt || receipt.status !== 1) {
+      console.error(`  status  REVERTED -- ${label} did not claim. Stopping.`);
+      process.exit(1);
+    }
+    line('status', 'ok');
+
+    const after = await balances(token);
+    const splitterRemaining =
+      token === null
+        ? await provider.getBalance(splitterAddress)
+        : ((await new ethers.Contract(token, ERC20_ABI, provider).balanceOf(splitterAddress)) as bigint);
+    const escrowRemaining =
+      token === null
+        ? ((await new ethers.Contract(escrowAddress, ESCROW_ABI, provider).balanceOf(splitterAddress)) as bigint)
+        : ((await splitter.claimableFromEscrow(token)) as bigint);
+
+    const r = reconcileClaim({
+      claimed,
+      creatorDelta: after.creator - before.creator,
+      treasuryDelta: after.treasury - before.treasury,
+      escrowRemaining,
+      splitterRemaining,
+    });
+
+    const fmt = (v: string) => ethers.formatUnits(BigInt(v), decimals);
+    line('creator received', `${fmt(r.evidence.creatorDelta)} (expected ${fmt(r.evidence.expectedCreator)})`);
+    line('treasury received', `${fmt(r.evidence.treasuryDelta)} (expected ${fmt(r.evidence.expectedTreasury)})`);
+    line('left in splitter', fmt(r.evidence.splitterRemaining));
+    line('left claimable', fmt(r.evidence.escrowRemaining));
+    for (const n of r.notes) console.log(`  note: ${n}`);
+
+    evidence.push({ asset: label, token, txHash: tx.hash, ...r.evidence, ok: r.ok, problems: r.problems });
+
+    if (!r.ok) {
+      failed = true;
+      console.error(`  RECONCILIATION FAILED for ${label}:`);
+      for (const p of r.problems) console.error(`    - ${p}`);
+    }
+  }
+
+  for (const c of claimable) {
+    if (c.amount === 0n) continue;
+    await claimAndReconcile(c.symbol, c.token, c.decimals, c.amount, () =>
+      splitter['claimAndSplit(address)'](c.token)
+    );
   }
 
   if (nativeAmount > 0n) {
-    console.log('\nclaimEthAndSplit()...');
-    const tx = await splitter.claimEthAndSplit();
-    const receipt = await tx.wait();
-    line('tx', tx.hash);
-    line('status', receipt?.status === 1 ? 'ok ✅' : 'REVERTED ❌');
+    await claimAndReconcile('ETH', null, 18, nativeAmount, () => splitter.claimEthAndSplit());
   }
 
-  console.log('\nAfter (paid out of the splitter, 95/5)');
-  for (const c of claimable) {
-    const remaining = (await splitter.claimableFromEscrow(c.token)) as bigint;
-    line(`${c.symbol} still in escrow`, ethers.formatUnits(remaining, c.decimals));
+  // Machine-readable, so an operator keeps it beside the transaction hashes rather than
+  // re-reading scrollback.
+  console.log('\n=== EVIDENCE (JSON) ===');
+  console.log(
+    JSON.stringify(
+      { splitter: splitterAddress, deployment: owning.id, launchedToken, claims: evidence },
+      null,
+      2
+    )
+  );
+
+  if (failed) {
+    console.error('\n=== RECONCILIATION FAILED ===');
+    console.error('At least one claim did not distribute what the contract should have.');
+    console.error('Do not treat these fees as settled.');
+    process.exit(1);
   }
+  console.log('\n=== RECONCILED ===  every claim split exactly, nothing left behind.');
 }
 
 main().catch((err) => {

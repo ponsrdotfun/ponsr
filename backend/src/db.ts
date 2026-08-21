@@ -242,6 +242,42 @@ export class Db {
   }
 
   /**
+   * The launch a splitter belongs to, looked up by the splitter's own address.
+   *
+   * This is what makes fee recovery possible at all. Every splitter the bot deploys
+   * carries `token()` = zero -- it is deployed BEFORE the launch that creates the token,
+   * so there is nothing else it could carry -- and the collector used to read that field
+   * and treat it as the launched token. For every bot launch that value is zero, so the
+   * documented recovery tool could not recover anything.
+   *
+   * The launch record is the durable answer, and this is how the collector reaches it.
+   */
+  getLaunchBySplitter(splitterAddress: string): {
+    launchId: string;
+    tokenAddress: string | null;
+    deploymentId: string | null;
+    factory: string | null;
+    pairToken: string | null;
+  } | null {
+    const r: any = this.db
+      .prepare(
+        `SELECT l.id AS launch_id, l.token_address, p.deployment_id, p.factory, p.pair_token
+           FROM launch_provenance p
+           JOIN launches l ON l.id = p.launch_id
+          WHERE lower(p.splitter) = lower(?)`
+      )
+      .get(splitterAddress);
+    if (!r) return null;
+    return {
+      launchId: String(r.launch_id),
+      tokenAddress: r.token_address ?? null,
+      deploymentId: r.deployment_id ?? null,
+      factory: r.factory ?? null,
+      pairToken: r.pair_token ?? null,
+    };
+  }
+
+  /**
    * Fills in the bonding curve once the launch has confirmed.
    *
    * The curve address does not exist until the transaction lands, so provenance is
