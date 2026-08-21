@@ -21,7 +21,7 @@ import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
 import { createLaunchTarget } from './launchTarget';
-import { executableDeployment } from './deployments';
+import { executableDeployment, PonsDeployment } from './deployments';
 import { readCurrentReadiness } from './currentReadiness';
 import { FixedWindowRateLimit } from './webhookRateLimit';
 
@@ -182,10 +182,19 @@ const deps = {
   xClient: createXClient(),
   treasurySigner,
   provider,
-  getLiveFeeWei: () => getLiveFeeWei(provider),
+  // Priced from the deployment the orchestrator selected, not from the global flag.
+  getLiveFeeWei: (deployment?: PonsDeployment) => getLiveFeeWei(provider, deployment),
   getTreasuryBalanceWei: async () => getBalanceWei(provider, await treasurySigner.address()),
-  getLaunchReadiness: async () =>
-    getLaunchReadiness(provider, await treasurySigner.address(), config.PONS_LAUNCH_CONFIG_ID),
+  // Asked of the deployment the orchestrator selected. Readiness read from a global
+  // describes a contract nobody is calling.
+  getLaunchReadiness: async (deployment?: PonsDeployment) =>
+    getLaunchReadiness(
+      provider,
+      await treasurySigner.address(),
+      config.PONS_LAUNCH_CONFIG_ID,
+      config.PONS_DEX_ID,
+      deployment
+    ),
   // Part 5 mitigation #5. ConsoleNotifier is a starting point only -- Part 5 asks
   // for alerting "wired to something you'll see, not just logs no one reads", so
   // swap in a real transport (Telegram/email/pager) before mainnet. The Notifier

@@ -28,9 +28,21 @@ import { assertDeploymentIdentity } from './deploymentIdentity';
  * able to move the money. Deploying the wrong one here is not a degraded launch, it
  * is a launch whose fees are stranded from the first trade.
  */
-function splitterArtifact(): { abi: any; bytecode: string; name: string } {
-  const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
-  const name = wantV2 ? 'FeeSplitterV2' : 'FeeSplitter';
+export function splitterArtifactFor(
+  deployment: PonsDeployment = executableDeployment()
+): { abi: any; bytecode: string; name: string } {
+  // From the deployment's FEE MODEL, not from `config.PONS_FACTORY_VERSION`.
+  //
+  // The flag answers "which factory does this bot launch through by default". This
+  // question is "does the deployment this launch is going to credit an escrow", and the
+  // two can disagree -- a v1 rollback with the flag still v2, or an injected v2 target
+  // while the flag says v1.
+  //
+  // Getting it wrong is not a degraded launch. A plain FeeSplitter named as
+  // creatorFeeRecipient on an escrow-crediting deployment is credited correctly and
+  // forever, with no transaction in existence able to move the money: the escrow pays
+  // `msg.sender` and a v1 splitter cannot call it at all.
+  const name = deployment.feeModel === 'escrow-credit' ? 'FeeSplitterV2' : 'FeeSplitter';
   const art = (feeSplitterArtifact as any)[name];
   if (!art?.bytecode) {
     // Refuse rather than silently fall back to the other one. Falling back is how the
@@ -129,7 +141,7 @@ export async function deploySplitter(
     // a durable side effect, so the refusal has to happen before anything is sent.
     await assertDeploymentIdentity(deployment, provider);
   }
-  const { abi, bytecode, name } = splitterArtifact();
+  const { abi, bytecode, name } = splitterArtifactFor(deployment);
   const factory = new ethers.ContractFactory(abi, bytecode);
 
   // v2's splitter takes the escrow address as a fourth argument, and it is immutable:

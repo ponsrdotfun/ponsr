@@ -214,3 +214,47 @@ describe('handleMention verifies the SELECTED deployment', () => {
     }
   });
 });
+
+/**
+ * The splitter TYPE follows the deployment's fee model, not a global flag.
+ *
+ * `splitterArtifact()` chose FeeSplitterV2 when `config.PONS_FACTORY_VERSION === 'v2'`.
+ * That is a different question from which deployment this launch is going to, and the
+ * two can disagree: a v1 rollback with the flag still v2, or an injected v2 target while
+ * the flag says v1.
+ *
+ * Getting it wrong is not a degraded launch. A plain `FeeSplitter` named as
+ * `creatorFeeRecipient` on a v2 launch is credited correctly and forever, with no
+ * transaction in existence able to move the money -- the escrow pays `msg.sender` and
+ * a v1 splitter cannot call it at all. Fees stranded from the first trade.
+ */
+describe('splitter type follows the deployment, not the flag', () => {
+  const { splitterArtifactFor } = require('../src/splitterDeployer');
+  const realVersion = config.PONS_FACTORY_VERSION;
+  afterEach(() => {
+    (config as any).PONS_FACTORY_VERSION = realVersion;
+  });
+
+  it('an escrow-credit deployment gets FeeSplitterV2 even when the flag says v1', () => {
+    (config as any).PONS_FACTORY_VERSION = 'v1';
+    expect(splitterArtifactFor(executableDeployment()).name).toBe('FeeSplitterV2');
+  });
+
+  it('a push-from-locker deployment gets FeeSplitter even when the flag says v2', () => {
+    (config as any).PONS_FACTORY_VERSION = 'v2';
+    expect(splitterArtifactFor(deploymentById('pons-v1')).name).toBe('FeeSplitter');
+  });
+
+  it('the superseded v2 still gets the escrow-capable splitter', () => {
+    // It credits an escrow too, so a v1 splitter would strand its fees identically.
+    expect(splitterArtifactFor(deploymentById('pons-v2-legacy-7e1')).name).toBe('FeeSplitterV2');
+  });
+
+  it('every registry deployment resolves to an artifact that exists', () => {
+    for (const d of [deploymentById('pons-v1'), deploymentById('pons-v2-legacy-7e1'), executableDeployment()]) {
+      const a = splitterArtifactFor(d);
+      expect(typeof a.bytecode).toBe('string');
+      expect(a.bytecode.length).toBeGreaterThan(2);
+    }
+  });
+});

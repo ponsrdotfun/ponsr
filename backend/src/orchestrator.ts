@@ -8,7 +8,7 @@ import { XClient } from './xClient';
 import { TreasurySigner } from './treasurySigner';
 import { deploySplitter } from './splitterDeployer';
 import { assertDeploymentIdentity } from './deploymentIdentity';
-import { executableDeployment } from './deployments';
+import { executableDeployment, PonsDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
@@ -36,12 +36,20 @@ export interface OrchestratorDeps {
   xClient: XClient;
   treasurySigner: TreasurySigner;
   provider: ethers.Provider;
-  getLiveFeeWei: () => Promise<bigint>;
+  /**
+   * The live launch fee, for the deployment this launch is going to.
+   *
+   * It took no argument and read whichever factory `chainClient` considered active --
+   * which is derived from the global flag, not from the target the orchestrator chose.
+   * A v1 rollback with the flag on v2 priced the launch from the wrong contract.
+   */
+  getLiveFeeWei: (deployment?: PonsDeployment) => Promise<bigint>;
   /** Hot treasury balance, read live (Part 5 mitigation #7). Backs the admission
    *  check in validator.ts that stops the bot spending money it does not have. */
   getTreasuryBalanceWei: () => Promise<bigint>;
-  /** Whether pons's factory would accept a launch from us right now (open question #23). */
-  getLaunchReadiness: () => Promise<{
+  /** Whether THIS deployment would accept a launch right now. Same reasoning as the
+   *  fee above: readiness read from a global describes a contract nobody is calling. */
+  getLaunchReadiness: (deployment?: PonsDeployment) => Promise<{
     canLaunch: boolean;
     launchConfigUsable: boolean;
     dexConfigUsable?: boolean;
@@ -177,13 +185,38 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     return { kind: 'rejected', reason: 'PARSER_UNAVAILABLE' };
   }
 
-  // --- Step 2: validation guard ---
+  // --- Step 2: choose the deployment, BEFORE anything is asked about it ---
+  //
+  // Selection used to happen after validation, so readiness and the live fee were read
+  // from whichever factory the global flag considered active while the launch was built
+  // for the target chosen later. Those two can differ -- a v1 rollback with the flag on
+  // v2 priced the launch from a contract it never called, and asked that contract's
+  // permission instead of the one it needed.
+  //
+  // One selected deployment, resolved once, carried through everything downstream:
+  // readiness, fee, identity, splitter type, escrow, calldata, send, receipt, provenance.
+  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
+  const selected = launchTarget.deployment;
+  if (!selected) {
+    // A target that cannot say which deployment it addresses is one no guard can be
+    // aimed at, and the only alternative -- falling back to a global -- is the defect
+    // this binding exists to remove. Refuse before the claim is consumed further.
+    deps.db.releaseTweetClaim(mention.tweetId);
+    throw new Error(
+      `launch target (${launchTarget.version}) names no deployment, so its identity cannot ` +
+        'be verified. Refusing before anything is deployed or spent.'
+    );
+  }
+
+  // --- Step 3: validation guard, against the SELECTED deployment ---
   const validation = await validateLaunchRequest(intent, mention.authorXUserId, mention.tweetId, {
     db: deps.db,
     getAccountSignals: (id) => deps.xClient.getAccountSignals(id, mention.authorHandle),
-    getLiveFeeWei: deps.getLiveFeeWei,
+    // Both bound to the deployment this launch is going to, rather than to whatever
+    // the global flag considers active.
+    getLiveFeeWei: () => deps.getLiveFeeWei(selected),
     getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
-    getLaunchReadiness: deps.getLaunchReadiness,
+    getLaunchReadiness: () => deps.getLaunchReadiness(selected),
   });
 
   if (!validation.approved) {
@@ -207,7 +240,6 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   // fixed at launch and nobody can change it afterwards -- so an asset we cannot
   // honour is a refusal, never a substitution. Launching against ETH because AAPL
   // was unavailable would be a permanent decision made on somebody's behalf.
-  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
   let pairAsset: PairAsset = NATIVE_ETH_ASSET;
 
   if (intent.pairWith && deps.pairAssets) {
@@ -282,16 +314,6 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // current V2 factory's hashes, escrow and chain and then sent a transaction
     // somewhere else, with every tick green. A check for one deployment must never
     // authorise a transaction to another.
-    const selected = launchTarget.deployment;
-    if (!selected) {
-      // A target that cannot say which deployment it addresses is one the identity check
-      // cannot be aimed at, and the only alternative -- falling back to a global -- is
-      // the defect this whole binding exists to remove. Refuse before the splitter.
-      throw new Error(
-        `launch target (${launchTarget.version}) names no deployment, so its identity cannot be ` +
-          'verified. Refusing before anything is deployed or spent.'
-      );
-    }
     const verifyIdentity =
       deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
     await verifyIdentity(deps.provider);
@@ -311,7 +333,8 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       selected
     );
 
-    const liveFee = await deps.getLiveFeeWei();
+    // Priced from the deployment this launch is actually going to.
+    const liveFee = await deps.getLiveFeeWei(selected);
     if (liveFee > config.TREASURY_MAX_FEE_WEI) {
       // Re-check immediately before spending -- the validator already checked this, but fee
       // could theoretically move in the window between validation and execution. Belt and

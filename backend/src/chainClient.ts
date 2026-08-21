@@ -3,7 +3,7 @@ import { config } from './config';
 import { PONS_FACTORY_ABI } from './ponsEncoder';
 import { PONS_V2_FACTORY_ABI } from './ponsV2Encoder';
 import { PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
-import { executableDeployment } from './deployments';
+import { executableDeployment, PonsDeployment } from './deployments';
 
 /** The ABI of whichever deployment is executable, so reads decode against the contract
  *  actually being addressed rather than against whichever v2 shipped first. */
@@ -67,8 +67,26 @@ function factory(provider: ethers.Provider): ethers.Contract {
  * call would have reverted. It read 0.0005 ETH live on 2026-08-04, matching the documented
  * figure, but the point stands that the figure is not a constant.
  */
-export async function getLiveFeeWei(provider: ethers.Provider): Promise<bigint> {
-  const fee = await factory(provider).launchFee();
+/**
+ * The launch fee, from a named deployment when one is given.
+ *
+ * It took only a provider and read whichever factory the global flag considered active.
+ * The orchestrator can be launching through a different one -- a v1 rollback, an injected
+ * target -- and pricing a launch from a contract it never calls is how a fee ceiling
+ * passes against terms nobody is being offered.
+ */
+export async function getLiveFeeWei(
+  provider: ethers.Provider,
+  deployment?: PonsDeployment
+): Promise<bigint> {
+  const c = deployment
+    ? new ethers.Contract(
+        deployment.factory,
+        deployment.tokenParamsVersion === 'v1' ? PONS_FACTORY_ABI : executableAbi(),
+        provider
+      )
+    : factory(provider);
+  const fee = await c.launchFee();
   return BigInt(fee.toString());
 }
 
@@ -116,13 +134,26 @@ export async function getLaunchReadiness(
   provider: ethers.Provider,
   launcherAddress: string,
   launchConfigId: bigint,
-  dexId: bigint = config.PONS_DEX_ID
+  dexId: bigint = config.PONS_DEX_ID,
+  /** The deployment this launch is going to. Without it this reads whichever factory
+   *  the global flag considers active, which can be a contract nobody is calling. */
+  deployment?: PonsDeployment
 ): Promise<LaunchReadiness> {
-  const f = factory(provider);
+  const f = deployment
+    ? new ethers.Contract(
+        deployment.factory,
+        deployment.tokenParamsVersion === 'v1' ? PONS_FACTORY_ABI : executableAbi(),
+        provider
+      )
+    : factory(provider);
   // v2 has no dexConfigCount: the DEX is not a launch parameter there, the pairing
   // asset is. Calling it would throw rather than report, so the dex leg is simply
   // not a question on v2 and is answered as satisfied.
-  const isV2 = config.PONS_FACTORY_VERSION === 'v2';
+  // From the deployment when one was given, so a v1 rollback asks v1's questions even
+  // if the global flag still says v2.
+  const isV2 = deployment
+    ? deployment.tokenParamsVersion !== 'v1'
+    : config.PONS_FACTORY_VERSION === 'v2';
   const [enabled, whitelisted, count, dexCount] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,
