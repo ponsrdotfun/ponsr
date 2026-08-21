@@ -17,8 +17,26 @@ const SOLC_VERSION = require('solc/package.json').version;
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Source as the compiler must see it, identically on every platform.
+ *
+ * Solidity hashes the source into the contract's metadata, and the metadata is appended
+ * to the deployed bytecode. So line endings are not cosmetic here: these files sit in a
+ * Windows checkout with CRLF and in a Linux checkout with LF, and passing them through
+ * verbatim produced artifacts whose logic matched but whose metadata tail did not.
+ *
+ * An independent Linux rebuild with the exact same pinned solc found precisely that, and
+ * it makes the only question that matters -- does this committed artifact correspond to
+ * this source? -- unanswerable depending on who is asking.
+ *
+ * Normalised to LF, so the compiler input is byte-identical wherever it runs. A leading
+ * BOM goes too: it is invisible, it is a source byte, and it would do the same thing.
+ */
 function readSource(relPath) {
-  return fs.readFileSync(path.join(__dirname, relPath), 'utf8');
+  return fs
+    .readFileSync(path.join(__dirname, relPath), 'utf8')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n');
 }
 
 const input = {
@@ -80,8 +98,21 @@ for (const [file, contracts] of Object.entries(output.contracts)) {
   }
 }
 
+/**
+ * Where to write.
+ *
+ * Defaults to the tracked locations. A verifier sets ARTIFACT_OUT_DIR so it can rebuild
+ * and compare WITHOUT overwriting the files it is judging -- the previous verifier
+ * compiled in place and then compared against the result, which meant a tampered
+ * artifact passed as long as the compile ran first.
+ */
+const OUT_DIR = process.env.ARTIFACT_OUT_DIR || null;
+const outPath = (...parts) =>
+  OUT_DIR ? path.join(OUT_DIR, parts[parts.length - 1]) : path.join(__dirname, ...parts);
+if (OUT_DIR) fs.mkdirSync(OUT_DIR, { recursive: true });
+
 fs.writeFileSync(
-  path.join(__dirname, 'contracts-test', 'artifacts.json'),
+  outPath('contracts-test', 'artifacts.json'),
   JSON.stringify(artifacts, null, 2)
 );
 
@@ -94,7 +125,7 @@ fs.writeFileSync(
 // So this is written here, from the same compile, every time. Two copies of one artifact only
 // stay in step if nobody has to remember to make them.
 fs.writeFileSync(
-  path.join(__dirname, 'backend', 'src', 'feeSplitterArtifact.json'),
+  outPath('backend', 'src', 'feeSplitterArtifact.json'),
   // Both splitters, for exactly the same reason. v2 launches need FeeSplitterV2 (the
   // escrow on v2 pays msg.sender, so a splitter that cannot call it strands every fee),
   // and a version emitted from anywhere but this compile is a second copy waiting to

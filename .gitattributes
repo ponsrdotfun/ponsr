@@ -1,0 +1,4 @@
+# Solidity sources are hashed into contract metadata, so their line endings are part
+# of the build. Pinned to LF in the working tree on every platform; compile-all.js
+# normalises as well, because a .gitattributes only governs files git itself writes.
+*.sol text eol=lf
