@@ -100,3 +100,9 @@ desktop.ini
 *.bundle
 ponsr-*-review.patch
 ponsr-*-commits.txt
+
+# Review artifacts under the new naming.
+ponsr-standalone.bundle
+ponsr-incremental.bundle
+ponsr-range.patch
+ponsr-commits.txt
