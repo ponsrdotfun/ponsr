@@ -173,7 +173,9 @@ describe('handleMention verifies the SELECTED deployment', () => {
     } finally {
       db.close();
     }
-    expect(seen).toEqual(['pons-v1']);
+    // Twice, deliberately: once before the pair read and once with nothing between it
+    // and the splitter deploy. Both must name the SELECTED deployment.
+    expect(seen).toEqual(['pons-v1', 'pons-v1']);
     expect(seen).not.toContain(executableDeployment().id);
   });
 
@@ -432,5 +434,38 @@ describe('the canary threads one selected deployment', () => {
 
   it('decodes the receipt against the selected deployment', () => {
     expect(code).toMatch(/extractLaunchFromReceipt\([\s\S]{0,60}selected\)/);
+  });
+});
+
+/**
+ * Identity is checked twice, and the second time is the one that counts.
+ *
+ * The orchestrator verifies identity, then deploys the splitter. Between those two lines
+ * is an interval -- short, but not zero -- and a factory upgrade or a repointed RPC
+ * landing inside it produces a splitter bound to a deployment that has already moved.
+ *
+ * The provider was withheld from `deploySplitter` on the reasoning that the answer was
+ * already known. It was; "already" is not "still". Two reads of the same answer cost one
+ * RPC round trip, and the artifact they protect cannot be undone.
+ */
+describe('the splitter deployer runs its own identity check', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const code: string = fs
+    .readFileSync(path.join(__dirname, '../src/orchestrator.ts'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .filter((l: string) => !l.trim().startsWith('//'))
+    .join('\n');
+
+  it('verifies identity a second time immediately before the deploy', () => {
+    // Two calls, and the second must sit directly above deploySplitter with nothing
+    // between them. One check plus an interval is one check.
+    expect((code.match(/await verifyIdentity\(/g) ?? []).length).toBe(2);
+    expect(code).toMatch(/await verifyIdentity\(deps\.provider\);\s*const \{ splitterAddress/);
+  });
+
+  it('still passes the selected deployment alongside it', () => {
+    expect(code).toMatch(/deploySplitter\([\s\S]{0,400}selected/);
   });
 });

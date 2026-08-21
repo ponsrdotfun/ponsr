@@ -355,14 +355,26 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
     await verifyIdentity(deps.provider);
 
+    /**
+     * Identity again, immediately before the deploy.
+     *
+     * The first check happens before the pair read; this one happens with nothing between
+     * it and the transaction. That gap is short but not zero, and a factory upgrade or a
+     * repointed RPC landing inside it produces a splitter bound to a deployment that has
+     * already moved -- the first artifact of this launch that cannot be undone.
+     *
+     * Two reads of the same answer cost one RPC round trip. The interval they remove is
+     * one nobody can bound.
+     */
+    await verifyIdentity(deps.provider);
+
     const { splitterAddress, deployTxHash } = await deploySplitter(
       deps.treasurySigner,
       wallet.walletAddress,
       treasuryAddress,
       ethers.ZeroAddress,
-      // Nothing here: identity was asserted just above, through the injected
-      // `verifyIdentity`, so passing the provider again would repeat the same four RPC
-      // calls for the same answer.
+      // Not the provider: the second check runs above, through the same injected seam,
+      // so `deploySplitter` is not asked to re-derive it from module state.
       undefined,
       // The SELECTED deployment, so the escrow baked immutably into this splitter comes
       // from the same place the calldata will. Reading module state here was how a
