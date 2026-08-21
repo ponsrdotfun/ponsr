@@ -219,3 +219,147 @@ describe('reconcileClaim', () => {
     expect(r.evidence.expectedCreator).toBe('950');
   });
 });
+
+/**
+ * Queued payouts, measured rather than assumed to be zero.
+ *
+ * `FeeSplitter` queues a share it cannot deliver instead of reverting the whole split --
+ * a blacklisted recipient, a contract that rejects the transfer -- and records it in
+ * `claimableERC20[token][recipient]`. That is deliberate: reverting would take the other
+ * recipient's money down with it.
+ *
+ * `reconcileClaim` has always understood queued amounts. The collector never measured
+ * them: it passed zero, so a legitimately queued share appeared as a balance that simply
+ * failed to arrive. The operator would read RECONCILIATION FAILED and go looking for
+ * lost money that is sitting safely in the splitter's ledger, owed and claimable.
+ *
+ * Reporting "money is missing" when it is queued is not a conservative error. It sends
+ * someone hunting a theft that did not happen, and the next real shortfall reads like
+ * more of the same.
+ */
+describe('queued payouts reconcile as delivered but are reported as owed', () => {
+  const base = {
+    claimed: 1000n,
+    creatorDelta: 0n,
+    treasuryDelta: 0n,
+    escrowRemaining: 0n,
+    splitterRemaining: 0n,
+  };
+
+  it('a fully queued creator share reconciles', () => {
+    const r = reconcileClaim({ ...base, creatorDelta: 0n, queuedCreator: 950n, treasuryDelta: 50n });
+    expect(r.ok).toBe(true);
+    expect(r.notes.join(' ')).toMatch(/queued/i);
+  });
+
+  it('a fully queued treasury share reconciles', () => {
+    const r = reconcileClaim({ ...base, creatorDelta: 950n, treasuryDelta: 0n, queuedTreasury: 50n });
+    expect(r.ok).toBe(true);
+    expect(r.notes.join(' ')).toMatch(/queued/i);
+  });
+
+  it('both queued at once reconciles', () => {
+    const r = reconcileClaim({ ...base, queuedCreator: 950n, queuedTreasury: 50n });
+    expect(r.ok).toBe(true);
+  });
+
+  // The distinction that matters: queued money is owed, missing money is gone.
+  it('a true shortfall is still a failure, queue or no queue', () => {
+    const r = reconcileClaim({ ...base, creatorDelta: 900n, queuedCreator: 40n, treasuryDelta: 50n });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(' ')).toMatch(/creator/i);
+  });
+
+  it('a partly delivered, partly queued share still adds up', () => {
+    const r = reconcileClaim({ ...base, creatorDelta: 900n, queuedCreator: 50n, treasuryDelta: 50n });
+    expect(r.ok).toBe(true);
+  });
+
+  it('reports queued amounts in the machine-readable evidence', () => {
+    const r = reconcileClaim({ ...base, queuedCreator: 950n, queuedTreasury: 50n });
+    expect(r.evidence.queuedCreator).toBe('950');
+    expect(r.evidence.queuedTreasury).toBe('50');
+  });
+
+  it('says plainly that queued money has not arrived', () => {
+    // The note is what stops an operator ticking this off as settled.
+    const r = reconcileClaim({ ...base, queuedCreator: 950n, treasuryDelta: 50n });
+    expect(r.notes.join(' ')).toMatch(/not arrived|release/i);
+  });
+});
+
+/**
+ * The collector must actually read the queue.
+ *
+ * A static check, because running this script signs transactions. What it can do is
+ * refuse to let the measurement be dropped again: the ABI must expose `claimableERC20`,
+ * and the queued deltas must reach `reconcileClaim`.
+ */
+describe('the collector measures the queue', () => {
+  const src: string = require('fs').readFileSync(
+    require('path').join(__dirname, '../scripts/collect-and-split-v2.ts'),
+    'utf8'
+  );
+
+  it('exposes claimableERC20 in its ABI', () => {
+    expect(src).toMatch(/claimableERC20\(address,\s*address\)/);
+  });
+
+  it('passes queued deltas into reconciliation rather than zero', () => {
+    expect(src).toMatch(/queuedCreator:/);
+    expect(src).toMatch(/queuedTreasury:/);
+  });
+});
+
+/**
+ * The collector's signer boundary.
+ *
+ * The runbook says a mainnet claim is permissionless and does not need the bot's key.
+ * The script loaded `TREASURY_SIGNER_PRIVATE_KEY` unconditionally -- on the very first
+ * line of `main()`, before knowing whether `--execute` was even passed. So a dry run,
+ * whose entire purpose is to look without touching, could not run at all without a
+ * production signing credential present.
+ *
+ * That is backwards twice over. It makes the safe path require the dangerous input, and
+ * it teaches an operator to put a raw key on a machine in order to READ something. The
+ * key it names is also the one production must never set.
+ */
+describe('the collector reads without credentials and signs only on request', () => {
+  const src: string = require('fs').readFileSync(
+    require('path').join(__dirname, '../scripts/collect-and-split-v2.ts'),
+    'utf8'
+  );
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+
+  it('never requires the retired production bot key', () => {
+    // TREASURY_SIGNER_PRIVATE_KEY is testnet-only and refuses to run under
+    // NODE_ENV=production. A tool that demands it is a tool that cannot be used where
+    // the money is.
+    expect(code).not.toMatch(/requireConfig\(['"]TREASURY_SIGNER_PRIVATE_KEY/);
+  });
+
+  it('does not construct a Wallet unconditionally', () => {
+    // A Wallet built at the top of main() is a key loaded before anyone asked to sign.
+    expect(code).not.toMatch(/^\s*const wallet = new ethers\.Wallet\(/m);
+  });
+
+  it('binds the splitter to a provider, so reads need no signer', () => {
+    expect(code).toMatch(/new ethers\.Contract\(\s*splitterAddress,\s*SPLITTER_V2_ABI,\s*provider\s*\)/);
+  });
+
+  it('only reaches for a signer inside the execute path', () => {
+    const idx = code.indexOf('EXECUTE');
+    const signerIdx = code.search(/new ethers\.Wallet\(/);
+    expect(signerIdx).toBeGreaterThan(-1);
+    // The Wallet must appear after the execute branch is known, not before it.
+    expect(signerIdx).toBeGreaterThan(idx);
+  });
+
+  it('names an operator-specific credential rather than the bot’s', () => {
+    expect(code).toMatch(/COLLECTOR_OPERATOR_PRIVATE_KEY|OPERATOR_PRIVATE_KEY/);
+  });
+});

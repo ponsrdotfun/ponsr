@@ -224,7 +224,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver,
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => FUNDED_TREASURY,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -253,8 +253,8 @@ describe('handleMention -- full pipeline integration', () => {
     ]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention1, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
-    await handleMention(mention2, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention1, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention2, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const user = db.getUser('user_1');
     expect(user).not.toBeNull();
@@ -271,7 +271,7 @@ describe('handleMention -- full pipeline integration', () => {
       },
     };
     const walletResolver = new MockWalletResolver(db);
-    const deps = { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
+    const deps = { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
 
     const first = await handleMention(mention, deps);
     const second = await handleMention(mention, deps);
@@ -289,7 +289,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(0); // silent, per composeRejectionReply
@@ -303,7 +303,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -321,7 +321,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const launchTx = treasurySigner.sentTransactions.find((t) => t.to === config.PONS_FACTORY_ADDRESS);
     const iface = new ethers.Interface(PONS_FACTORY_ABI);
@@ -341,7 +341,7 @@ describe('handleMention -- full pipeline integration', () => {
     const parser = new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('onchain_failure');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -372,7 +372,7 @@ describe('a failed reply must not rewrite a successful launch', () => {
         walletResolver: new MockWalletResolver(db),
         xClient,
         treasurySigner,
-        provider: {} as any, verifyIdentity: async () => {},
+        provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
         monitor,
         getLiveFeeWei: async () => LIVE_FEE,
         getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
@@ -462,7 +462,7 @@ describe("X's 7-day crypto-address rule", () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -650,7 +650,7 @@ describe('launching paired against an approved asset', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -753,7 +753,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -779,7 +779,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),

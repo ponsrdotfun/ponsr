@@ -159,3 +159,50 @@ export function reconcileReceipt(
   }
   return problems;
 }
+
+/**
+ * Asks the factory, right now, whether this pairing asset is still approved.
+ *
+ * `PairAssetRegistry` caches the approved set for an hour, and that is the right design:
+ * discovery is a log sweep and pons rarely changes the list. But a cache is a statement
+ * about the past, and the launch path resolved the pair from it and then deployed a
+ * splitter -- gas spent, a contract that exists forever -- before asking whether the
+ * asset was still approved.
+ *
+ * pons revokes assets. RIVN was approved and then revoked. A revocation inside the cache
+ * window bought a splitter and then reverted the launch, leaving a paid-for contract
+ * bound to a launch that never happened.
+ *
+ * One `eth_call`, immediately before the first durable side effect.
+ */
+export async function assertPairStillApproved(
+  factory: { approvedPairTokens(addr: string): Promise<boolean> },
+  pairToken: string,
+  deployment: PonsDeployment
+): Promise<void> {
+  // Native ETH is exempt by the factory's own semantics: its gate short-circuits on the
+  // zero address, so `approvedPairTokens(0x0)` is false and asking would refuse the one
+  // pairing that always works.
+  if (/^0x0+$/i.test(pairToken)) return;
+
+  let approved: boolean;
+  try {
+    approved = Boolean(await factory.approvedPairTokens(pairToken));
+  } catch (err: any) {
+    // A read that failed is not an approval. The entire purpose here is to be sure, and
+    // "I could not check" is the one answer that must not proceed.
+    throw new Error(
+      `could not read the live approval for ${pairToken} on ${deployment.id}: ` +
+        `${err?.message ?? err}. Refusing before anything is deployed.`
+    );
+  }
+
+  if (!approved) {
+    throw new Error(
+      `${pairToken} is no longer approved on ${deployment.id} (${deployment.factory}). ` +
+        'It was approved when the pair list was last scanned, so pons has revoked it since. ' +
+        'Refusing before the splitter is deployed -- launching would spend the fee on a ' +
+        'transaction that must revert.'
+    );
+  }
+}

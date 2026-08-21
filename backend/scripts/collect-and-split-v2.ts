@@ -1,8 +1,9 @@
 /**
  * Pulls a v2 launch's trading fees out of pons's escrow and splits them 95/5.
  *
- *   npx tsx scripts/collect-and-split-v2.ts <splitterAddress>
- *   npx tsx scripts/collect-and-split-v2.ts <splitterAddress> --execute
+ *   npm run collect:v2 -- <splitterAddress> --token=0x...              # dry run, keyless
+ *   COLLECTOR_OPERATOR_PRIVATE_KEY=0x... \
+ *     npm run collect:v2 -- <splitterAddress> --token=0x... --execute
  *
  * THE V1 SCRIPT DOES NOT WORK HERE, AND WOULD NOT SAY SO
  * ------------------------------------------------------
@@ -27,7 +28,7 @@
  * Running it on someone else's launch pays *them*.
  */
 import { ethers } from 'ethers';
-import { config, requireConfig } from '../src/config';
+import { config } from '../src/config';
 import { createProvider } from '../src/chainClient';
 import { DEPLOYMENTS } from '../src/deployments';
 import { assertDeploymentIdentity } from '../src/deploymentIdentity';
@@ -46,6 +47,11 @@ const SPLITTER_V2_ABI = [
   'function token() view returns (address)',
   'function escrow() view returns (address)',
   'function claimableFromEscrow(address) view returns (uint256)',
+  // The queued ledger. FeeSplitter records a share it cannot deliver here rather
+  // than reverting the whole split, so without reading it a legitimately queued
+  // payout looks exactly like money that failed to arrive.
+  'function claimableERC20(address,address) view returns (uint256)',
+  'function claimable(address) view returns (uint256)',
   'function claimAndSplit(address) returns (uint256)',
   'function claimEthAndSplit() returns (uint256)',
 ];
@@ -79,8 +85,25 @@ async function main() {
   }
   const splitterAddress = ethers.getAddress(splitterArg);
   const provider = createProvider();
-  const wallet = new ethers.Wallet(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider);
-  const splitter = new ethers.Contract(splitterAddress, SPLITTER_V2_ABI, wallet);
+
+  /**
+   * Reads need no key, and asking for one is worse than pointless.
+   *
+   * This built a Wallet from `TREASURY_SIGNER_PRIVATE_KEY` on the first line of main(),
+   * before knowing whether `--execute` had even been passed. So a dry run -- whose whole
+   * purpose is to look without touching -- could not run without a production signing
+   * credential sitting on the machine.
+   *
+   * Backwards twice: it made the safe path require the dangerous input, and it taught an
+   * operator to put a raw key somewhere in order to READ something. The key it named is
+   * also the one production must never set, since `RawKeyTreasurySigner` refuses to run
+   * under NODE_ENV=production at all.
+   *
+   * A claim is permissionless on chain and pays only the two addresses fixed at the
+   * splitter's construction, so signing it is an ordinary transaction from any funded
+   * wallet the operator controls -- never the bot's.
+   */
+  const splitter = new ethers.Contract(splitterAddress, SPLITTER_V2_ABI, provider);
 
   console.log(EXECUTE ? '=== CLAIM & SPLIT (v2) — EXECUTING ===' : '=== CLAIM & SPLIT (v2) — DRY RUN ===');
   console.log();
@@ -238,9 +261,38 @@ async function main() {
   }
 
   if (!EXECUTE) {
-    console.log('\nDry run. Re-run with --execute to claim and split.');
+    console.log('\nDry run. Nothing was signed and no credential was read.');
+    console.log('Re-run with --execute to claim and split.');
     return;
   }
+
+  /**
+   * The operator's own signer, reached for only now.
+   *
+   * Deliberately NOT `TREASURY_SIGNER_PRIVATE_KEY`. That one is testnet-only, refuses to
+   * run under NODE_ENV=production, and belongs to the bot -- whose Turnkey policy exists
+   * precisely so that key cannot move funds freely. Naming it here would ask an operator
+   * to defeat that on their own laptop.
+   *
+   * `claimAndSplit` is permissionless and pays only the creator and the treasury, both
+   * fixed immutably at the splitter's construction. So any funded wallet can send it, and
+   * the sender gains nothing by being the bot.
+   */
+  const operatorKey = process.env.COLLECTOR_OPERATOR_PRIVATE_KEY;
+  if (!operatorKey) {
+    console.error('\n--execute needs a signer, and it must not be the bot\'s.');
+    console.error('');
+    console.error('  COLLECTOR_OPERATOR_PRIVATE_KEY=0x... npm run collect:v2 -- <splitter> --execute');
+    console.error('');
+    console.error('Any funded wallet works: claimAndSplit is permissionless and pays only the');
+    console.error('creator and treasury addresses fixed when the splitter was deployed. The');
+    console.error('sender gains nothing by being the treasury, and TREASURY_SIGNER_PRIVATE_KEY');
+    console.error('is testnet-only and refuses to run in production anyway.');
+    process.exit(1);
+  }
+  const signer = new ethers.Wallet(operatorKey, provider);
+  const splitterAsSigner = splitter.connect(signer) as ethers.Contract;
+  line('signing as', await signer.getAddress());
 
   const creatorAddress = (await splitter.creator()) as string;
   const treasuryAddress = (await splitter.treasury()) as string;
@@ -249,17 +301,36 @@ async function main() {
 
   /** Both recipients' balances for one asset, so a claim can be measured rather than
    *  described. A null token means native ETH. */
-  async function balances(token: string | null): Promise<{ creator: bigint; treasury: bigint }> {
+  async function balances(
+    token: string | null
+  ): Promise<{ creator: bigint; treasury: bigint; queuedCreator: bigint; queuedTreasury: bigint }> {
+    // The queued ledger is sampled alongside the wallet balance, because a share that
+    // could not be delivered lands there instead. Reading only the wallet reports owed
+    // money as missing money, which sends an operator hunting a theft that did not
+    // happen -- and makes the next real shortfall read like more of the same.
+    const queued =
+      token === null
+        ? {
+            queuedCreator: (await splitter.claimable(creatorAddress)) as bigint,
+            queuedTreasury: (await splitter.claimable(treasuryAddress)) as bigint,
+          }
+        : {
+            queuedCreator: (await splitter.claimableERC20(token, creatorAddress)) as bigint,
+            queuedTreasury: (await splitter.claimableERC20(token, treasuryAddress)) as bigint,
+          };
+
     if (token === null) {
       return {
         creator: await provider.getBalance(creatorAddress),
         treasury: await provider.getBalance(treasuryAddress),
+        ...queued,
       };
     }
     const erc = new ethers.Contract(token, ERC20_ABI, provider);
     return {
       creator: (await erc.balanceOf(creatorAddress)) as bigint,
       treasury: (await erc.balanceOf(treasuryAddress)) as bigint,
+      ...queued,
     };
   }
 
@@ -295,17 +366,31 @@ async function main() {
         ? ((await new ethers.Contract(escrowAddress, ESCROW_ABI, provider).balanceOf(splitterAddress)) as bigint)
         : ((await splitter.claimableFromEscrow(token)) as bigint);
 
+    // What the splitter holds against a queued claim is not residue: it is money it is
+    // deliberately keeping until someone releases it.
+    const heldForQueue =
+      after.queuedCreator - before.queuedCreator + (after.queuedTreasury - before.queuedTreasury);
+
     const r = reconcileClaim({
       claimed,
       creatorDelta: after.creator - before.creator,
       treasuryDelta: after.treasury - before.treasury,
+      // DELTAS, not absolute balances. A share queued by an earlier run is already owed
+      // and is not this claim's doing; counting it here would make this claim appear to
+      // have delivered money it never touched.
+      queuedCreator: after.queuedCreator - before.queuedCreator,
+      queuedTreasury: after.queuedTreasury - before.queuedTreasury,
       escrowRemaining,
-      splitterRemaining,
+      splitterRemaining: splitterRemaining - heldForQueue,
     });
 
     const fmt = (v: string) => ethers.formatUnits(BigInt(v), decimals);
     line('creator received', `${fmt(r.evidence.creatorDelta)} (expected ${fmt(r.evidence.expectedCreator)})`);
     line('treasury received', `${fmt(r.evidence.treasuryDelta)} (expected ${fmt(r.evidence.expectedTreasury)})`);
+    if (BigInt(r.evidence.queuedCreator) > 0n || BigInt(r.evidence.queuedTreasury) > 0n) {
+      line('queued for creator', fmt(r.evidence.queuedCreator));
+      line('queued for treasury', fmt(r.evidence.queuedTreasury));
+    }
     line('left in splitter', fmt(r.evidence.splitterRemaining));
     line('left claimable', fmt(r.evidence.escrowRemaining));
     for (const n of r.notes) console.log(`  note: ${n}`);
@@ -322,12 +407,12 @@ async function main() {
   for (const c of claimable) {
     if (c.amount === 0n) continue;
     await claimAndReconcile(c.symbol, c.token, c.decimals, c.amount, () =>
-      splitter['claimAndSplit(address)'](c.token)
+      splitterAsSigner['claimAndSplit(address)'](c.token)
     );
   }
 
   if (nativeAmount > 0n) {
-    await claimAndReconcile('ETH', null, 18, nativeAmount, () => splitter.claimEthAndSplit());
+    await claimAndReconcile('ETH', null, 18, nativeAmount, () => splitterAsSigner.claimEthAndSplit());
   }
 
   // Machine-readable, so an operator keeps it beside the transaction hashes rather than

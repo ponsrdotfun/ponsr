@@ -14,6 +14,7 @@ import { LaunchTarget, createLaunchTarget } from './launchTarget';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
 import { launchSalt, DecodedCurrentV2Launch } from './ponsV2CurrentEncoder';
 import {
+  assertPairStillApproved,
   assertOutgoingLaunch,
   extractLaunchFromReceipt,
   reconcileReceipt,
@@ -79,6 +80,16 @@ export interface OrchestratorDeps {
    * so explicitly is better than a stub that quietly answers yes.
    */
   verifyIdentity?: (provider: ethers.Provider) => Promise<void>;
+  /**
+   * Re-reads the selected pair's approval from the chain immediately before the first
+   * durable side effect.
+   *
+   * The registry caches approvals for an hour, which is right -- but a cache is a
+   * statement about the past, and pons revokes assets. A revocation inside that window
+   * bought a splitter and then reverted the launch. Injected like every other
+   * chain-facing dependency, and defaulted to the real read.
+   */
+  assertPairApproved?: (deployment: PonsDeployment, pairToken: string) => Promise<void>;
 }
 
 /** Alerting must never change a launch outcome. If the notifier is down, that is
@@ -305,6 +316,23 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // The splitter's `token` field is bookkeeping-only (see FeeSplitter.sol NatSpec), so a
     // placeholder here is safe; it gets superseded by the real launches table record either
     // way once the launch confirms.
+    // The pair, re-read from the chain.
+    //
+    // `pairAssets.resolve` answered from a cache up to an hour old. pons revokes assets
+    // -- RIVN was approved and then revoked -- and a revocation inside that window means
+    // the splitter below is bought and paid for against a launch that must revert.
+    const assertPair =
+      deps.assertPairApproved ??
+      (async (d: PonsDeployment, pairToken: string) => {
+        const f = new ethers.Contract(
+          d.factory,
+          ['function approvedPairTokens(address) view returns (bool)'],
+          deps.provider
+        );
+        await assertPairStillApproved(f as never, pairToken, d);
+      });
+    await assertPair(selected, pairAsset.address);
+
     // Identity, immediately before the first DURABLE artifact of this launch exists.
     //
     // Readiness verified it earlier, but readiness and this deploy are two moments and
@@ -450,7 +478,28 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       return { kind: 'onchain_failure', detail: 'transaction reverted' };
     }
 
-    const tokenAddress = launchTarget.extractToken(receipt.logs);
+    /**
+     * Who is allowed to name the launched token.
+     *
+     * `launchTarget.extractToken` decodes the FIRST log that parses as `TokenLaunched`,
+     * from any emitter. That signature is not unique to pons, so a foreign contract's
+     * identically shaped event -- ordered before the real one -- became the persisted
+     * token, the success reply, and the address a creator would later be told to claim
+     * against. The correctly scoped decoder ran afterwards and could only complain about
+     * a record already written.
+     *
+     * For the deployment that credits an escrow, the scoped decoder is the SOLE
+     * authority: logs from `selected.factory` and nowhere else. v1 keeps its own
+     * extractor, which reads a different event shape from a different contract.
+     */
+    const scoped =
+      selected.tokenParamsVersion === 'v2-salt'
+        ? extractLaunchFromReceipt((receipt.logs ?? []) as never, selected)
+        : null;
+    const tokenAddress =
+      selected.tokenParamsVersion === 'v2-salt'
+        ? scoped?.token ?? null
+        : launchTarget.extractToken(receipt.logs);
     if (!tokenAddress) {
       // Transaction succeeded but we couldn't find the expected event -- this should not
       // happen against the REAL Pons ABI once verified (see ponsEncoder.ts's warning about
@@ -481,7 +530,9 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       // A receipt carries every log every contract in the transaction raised, and
       // `TokenLaunched` has one signature across both V2 deployments -- so a log of that
       // shape from any contract would decode cleanly and be read as this launch's token.
-      const fromFactory = extractLaunchFromReceipt((receipt.logs ?? []) as any, selected);
+      // Already decoded above, where it decided the token. Re-deriving would invite
+      // the two to disagree.
+      const fromFactory = scoped;
 
       if (!fromFactory) {
         // The launch confirmed, so this is not a failure of the launch. It is a failure
