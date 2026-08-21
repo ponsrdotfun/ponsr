@@ -241,6 +241,24 @@ export class Db {
       );
   }
 
+  /**
+   * Fills in the bonding curve once the launch has confirmed.
+   *
+   * The curve address does not exist until the transaction lands, so provenance is
+   * written before the send with `curve: null` and completed here. Recording a guess
+   * beforehand would put an address in a money-related record that no chain event ever
+   * produced.
+   *
+   * Silently does nothing when there is no provenance row -- a v1 launch, or one made
+   * before the table existed. Creating one here would invent lineage for a launch whose
+   * lineage was never captured.
+   */
+  updateLaunchProvenanceCurve(launchId: string, curve: string): void {
+    this.db
+      .prepare('UPDATE launch_provenance SET curve = ? WHERE launch_id = ?')
+      .run(curve, launchId);
+  }
+
   /** Null for launches made before this was recorded. Not a default: those launches
    *  went through contracts that no longer decide anything, and naming the current
    *  deployment for them would be a guess written down as a fact. */

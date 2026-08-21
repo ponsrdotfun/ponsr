@@ -30,6 +30,7 @@ import { ethers } from 'ethers';
 import { config, requireConfig } from '../src/config';
 import { createProvider } from '../src/chainClient';
 import { DEPLOYMENTS } from '../src/deployments';
+import { assertDeploymentIdentity } from '../src/deploymentIdentity';
 
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -108,9 +109,20 @@ async function main() {
   // confident, inverted error message.
   //
   // A splitter's escrow identifies its deployment. Resolve it rather than judge it.
-  const owning = DEPLOYMENTS.find(
+  //
+  // EXACTLY one match, and the deployment's full identity verified before any claim.
+  // Two deployments sharing an escrow would make "which factory launched this token"
+  // ambiguous, and the answer decides which contract is asked about the pairing asset.
+  const matches = DEPLOYMENTS.filter(
     (d) => d.feeEscrow.toLowerCase() === escrowAddress.toLowerCase()
   );
+  if (matches.length > 1) {
+    console.error('\nMore than one known deployment uses this escrow:');
+    for (const d of matches) console.error(`  ${d.id} ${d.factory}`);
+    console.error('Refusing: which factory launched this token decides what is claimed.');
+    process.exit(1);
+  }
+  const owning = matches[0];
   if (!owning) {
     console.error('\nThis splitter points at an escrow no known deployment uses.');
     console.error(`  splitter escrow: ${escrowAddress}`);
@@ -119,6 +131,12 @@ async function main() {
     process.exit(1);
   }
   line('deployment', `${owning.id} (${owning.factory})`);
+
+  // The same identity check the launch path runs, before money moves in the other
+  // direction. A claim is a transfer, and claiming against a factory that is not the one
+  // the registry describes is the same mistake as launching through one.
+  await assertDeploymentIdentity(owning, provider);
+  line('identity', 'chain id, runtime hash, ABI hash, selector and escrow all match');
 
   // Fees arrive as both sides of the pair, so the pairing asset is read from the factory
   // rather than assumed to be WETH the way the v1 script can afford to.
@@ -129,9 +147,23 @@ async function main() {
     require(`../src/${owning.abiPath}`) as ethers.InterfaceAbi,
     provider
   );
+  // The token must actually belong to this factory.
+  //
+  // Everything above establishes which deployment the SPLITTER points at. That is not
+  // the same claim as "this factory launched this token", and the two can differ if a
+  // splitter is ever reused or mis-recorded. `getLaunchedToken` reverting, or returning
+  // an empty record, is the factory saying it has never heard of this token.
   let pairToken: string | null = null;
   try {
     const launch = await factory.getLaunchedToken(launchedToken);
+    const curve = String(launch.curve ?? launch[1] ?? ethers.ZeroAddress);
+    if (curve === ethers.ZeroAddress) {
+      console.error(`
+${owning.id} does not recognise token ${launchedToken}.`);
+      console.error('Refusing: the splitter names this deployment, but the factory has no');
+      console.error('record of launching this token. One of the two is wrong.');
+      process.exit(1);
+    }
     pairToken = String(launch.pairToken ?? launch[3]);
   } catch {
     console.warn('  (could not read the launch record; checking the launched token only)');

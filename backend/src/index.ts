@@ -124,8 +124,10 @@ const pairAssets = (() => {
       // factory's log would offer a set that is both too small and, for anything
       // revoked, wrong -- and wrong here means a launch that reverts after the
       // splitter has been deployed and paid for.
-      factoryAddress: d.factory,
-      fromBlock: d.startBlock,
+      // The deployment itself, so the address, the ABI and the start block cannot
+      // disagree. Passing an address and a block separately was two chances to name
+      // different contracts.
+      deployment: d,
     })
   );
 })();

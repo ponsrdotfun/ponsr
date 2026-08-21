@@ -428,6 +428,18 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       txHash: sent.hash,
       feeWeiPaid: liveFee.toString(),
     });
+
+    // The bonding curve, from the receipt's own event.
+    //
+    // It cannot be known before the transaction lands, so provenance was written with
+    // `curve: null` and is completed here. Recording a predicted address earlier would
+    // put a value in a money-related record that no chain event ever produced -- and
+    // `curve` was documented as lineage while being permanently null, which is worse
+    // than an admitted gap.
+    if (selected.tokenParamsVersion === 'v2-salt') {
+      const details = extractCurrentV2LaunchDetails(receipt.logs ?? []);
+      if (details?.curve) deps.db.updateLaunchProvenanceCurve(launchId, details.curve);
+    }
     deps.db.recordTreasurySpend(launchId, liveFee);
     notify(deps, (m) => m.onLaunchRecorded());
 

@@ -86,3 +86,56 @@ describe('the pair scanner decodes with the deployment it is scanning', () => {
     expect(sigs('ponsV2LaunchFactory.json')).toEqual(sigs('ponsV2CurrentLaunchFactory.json'));
   });
 });
+
+/**
+ * The scanner is given a deployment, not an address plus an optional deployment.
+ *
+ * `ChainPairTokenSourceOptions` took `factoryAddress` and, separately, an optional
+ * `deployment` used only to pick the ABI. Two independent ways to say which contract is
+ * being scanned, and nothing checking they agree -- so an address from one deployment
+ * could be decoded with another's ABI and nothing would notice. That is the same shape
+ * as reading a superseded factory: every field individually plausible, the combination
+ * describing no real contract.
+ */
+describe('the pair scanner cannot be pointed at a mismatched pair', () => {
+  const { ChainPairTokenSource } = require('../src/pairTokenSource');
+  const { executableDeployment, deploymentById } = require('../src/deployments');
+
+  const provider = {} as never;
+
+  it('accepts a deployment and derives the address from it', () => {
+    const d = executableDeployment();
+    const src = new ChainPairTokenSource({ provider, deployment: d });
+    expect(src.factoryAddress.toLowerCase()).toBe(d.factory.toLowerCase());
+  });
+
+  it('refuses an address that is not the deployment’s factory', () => {
+    const d = executableDeployment();
+    expect(
+      () =>
+        new ChainPairTokenSource({
+          provider,
+          deployment: d,
+          factoryAddress: deploymentById('pons-v2-legacy-7e1').factory,
+        })
+    ).toThrow(/factory/i);
+  });
+
+  it('accepts a matching address, differently cased', () => {
+    const d = executableDeployment();
+    expect(
+      () =>
+        new ChainPairTokenSource({
+          provider,
+          deployment: d,
+          factoryAddress: d.factory.toUpperCase().replace('0X', '0x'),
+        })
+    ).not.toThrow();
+  });
+
+  it('defaults its start block to the deployment’s own', () => {
+    const d = executableDeployment();
+    const src = new ChainPairTokenSource({ provider, deployment: d });
+    expect(src.fromBlock).toBe(d.startBlock);
+  });
+});

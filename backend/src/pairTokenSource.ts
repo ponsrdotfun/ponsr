@@ -54,10 +54,23 @@ const DEFAULT_CHUNK = 1_000_000;
 
 export interface ChainPairTokenSourceOptions {
   provider: ethers.Provider;
-  factoryAddress: string;
-  /** Which registry entry `factoryAddress` belongs to, so decoding and addressing
-   *  cannot drift apart. Defaults to the executable deployment. */
+  /**
+   * Which deployment is being scanned. This is the identity; everything else follows.
+   *
+   * It used to take `factoryAddress` as the primary input with `deployment` as an
+   * optional extra used only to pick the ABI -- two independent ways to say which
+   * contract, and nothing checking they agreed. An address from one deployment decoded
+   * with another's ABI would have passed silently, every field individually plausible
+   * and the combination describing no real contract.
+   */
   deployment?: import('./deployments').PonsDeployment;
+  /**
+   * Optional, and asserted against the deployment rather than trusted.
+   *
+   * Kept only so existing callers that pass an address keep working; when both are
+   * given they must name the same contract.
+   */
+  factoryAddress?: string;
   /** Lowest block to scan. Below the factory's deployment there is nothing to find. */
   fromBlock?: number;
   chunkSize?: number;
@@ -66,10 +79,35 @@ export interface ChainPairTokenSourceOptions {
 export class ChainPairTokenSource implements PairTokenSource {
   private factory: ethers.Contract;
 
+  /** The deployment this scanner reads, resolved once. */
+  readonly deployment: import('./deployments').PonsDeployment;
+  readonly factoryAddress: string;
+  readonly fromBlock: number;
+
   constructor(private opts: ChainPairTokenSourceOptions) {
+    this.deployment = opts.deployment ?? executableDeployment();
+
+    // If a caller supplies both, they must agree. Silently preferring one would make the
+    // other a decoration that looks load-bearing.
+    if (
+      opts.factoryAddress &&
+      opts.factoryAddress.toLowerCase() !== this.deployment.factory.toLowerCase()
+    ) {
+      throw new Error(
+        `pair scanner was given factory ${opts.factoryAddress} but deployment ` +
+          `${this.deployment.id} is ${this.deployment.factory}. Refusing: an address from one ` +
+          "deployment decoded with another's ABI is how a superseded contract gets read as current."
+      );
+    }
+
+    this.factoryAddress = this.deployment.factory;
+    // The deployment's own start block, not a separately configurable number that can
+    // drift below it (scanning nothing) or above it (silently missing approvals).
+    this.fromBlock = opts.fromBlock ?? this.deployment.startBlock;
+
     this.factory = new ethers.Contract(
-      opts.factoryAddress,
-      pairFactoryAbi(opts.deployment),
+      this.factoryAddress,
+      pairFactoryAbi(this.deployment),
       opts.provider
     );
   }
@@ -85,7 +123,10 @@ export class ChainPairTokenSource implements PairTokenSource {
 
   async approvalHistory(): Promise<ApprovalEvent[]> {
     const head = await this.opts.provider.getBlockNumber();
-    const from = this.scannedTo !== null ? this.scannedTo + 1 : this.opts.fromBlock ?? 0;
+    // this.fromBlock, resolved once in the constructor from the deployment. Reading
+    // opts.fromBlock again here meant a scanner constructed from a deployment alone
+    // started at block 0 and swept millions of empty blocks.
+    const from = this.scannedTo !== null ? this.scannedTo + 1 : this.fromBlock;
     const chunk = this.opts.chunkSize ?? DEFAULT_CHUNK;
     const filter = this.factory.filters.PairTokenApprovalUpdated();
 

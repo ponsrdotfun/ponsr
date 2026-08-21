@@ -256,8 +256,11 @@ async function main() {
     const registry = new PairAssetRegistry(
       new ChainPairTokenSource({
         provider,
-        factoryAddress: executableDeployment().factory,
-        fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
+        // The deployment, so the ABI and start block come with the address. This read
+        // `PONS_V2_APPROVALS_FROM_BLOCK` -- a separately settable number that can sit
+        // below the deployment (scanning millions of empty blocks) or above it
+        // (silently missing approvals, which looks identical to never being granted).
+        deployment: executableDeployment(),
       })
     );
     const resolved = await registry.resolve(wanted);
