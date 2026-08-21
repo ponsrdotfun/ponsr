@@ -1,4 +1,19 @@
 const solc = require('solc');
+
+/**
+ * The compiler that produced whatever this run writes.
+ *
+ * `solc` was a caret range, and an independent reviewer installing from package.json
+ * alone got 0.8.36 against `^0.8.24`. The logic bytecode matched after stripping
+ * metadata; the full artifacts did not. That makes "does this committed artifact
+ * correspond to this source?" unanswerable -- which is precisely the question the
+ * 2026-08-04 incident turned on, when a stale hand-kept copy deployed the old ETH-only
+ * splitter and stranded its fees forever.
+ *
+ * Pinned exactly in package.json, and stamped into the artifact so a mismatch is visible
+ * by reading the file rather than by rebuilding and diffing.
+ */
+const SOLC_VERSION = require('solc/package.json').version;
 const fs = require('fs');
 const path = require('path');
 
@@ -85,12 +100,21 @@ fs.writeFileSync(
   // and a version emitted from anywhere but this compile is a second copy waiting to
   // go stale.
   JSON.stringify(
-    { FeeSplitter: artifacts.FeeSplitter, FeeSplitterV2: artifacts.FeeSplitterV2 },
+    {
+      // Stamped so a mismatch is visible by reading the file. Without it the artifact
+      // said only { abi, bytecode } -- nothing recorded what produced it, so two
+      // machines could each hold a different, internally consistent copy and neither
+      // could tell.
+      _compiler: { solc: SOLC_VERSION, optimizer: input.settings.optimizer },
+      FeeSplitter: artifacts.FeeSplitter,
+      FeeSplitterV2: artifacts.FeeSplitterV2,
+    },
     null,
     2
   )
 );
 
 console.log('✅ Compiled contracts:', Object.keys(artifacts).join(', '));
+console.log('   solc', SOLC_VERSION, '(pinned exactly in package.json)');
 console.log('   Written to contracts-test/artifacts.json');
 console.log('   Written to backend/src/feeSplitterArtifact.json (used by splitterDeployer.ts)');
