@@ -111,8 +111,28 @@ describe('the real open item is still named', () => {
   });
 
   it('no document claims a leaked bot key cannot reach the treasury', () => {
+    /**
+     * Matched on meaning, not on the one sentence that was fixed first.
+     *
+     * The original pattern was the literal `costs launches, not the treasury`. BUILD-STATUS.md
+     * said the same false thing four words differently -- "cost launches rather than the
+     * treasury" -- and sailed straight through, in the document whose whole job is to say what
+     * is actually true. A guard written around a single phrasing only proves that phrasing is
+     * gone.
+     *
+     * The claim is false because the policy allows a contract creation with no value
+     * constraint, and Turnkey was measured signing one carrying 1 ETH.
+     */
+    const COST_LAUNCHES_NOT_TREASURY = /costs?\s+launches\b[^.]{0,40}\bthe treasury/i;
+    const TREASURY_UNREACHABLE =
+      /(treasury|hot wallet)[^.]{0,60}\bcannot be (moved|reached|touched|spent|drained)/i;
+    const ONE_WAY_VALVE = /hot wallet is a one-way valve/i;
+
     for (const rel of DOCS) {
-      expect(claims(rel)).not.toMatch(/costs launches, not the treasury/i);
+      const text = claims(rel);
+      expect(text).not.toMatch(COST_LAUNCHES_NOT_TREASURY);
+      expect(text).not.toMatch(TREASURY_UNREACHABLE);
+      expect(text).not.toMatch(ONE_WAY_VALVE);
     }
   });
 
