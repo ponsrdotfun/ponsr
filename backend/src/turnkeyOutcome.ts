@@ -120,8 +120,32 @@ export function classifyTurnkeyOutcome(err: unknown): Outcome {
 }
 
 /** How an outcome reads in a report, with an unknown never dressed as a verdict. */
-export function describeOutcome(o: Outcome, expected: 'allowed' | 'denied'): string {
+/**
+ * What a probe was hoping for.
+ *
+ * `residual` is not a weaker `denied`. It marks a capability that a chosen design
+ * knowingly leaves open, so that the report says so in as many words instead of
+ * printing a red cross next to an outcome nobody intends to change.
+ *
+ * The distinction is the whole point. Option A binds `eth.tx.value` on the creation
+ * clause and deliberately does NOT bind initcode, so a zero-value deploy of arbitrary
+ * code stays possible -- it costs gas, not treasury. Reporting that as a FAILURE
+ * teaches the operator that a correct run looks broken, and an operator who has learned
+ * to expect a red mark is one who will not notice a real one.
+ *
+ * It cannot be used to launder the funded-creation finding: that case is asserted as
+ * `denied`, gates the verdict, and is never expressed as a residual.
+ */
+export type OutcomeExpectation = 'allowed' | 'denied' | 'residual';
+
+export function describeOutcome(o: Outcome, expected: OutcomeExpectation): string {
   if (o.kind === 'unknown') return 'UNKNOWN -- not asked: ' + o.detail.slice(0, 90);
+  if (expected === 'residual') {
+    // Denied is strictly better than the design promised, so it is not a failure either.
+    return o.kind === 'allowed'
+      ? 'ALLOWED -- accepted residual, not a failure'
+      : 'denied ✅ -- residual closed, better than required';
+  }
   if (o.kind === expected) return o.kind === 'allowed' ? 'ALLOWED ✅' : 'denied ✅';
   return o.kind === 'allowed' ? 'ALLOWED ❌' : 'denied ❌';
 }

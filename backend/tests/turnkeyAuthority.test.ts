@@ -162,3 +162,55 @@ describe('the deny-all probe cannot run unprompted', () => {
     expect(code).toMatch(/getPolicies|verifyDeleted|confirmDeleted/);
   });
 });
+
+/**
+ * What the creation probe is allowed to assert.
+ *
+ * The probe is the only evidence that the funded-creation finding is closed, so the
+ * shape of its assertions is itself a security property. Two ways it could stop being
+ * evidence, both of which look like tidying up:
+ *
+ *   Case 2 relabelled. If the funded creation were ever described as a `residual`, the
+ *   fact that the bot key can empty the hot wallet would print as "accepted" and the
+ *   probe would report a drainable treasury as fine.
+ *
+ *   Case 2 dropped from the verdict. `good` is what decides PASSED, and a verdict that
+ *   no longer requires the denial is a verdict about nothing.
+ *
+ * Case 3 is the opposite requirement: it must NOT gate the verdict, because Option A
+ * leaves initcode unbound on purpose and a correct configuration would otherwise fail.
+ */
+describe('the creation probe asserts the right things', () => {
+  const probe = stripComments(read('turnkey-probe-creation.ts'));
+
+  it('requires the funded creation to be denied', () => {
+    expect(probe).toMatch(/describeOutcome\(\s*withValue\s*,\s*'denied'\s*\)/);
+  });
+
+  it('never describes the funded creation as a residual', () => {
+    expect(probe).not.toMatch(/describeOutcome\(\s*withValue\s*,\s*'residual'\s*\)/);
+  });
+
+  it('keeps the funded denial and the arbitrary-transfer denial in the verdict', () => {
+    const verdict = probe.match(/const good =[^;]+;/)?.[0] ?? '';
+    expect(verdict).toMatch(/withValue\.kind === 'denied'/);
+    expect(verdict).toMatch(/elsewhere\.kind === 'denied'/);
+    expect(verdict).toMatch(/zeroValue\.kind === 'allowed'/);
+  });
+
+  it('reports the unbound initcode as an accepted residual', () => {
+    expect(probe).toMatch(/describeOutcome\(\s*hostile\s*,\s*'residual'\s*\)/);
+  });
+
+  it('keeps the residual out of the verdict, so a correct setup cannot fail on it', () => {
+    const verdict = probe.match(/const good =[^;]+;/)?.[0] ?? '';
+    expect(verdict).not.toMatch(/hostile/);
+  });
+
+  it('states the residual on every run rather than only when it is open', () => {
+    // Mentioned once inside a conditional is a residual nobody can audit the history of.
+    expect(probe).toMatch(/RESIDUAL/);
+    const tail = probe.slice(probe.indexOf('const good ='));
+    expect(tail).toMatch(/hostile\.kind === 'allowed'\s*\?/);
+  });
+});
