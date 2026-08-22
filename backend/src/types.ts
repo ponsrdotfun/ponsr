@@ -85,7 +85,7 @@ export interface LaunchRecord {
   splitterAddress: string | null;
   tokenAddress: string | null;
   txHash: string | null;
-  status: 'pending' | 'confirmed' | 'failed' | 'rejected';
+  status: 'pending' | 'confirmed' | 'incident' | 'failed' | 'rejected';
   rejectionReason: RejectionReason | null;
   feeWeiPaid: string | null;
   createdAt: string;

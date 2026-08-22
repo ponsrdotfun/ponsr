@@ -50,79 +50,65 @@ The first row blocks everything else. A bot key that can attach funds to a contr
 creation can empty the hot wallet, so shipping the launch path before closing it makes
 the treasury reachable by anyone who obtains that key.
 
-## 1. Back up
+## 1. Online SQLite backup and offline rehearsal
 
-**Do not `cp` a live SQLite file.** The database runs in WAL mode, so at any instant the
-`.sqlite` file is missing whatever sits in `-wal` and a plain copy is a torn snapshot:
-it opens, it looks fine, and it is missing the most recent writes -- which for this
-database are exactly the launches you would be restoring to recover.
+This workflow is keyless: it reads no `.env`, signing key, network provider, or LIVE service.
+It uses `better-sqlite3`'s SQLite online backup API, so the WAL snapshot remains consistent
+while the one application writer continues committing. The CLI validates `integrity_check`,
+`foreign_key_check`, and the application `launchCount` before emitting a strict JSON manifest.
+The manifest has exactly schema, version, absolute source/backup paths, SHA-256, byte size,
+numeric mode/UID/GID, and ISO timestamp. Malformed, stale (default: seven days), path-mismatched,
+size-mismatched, or checksum-mismatched manifests fail closed.
 
-Stop the writer, or use SQLite's online backup. Stopping is simpler and this is a
-planned change:
-
-**Do not scale to zero and then SSH.** With no machines there is nothing to SSH into, so
-the backup you just started cannot be taken and the restore you might need cannot be run.
-An earlier version of this runbook did exactly that; the sequence was unexecutable.
-
-Quiesce the WRITER while keeping the machine, then use SQLite's own online backup:
+The Docker image runs Node directly as PID 1. There is no supervisor. Do not use process-pattern
+killing and do not scale to zero. Backup is online; restore/rehearsal is fenced later by stopping
+the application machine and attaching its volume to a separate maintenance machine. All `fly`
+commands below run in the **operator's local shell**, never inside `-C`.
 
 ```bash
-# 1. Stop the application process, KEEPING the machine and its volume reachable.
-#    The Fly machine stays up; only the writer inside it stops.
-fly ssh console -C "supervisorctl stop app || pkill -f 'node dist/index.js' || true"
-fly ssh console -C "pgrep -f 'node dist/index.js' || echo 'writer stopped'"
-
-# 2. Consistent copy, checkpointed and timestamped.
+cd backend
+APP=ponsr-backend
+APP_MACHINE=$(fly machine list --app "$APP" --json | jq -er 'map(select(.state=="started"))[0].id')
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-BACKUP=/data/bot.sqlite.$STAMP
-fly ssh console -C "sqlite3 /data/bot.sqlite \".backup '$BACKUP'\""
+BACKUP=/data/backups/bot.sqlite.$STAMP
+REMOTE_MANIFEST=/data/backups/backup-manifest-$STAMP.json
+LOCAL_MANIFEST=./backup-manifest-$STAMP.json
 
-# 3. Prove the copy is a database, not a file of the right size.
-fly ssh console -C "sqlite3 $BACKUP 'PRAGMA integrity_check;'"
-fly ssh console -C "sqlite3 $BACKUP 'PRAGMA foreign_key_check;'"
+# Online: the application writer may remain active.
+fly ssh console --app "$APP" --machine "$APP_MACHINE"   -C "npm run maintenance:db -- backup --source /data/bot.sqlite --backup $BACKUP --manifest $REMOTE_MANIFEST"
 
-# 4. Record what you have, so a restore can be checked against it later.
-fly ssh console -C "sha256sum $BACKUP; ls -l $BACKUP; stat -c '%U:%G %a' $BACKUP"
-
-# 5. A MANIFEST, off the machine. $BACKUP dies with this shell; a restore may happen
-#    days later, from a different terminal, possibly by someone else.
-fly ssh console -C "stat -c '%n %s %U %G %a' $BACKUP; sha256sum $BACKUP" \
-  | tee "./backup-manifest-$STAMP.txt"
+# Persist the strict JSON manifest off-machine. Abort if transfer or strict parse fails.
+fly ssh sftp get "$REMOTE_MANIFEST" "$LOCAL_MANIFEST" --app "$APP"
+node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(x.schema!=="ponsr.sqlite-maintenance"||x.version!==1) process.exit(1); console.log(x)' "$LOCAL_MANIFEST"
 ```
 
-The manifest is the artifact that matters. Restore reads it; it does not rely on a
-variable from a session that has since closed.
+The backup command validates the snapshot before success. Any failed integrity_check,
+foreign_key_check, missing `launches` table, or unreadable `launchCount` aborts before manifest
+publication.
 
-Required before continuing:
+### Offline rehearsal on a separately fenced maintenance machine
 
-- `integrity_check` returns exactly `ok`;
-- `foreign_key_check` returns nothing;
-- the size is non-zero and the checksum is written down somewhere outside the machine.
-
-`.backup` is SQLite's own online backup: it checkpoints the WAL and produces a single
-consistent file. `sqlite3 X ".backup Y"` on a stopped writer is belt and braces, and it
-is what makes step 3 meaningful.
-
-**Verify the restore in isolation before you need it**, on a scratch path rather than
-over the live file:
+Do this in the restore window. It intentionally stops the only application machine first;
+stopping the Fly machine is the real PID-1 fence. Capture its exact image and volume before
+stopping it. Abort unless the image is digest-qualified and the app machine is actually stopped.
 
 ```bash
-fly ssh console -C "cp $BACKUP /data/restore-test.sqlite"
-fly ssh console -C "sqlite3 /data/restore-test.sqlite 'SELECT COUNT(*) FROM launches;'"
-fly ssh console -C "sqlite3 /data/restore-test.sqlite 'PRAGMA integrity_check;'"
-fly ssh console -C "rm /data/restore-test.sqlite"
+IMAGE=$(fly machine status "$APP_MACHINE" --app "$APP" --json | jq -er '.config.image')
+case "$IMAGE" in *@sha256:????????????????????????????????????????????????????????????????) ;; *) echo 'image is not digest-qualified' >&2; exit 1;; esac
+VOLUME_ID=$(fly volumes list --app "$APP" --json | jq -er '.[] | select(.name=="ponsr_data") | .id')
+REGION=$(fly volumes list --app "$APP" --json | jq -er '.[] | select(.id=="'"$VOLUME_ID"'") | .region')
+fly machine stop "$APP_MACHINE" --app "$APP"
+test "$(fly machine status "$APP_MACHINE" --app "$APP" --json | jq -r .state)" = stopped
+
+# A distinct, disposable maintenance machine mounts the stopped writer's volume.
+fly machine run "$IMAGE" --app "$APP" --region "$REGION" --volume "$VOLUME_ID:/data" --rm   --entrypoint /bin/sh -- -lc   "npm run maintenance:db -- rehearse --manifest $REMOTE_MANIFEST --destination /data/restore-rehearsal-$STAMP.sqlite --offline"
 ```
 
-A backup nobody has restored is a backup nobody has.
+Require JSON with `integrity: "ok"`, `foreignKeyViolations: 0`, and expected numeric `launchCount`.
+Do not start the application between rehearsal and a restore decision.
 
-Also record the file's owner and mode from step 4. A restore that lands root-owned when
-the app runs unprivileged produces a process that starts, listens, and cannot write --
-which looks like health right up until the first launch it fails to record.
-
-The provenance migration is **additive and in-place**. There is nothing to undo, so this
-copy *is* the rollback plan -- `tests/provenanceMigration.test.ts` proves a copy taken
-beforehand restores the legacy schema exactly, and that pre-migration queries still work
-against a migrated file.
+**Evidence status:** unit/build tests exercise the CLI and concurrent-writer fixture; this Fly
+maintenance ceremony is **not LIVE-tested** by this repository work.
 
 ## 2. Order: code before config
 
@@ -300,7 +286,7 @@ git rev-parse HEAD | tee -a ./rollback-target.txt        # the website commit to
 |---|---|---|
 | config only | `fly secrets set PONS_FACTORY_VERSION=v1` | operator, no approval needed |
 | code | `fly deploy --image <IMAGE from rollback-target.txt>` — never "the previous release", which is not a thing you can type | operator |
-| database | restore from `backup-manifest-<STAMP>.txt` — ordered procedure below | operator |
+| database | restore from `backup-manifest-$STAMP.json` — ordered procedure below | operator |
 | website | `git revert -m 1 <merge commit>` then push; Netlify republishes from `main` | operator |
 
 After a code rollback, prove it went back rather than assuming:
@@ -315,62 +301,28 @@ release number are.
 
 ### Restoring the database
 
-`$BACKUP` is the file created and checksummed in §1. Nothing else was ever created --
-an earlier version of this document told you to restore `/data/bot.sqlite.pre-v2`, a
-path no step produces, so the instruction would have failed at the worst possible time.
-
-Order matters, because a live writer and a file swap do not mix:
+Restore requires both physical fencing and explicit `--offline`. Use the §1 variables. The
+strict JSON manifest is validated again before replacement. The CLI preserves the current DB,
+`-wal`, and `-shm` sidecars under unique `.failed-*` names, stages and validates the backup,
+replays numeric UID/GID/mode, swaps it into place, then reruns `integrity_check`,
+`foreign_key_check`, and the application launch query (reported as `launchCount`).
 
 ```bash
-# 0. Read the manifest written in §1. Everything below comes from it -- no variable
-#    from an earlier shell, no remembered path.
-MANIFEST=./backup-manifest-<STAMP>.txt
-BACKUP=$(awk 'NR==1{print $1}' "$MANIFEST")
-WANT_SHA=$(awk 'END{print $1}' "$MANIFEST")
-OWNER=$(awk 'NR==1{print $3":"$4}' "$MANIFEST")
-MODE=$(awk 'NR==1{print $5}' "$MANIFEST")
-echo "restoring $BACKUP  sha=$WANT_SHA  owner=$OWNER  mode=$MODE"
+# Fail closed: the application machine must still be stopped.
+test "$(fly machine status "$APP_MACHINE" --app "$APP" --json | jq -r .state)" = stopped
 
-# 1. Stop the WRITER, keeping the machine reachable. Never scale to zero here: the
-#    restore itself needs a shell on the volume.
-fly ssh console -C "supervisorctl stop app || pkill -f 'node dist/index.js' || true"
-fly ssh console -C "pgrep -f 'node dist/index.js' || echo 'writer stopped'"
+# Separately fenced restore process/machine; no application process runs beside it.
+fly machine run "$IMAGE" --app "$APP" --region "$REGION" --volume "$VOLUME_ID:/data" --rm   --entrypoint /bin/sh -- -lc   "npm run maintenance:db -- restore --manifest $REMOTE_MANIFEST --destination /data/bot.sqlite --offline"
 
-# 2. Confirm the artifact is the one the manifest describes, before touching anything.
-fly ssh console -C "sha256sum $BACKUP" | grep -q "$WANT_SHA" \
-  && echo 'checksum matches' || { echo 'CHECKSUM MISMATCH -- stop'; exit 1; }
-
-# 3. PRESERVE the current file before replacing it. Whatever went wrong, that database
-#    is the only record of everything since the backup, and it is also the evidence.
-FAILED=/data/bot.sqlite.failed-$(date -u +%Y%m%dT%H%M%SZ)
-fly ssh console -C "cp /data/bot.sqlite $FAILED && echo preserved $FAILED"
-
-# 4. Replace, clearing the WAL siblings -- a stale -wal against a restored database is
-#    a torn state that opens and then disagrees with itself.
-fly ssh console -C "rm -f /data/bot.sqlite /data/bot.sqlite-wal /data/bot.sqlite-shm"
-fly ssh console -C "cp $BACKUP /data/bot.sqlite"
-
-# 5. Ownership and mode replayed from the manifest, not guessed.
-fly ssh console -C "chown $OWNER /data/bot.sqlite && chmod $MODE /data/bot.sqlite"
-
-# 6. Prove it before starting anything.
-fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA integrity_check;'"
-fly ssh console -C "sqlite3 /data/bot.sqlite 'PRAGMA foreign_key_check;'"
-fly ssh console -C "sqlite3 /data/bot.sqlite 'SELECT COUNT(*) FROM launches;'"
-
-# 7. Restart the writer and check health rather than assuming it.
-fly ssh console -C "supervisorctl start app || fly machine restart"
+# Only successful restore JSON permits restart.
+fly machine start "$APP_MACHINE" --app "$APP"
 curl -s https://<backend>/status | jq -e '.checks[] | select(.state!="down")'
 ```
 
-A restore that lands root-owned when the app runs unprivileged produces a process that
-starts, listens, and cannot write -- which looks exactly like health until the first
-launch it fails to record. That is why step 5 replays the recorded owner rather than
-assuming one.
-
-The database restore is the only rollback with a deadline: rows written after the
-migration carry provenance columns the old code does not select, which is harmless — but
-rows written after the restore point are simply gone.
+Abort and leave the app machine stopped on a non-zero exit, manifest rejection, integrity/FK
+failure, launch-count surprise, owner/mode mismatch, or missing preserved artifact. Retain all
+`.failed-*` evidence until incident closure. Fly lifecycle commands are local operator commands;
+none is hidden in a remote shell. This restore ceremony is **not LIVE-tested** here.
 
 **A launched token cannot be rolled back.** Once §4 confirms, that token exists on chain
 permanently. Everything above this line is reversible; that is not.

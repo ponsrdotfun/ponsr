@@ -10,15 +10,15 @@ bot, and saying "clean" would invite someone to stop checking.
 
 ## What actually runs
 
-| scope | command | result |
+| scope | command | reachability |
 |---|---|---|
-| **backend, production deps** | `cd backend && npm audit --omit=dev` | **0 vulnerabilities, any severity** |
-| root, production deps | `npm audit --omit=dev` | 2 total — 1 high, 1 low |
-| root, full toolchain | `npm audit` | 18 total — 5 high, 2 moderate, 11 low |
+| **backend, production deps** | `cd backend && npm audit --omit=dev` | deployed bot runtime; this gates deployment |
+| root, production deps | `npm audit --omit=dev` | local contract/build harness; not deployed |
+| root, full toolchain | `npm audit` | developer and CI tooling; not reachable from bot input |
 
 The first row is the one that matters operationally. `backend/` is the process that runs
-24/7, listens on a webhook, holds the signer and spends the treasury. Its production
-dependency tree reports nothing.
+24/7, listens on a webhook, holds the signer and spends the treasury. Its current result
+must be read from the command, not from a copied total in this document.
 
 The root workspace is a **build and test harness**: hardhat, solc, jsdom, ethers for
 scripts. It is never deployed. Nothing a user can send the bot reaches it.
@@ -57,8 +57,8 @@ ethers underneath a fork rehearsal and a compiler pin that took real work to mak
 reproducible — trading a build-time advisory nobody can reach for a runtime difference
 nobody has tested.
 
-The one that would justify it is a finding in `backend/`'s production tree, and there are
-none.
+The finding that would justify it is one reachable in `backend/`'s production tree. Re-run
+the command above to determine whether one exists now.
 
 ---
 
@@ -70,6 +70,6 @@ npm audit --omit=dev                    # root runtime
 npm audit                               # root toolchain, expected non-zero
 ```
 
-A non-zero root toolchain count is the normal state, not a regression. What would be a
-regression is the first row moving off zero, or a root finding turning out to be
-reachable from something a user controls.
+A root toolchain finding is not automatically a runtime regression. What matters is whether
+the backend production command reports a reachable finding, or a root finding turns out to
+be reachable from something a user controls.

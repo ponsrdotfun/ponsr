@@ -130,6 +130,7 @@ export class Db {
         updated_at TEXT NOT NULL
       );
 
+      CREATE INDEX IF NOT EXISTS idx_spend_launch ON treasury_spend_log(launch_id);
       CREATE INDEX IF NOT EXISTS idx_spend_at ON treasury_spend_log(spent_at);
       CREATE INDEX IF NOT EXISTS idx_launch_created ON launches(created_at);
       CREATE INDEX IF NOT EXISTS idx_rejected_at ON rejection_log(rejected_at);
@@ -363,22 +364,81 @@ export class Db {
       .run(status, fields.tokenAddress ?? null, fields.txHash ?? null, fields.feeWeiPaid ?? null, id);
   }
 
+  /** Durable inputs for keyless reconciliation of landed-but-unconfirmed launches. */
+  getLaunchIncidents(): Array<{
+    launchId: string;
+    txHash: string;
+    deploymentId: string;
+    tokenName: string;
+    tokenSymbol: string;
+    originalDeployer: string;
+    pairToken: string;
+    launchConfigId: string;
+    salt: string;
+    economicsDigest: string;
+    splitter: string;
+    launchSelector: string;
+  }> {
+    return this.db.prepare(
+      `SELECT l.id AS launchId, l.tx_hash AS txHash, l.token_name AS tokenName,
+              l.token_symbol AS tokenSymbol, p.deployment_id AS deploymentId,
+              p.original_deployer AS originalDeployer, p.pair_token AS pairToken,
+              p.launch_config_id AS launchConfigId, p.salt, p.economics_digest AS economicsDigest,
+              p.splitter, p.launch_selector AS launchSelector
+         FROM launches l JOIN launch_provenance p ON p.launch_id = l.id
+        WHERE l.status = 'incident' AND l.tx_hash IS NOT NULL
+          AND p.splitter IS NOT NULL AND p.launch_selector IS NOT NULL
+          AND p.economics_digest IS NOT NULL
+        ORDER BY l.created_at, l.id`
+    ).all() as any;
+  }
+
+  /** Changes only an unresolved incident; concurrent/repeated recovery is a no-op. */
+  confirmLaunchIncident(launchId: string, tokenAddress: string, curve: string): boolean {
+    const confirm = this.db.transaction(() => {
+      const changed = this.db.prepare(
+        `UPDATE launches SET status = 'confirmed', token_address = ?, rejection_reason = NULL
+          WHERE id = ? AND status = 'incident'`
+      ).run(tokenAddress, launchId);
+      if (changed.changes !== 1) return false;
+      this.db.prepare('UPDATE launch_provenance SET curve = ? WHERE launch_id = ?').run(curve, launchId);
+      return true;
+    });
+    return confirm();
+  }
+
+  setIncidentReason(launchId: string, reason: string): void {
+    this.db.prepare(
+      `UPDATE launches SET rejection_reason = ? WHERE id = ? AND status = 'incident'`
+    ).run(reason, launchId);
+  }
+
+  getIncidentReason(launchId: string): string | null {
+    const row = this.db.prepare('SELECT rejection_reason FROM launches WHERE id = ?').get(launchId) as any;
+    return row?.rejection_reason ?? null;
+  }
+
   /** Count of successful launches by this user in the last 24h, for the per-user rate cap. */
   countLaunchesLast24h(xUserId: string): number {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const row = this.db
       .prepare(
         `SELECT COUNT(*) as cnt FROM launches
-         WHERE x_user_id = ? AND status IN ('pending', 'confirmed') AND created_at > ?`
+         WHERE x_user_id = ? AND status IN ('pending', 'confirmed', 'incident') AND created_at > ?`
       )
       .get(xUserId, cutoff) as any;
     return row.cnt as number;
   }
 
+  /** Records a paid launch fee idempotently. Receipt reconciliation may be retried,
+   * but one on-chain launch must consume the daily budget exactly once. */
   recordTreasurySpend(launchId: string, amountWei: bigint) {
     this.db
-      .prepare('INSERT INTO treasury_spend_log (launch_id, amount_wei, spent_at) VALUES (?, ?, ?)')
-      .run(launchId, amountWei.toString(), new Date().toISOString());
+      .prepare(`INSERT INTO treasury_spend_log (launch_id, amount_wei, spent_at)
+        SELECT ?, ?, ? WHERE NOT EXISTS (
+          SELECT 1 FROM treasury_spend_log WHERE launch_id = ?
+        )`)
+      .run(launchId, amountWei.toString(), new Date().toISOString(), launchId);
   }
 
   /** Total treasury wei spent in the last 24h -- backs the global circuit breaker from
@@ -401,7 +461,7 @@ export class Db {
     const row = this.db
       .prepare(
         `SELECT COUNT(*) as cnt FROM launches
-         WHERE status IN ('pending', 'confirmed') AND created_at > ? AND created_at <= ?`
+         WHERE status IN ('pending', 'confirmed', 'incident') AND created_at > ? AND created_at <= ?`
       )
       .get(fromIso, toIso) as any;
     return row.cnt as number;

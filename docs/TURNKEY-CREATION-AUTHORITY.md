@@ -1,7 +1,7 @@
 # The bot key can drain the treasury
 
-**Status: OPEN.** Measured 2026-08-21. Closing it is an operator action; nothing in this
-repository can do it, and no code change here mitigates it.
+**Status: OPEN.** Measured 2026-08-21. Closing it requires an explicit operator ceremony;
+ordinary install, test, audit, and rollout commands do not mutate Turnkey.
 
 ---
 
@@ -150,7 +150,7 @@ organisation, and one of them used to do it without being asked.
 | `turnkey-verify-policy.ts` | ✓ | ✓ | | |
 | `turnkey-probe-creation.ts` | ✓ | ✓ | | |
 | `turnkey-allow-v2-factory.ts` | ✓ | | **createPolicy** | |
-| `turnkey-scope-bot-user.ts` | ✓ | | **createUser, createApiKeys, createPolicy** | **rewrites `backend/.env`** |
+| `turnkey-scope-bot-user.ts` | ✓ | | **createUser, createApiKeys, createPolicy** | writes a separate bot-key file plus non-secret recovery JSON; **never `.env`** |
 | `turnkey-policy-probe.ts` | ✓ | ✓ | **createPolicy(DENY-ALL), deletePolicy** | |
 
 The last row is the dangerous one. It applies a deny-everything policy to find out whether
@@ -167,6 +167,15 @@ raises an incident and exits non-zero.
 
 `tests/turnkeyAuthority.test.ts` holds this matrix and fails if a mutation entrypoint
 stops asking, or if a script classified read-only grows a mutating call.
+
+`scripts/authority-manifest.json` is the complete inventory for every executable under
+`backend/scripts`, not only Turnkey entrypoints. Root credentials remain operator inputs and
+must live outside the bot's environment and are read from the explicit `--root-key-file`.
+The scoped bot key is written only to the exact `--bot-key-output` path, while
+`--recovery-output` records non-secret created IDs and a
+`planned`, `partial`, or `complete` state so interrupted ceremonies can be recovered. Scoping
+requires exact organization/user/policy targets, `--execute`, and a typed acknowledgement.
+Afterward use `npm run signer:verify-policy`; do not use the deny-all probe as routine proof.
 
 **None of these scripts belong in ordinary install, test, audit or rollout verification.**
 Running one is an operator ceremony that names the exact script and the exact mutation.

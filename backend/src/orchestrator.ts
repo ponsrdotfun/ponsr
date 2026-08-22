@@ -595,11 +595,15 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
         // a lie in the other direction, so the row keeps the hash and the token it saw
         // and is marked for a person to look at.
         const detail = verdict.problems.join('; ');
-        deps.db.updateLaunchStatus(launchId, 'failed', {
+        deps.db.updateLaunchStatus(launchId, 'incident', {
           tokenAddress,
           txHash: sent.hash,
           feeWeiPaid: liveFee.toString(),
         });
+        // The transaction succeeded and consumed the launch fee even though its
+        // accounting evidence is not yet trustworthy. The daily circuit breaker must
+        // see that spend; this insert is idempotent for later reconciliation retries.
+        deps.db.recordTreasurySpend(launchId, liveFee);
         deps.db.recordRejection(mention.tweetId, mention.authorXUserId, `INCIDENT: ${detail}`);
 
         console.error(`[confirm] ${launchId} landed but does not reconcile:`);

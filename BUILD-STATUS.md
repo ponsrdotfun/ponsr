@@ -99,9 +99,9 @@ Three client-side routes, each with a real URL so they can be linked, refreshed 
 ## What "no mistake, no bugs, no error" actually means here
 
 Every piece of logic in this build that *can* be tested without a live third-party account
-has been tested — 232 automated checks across contract, backend, and website, all passing,
-all re-runnable by you right now. Several real bugs were caught and fixed during this build
-process specifically because of that testing (a fake-address format bug in a test fixture, a
+has automated coverage across contract, backend, and website suites, all re-runnable by you
+right now. Run them for current counts and results. Several real bugs were caught and fixed
+during this build process specifically because of that testing (a fake-address format bug in a test fixture, a
 foreign-key ordering issue in a test) — which is the point of testing: it's not a formality,
 it found real mistakes before they could reach you.
 

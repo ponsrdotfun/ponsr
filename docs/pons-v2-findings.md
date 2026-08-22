@@ -268,7 +268,7 @@ unchanged: the ABI still has to come from the verified contract on Blockscout
 | Metadata / IPFS (open question #10) | open — assumed a URI, Pinata on the checklist | **resolved: calldata strings, no IPFS needed** |
 | `devBuyAmount = 0` rule | a core security boundary | aimed at a parameter v2 doesn't have — restate against the real ABI |
 | Max-fee guard | our own invention | v2 has a protocol-level equivalent (`expectedEconomics`) that is **required** |
-| FeeSplitter | written, 13 tests passing | **incompatible with v2's pull-based escrow — needs a claim path before it can be used** |
+| FeeSplitter | written and covered by the contract suite | **incompatible with v2's pull-based escrow — needs a claim path before it can be used** |
 | Fee permanence | recipient fixed at launch | recipient is transferable, and a CTO can redirect it |
 | Launch fee ≈ 0.0005 ETH | treated as a planning constant | v1-era; v2 publishes no number, read `launchFee()` |
 | Target version | unstated (implicitly v1) | **decision needed: build for v1 now, or wait for the v2 factory** |

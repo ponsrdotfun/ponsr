@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest --runInBand",
+    "maintenance:db": "node dist/maintenanceBackup.js",
     "read:policies": "tsx scripts/turnkey-read-policies.ts",
     "verify:ethcall": "tsx scripts/verify-current-ethcall.ts",
     "launch:canary": "tsx scripts/phase-b-launch.ts",

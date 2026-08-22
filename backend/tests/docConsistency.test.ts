@@ -30,14 +30,31 @@ import * as path from 'path';
  */
 
 const ROOT = path.join(__dirname, '../..');
-const DOCS = [
-  'README.md',
-  'BUILD-STATUS.md',
-  'CLAUDE.md',
-  'docs/email-pons-whitelist.md',
-  'docs/ROLLOUT-RUNBOOK.md',
-  'docs/TURNKEY-CREATION-AUTHORITY.md',
-];
+const EXCLUDED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'vendor',
+  'generated',
+  'dist',
+  'build',
+  'coverage',
+  'historical',
+  'archive',
+  'archives',
+]);
+
+function markdownFiles(dir = ROOT): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name.startsWith('.') || EXCLUDED_DIRS.has(entry.name.toLowerCase())) return [];
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory()) return markdownFiles(absolute);
+    return entry.isFile() && entry.name.endsWith('.md')
+      ? [path.relative(ROOT, absolute).replace(/\\/g, '/')]
+      : [];
+  });
+}
+
+const DOCS = markdownFiles();
 
 /** The document's live claims, with explicitly marked history removed. */
 function claims(rel: string): string {
@@ -46,6 +63,11 @@ function claims(rel: string): string {
 }
 
 describe('documents state no hardcoded test counts', () => {
+  it('scans markdown recursively rather than a hand-maintained shortlist', () => {
+    expect(DOCS).toContain('docs/MASTER-twitter-launch-bot.md');
+    expect(DOCS).toContain('backend/docs/SETUP.md');
+  });
+
   for (const rel of DOCS) {
     it(`${rel} claims no current pass count`, () => {
       // Only figures presented as the state of a suite. A ratio like 950/50 is not a

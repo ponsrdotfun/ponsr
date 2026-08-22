@@ -37,9 +37,10 @@ import { createLaunchTarget } from '../src/launchTarget';
 import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
 import { PairAssetRegistry } from '../src/pairTokens';
 import { ChainPairTokenSource } from '../src/pairTokenSource';
-import { executableDeployment } from '../src/deployments';
 import { assertDeploymentIdentity } from '../src/deploymentIdentity';
-import { extractLaunchFromReceipt } from '../src/launchAssertions';
+import { assertOutgoingLaunch } from '../src/launchAssertions';
+import { confirmCanaryLaunch } from '../src/canaryConfirmation';
+import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
 import { resolveCanaryPair } from '../src/canaryPreflight';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
@@ -257,7 +258,7 @@ async function main() {
     treasury,
     ethers.ZeroAddress,
     provider,
-    // The SELECTED deployment. Omitted, this defaults to executableDeployment() -- so
+    // The SELECTED deployment. Omitting it would fall back to module-global selection, so
     // under rollback or an injected target the identity, readiness and calldata followed
     // `selected` while the splitter's IMMUTABLE escrow followed something else. The
     // escrow is the one that cannot be repaired afterwards.
@@ -292,7 +293,7 @@ async function main() {
   // which pays msg.sender. A splitter without `claimAndSplit` would therefore be
   // credited correctly and forever with no transaction able to move the money: the
   // 2026-08-04 loss again, by a different route, and just as permanent.
-  if (config.PONS_FACTORY_VERSION === 'v2') {
+  if (selected.tokenParamsVersion !== 'v1') {
     const claimSelector = ethers.id('claimAndSplit(address)').slice(2, 10);
     if (!deployedCode.includes(claimSelector)) {
       console.error('\nABORTING: the deployed splitter has no claimAndSplit(address).');
@@ -336,6 +337,12 @@ async function main() {
     fee
   );
 
+  // Decode and assert the exact bytes before they reach the signer. The selected
+  // deployment, not a global version flag, is the only authority after selection.
+  if (selected.tokenParamsVersion !== 'v1') {
+    assertOutgoingLaunch({ to, data, value }, splitterAddress, selected);
+  }
+
   const sent = await signer.sendTransaction({ to, data, value });
   line('tx', sent.hash);
   const receipt = await sent.wait();
@@ -348,8 +355,8 @@ async function main() {
     process.exit(1);
   }
 
-  // `selected` was resolved once at the top; this used to call executableDeployment()
-  // again, which is a different question from 'which deployment is this run using'.
+  // `selected` was resolved once at the top; do not ask module-global selection again,
+  // because that is a different question from 'which deployment is this run using'.
   const isV2 = selected.tokenParamsVersion !== 'v1';
 
   console.log();
@@ -365,14 +372,32 @@ async function main() {
      * which applies. V2 credits an escrow that pays `msg.sender`; there is no collect to
      * call, and following those instructions would end in confusion at best.
      */
-    const found = extractLaunchFromReceipt(receipt.logs as any, selected);
-    if (!found) {
-      console.error(`ABORTING: ${selected.id} raised no TokenLaunched we could read.`);
-      console.error('The transaction confirmed, so something launched -- but this receipt');
-      console.error('carries no event from the factory we addressed. Investigate before');
-      console.error('treating this launch as done.');
+    const factory = new ethers.Contract(selected.factory, PONS_V2_CURRENT_ABI, provider);
+    const confirmation = await confirmCanaryLaunch({
+      selected,
+      outgoing: { to, data, value },
+      splitterAddress,
+      treasuryAddress: treasury,
+      receipt: { status: Number(receipt.status), logs: receipt.logs as any },
+      readLaunchRecord: async (deployment, token) => {
+        if (deployment.id !== selected.id) throw new Error('deployment changed during confirmation');
+        const raw = await factory.getLaunchedToken(token);
+        return {
+          token: String(raw.token ?? raw[0]),
+          curve: String(raw.curve ?? raw[1]),
+          deployer: String(raw.deployer ?? raw[2]),
+          creatorFeeRecipient: String(raw.creatorFeeRecipient ?? raw[3]),
+          pairToken: String(raw.pairToken ?? raw[4]),
+          exists: Boolean(raw.exists ?? raw[14]),
+        };
+      },
+    });
+    if (!confirmation.verdict.ok || !confirmation.receipt || !confirmation.token) {
+      console.error(`ABORTING: ${selected.id} launch did not fully reconcile.`);
+      for (const problem of confirmation.verdict.problems) console.error(`  - ${problem}`);
       process.exit(1);
     }
+    const found = confirmation.receipt;
 
     line('deployment', `${selected.id} (${selected.factory})`);
     line('token', found.token);
@@ -396,7 +421,7 @@ async function main() {
     console.log();
     console.log('Next, by hand:');
     console.log('  1. Trade against the curve a few times to generate real fees.');
-    console.log(`  2. npx tsx scripts/collect-and-split-v2.ts ${splitterAddress} --token=${found.token}`);
+    console.log(`  2. npm run collect:v2 -- ${splitterAddress} --token=${found.token}`);
     console.log('     (dry run first; add --execute to claim)');
     console.log('  3. Require RECONCILED -- exact 95/5 and nothing left in escrow or splitter.');
     console.log();

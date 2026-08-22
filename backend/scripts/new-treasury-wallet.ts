@@ -1,7 +1,8 @@
 /**
  * Creates the Phase B wallet and writes its key straight into `.env`.
  *
- *   npx ts-node scripts/new-treasury-wallet.ts
+ *   npx ts-node scripts/new-treasury-wallet.ts          # plan only
+ *   npx ts-node scripts/new-treasury-wallet.ts --write  # create and persist
  *
  * WHY A SCRIPT AND NOT `Wallet.createRandom()` IN A TERMINAL
  * ----------------------------------------------------------
@@ -44,6 +45,7 @@ function existingKey(contents: string): string | null {
 }
 
 function main() {
+  const WRITE = process.argv.includes('--write');
   const contents = readEnv();
   const already = existingKey(contents);
 
@@ -63,6 +65,12 @@ function main() {
     console.error('strands the funds permanently. To deliberately start over, move the existing');
     console.error('balance out first, then delete the line from .env by hand and re-run this.');
     process.exit(1);
+  }
+
+  if (!WRITE) {
+    console.log('PLAN ONLY: would generate a Phase B wallet and append its private key to backend/.env.');
+    console.log('No wallet was generated and no file was changed. Re-run with --write to proceed.');
+    return;
   }
 
   const wallet = ethers.Wallet.createRandom();

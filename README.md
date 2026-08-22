@@ -14,7 +14,7 @@ contracts/              FeeSplitter.sol -- the 95/5 fee-splitting contract (Part
 contracts-test/          28 passing tests, including two live reentrancy attacks
 backend/                 The bot service: listener -> parser -> validator -> launch -> reply
   src/                    Source code (TypeScript)
-  tests/                  151 passing tests (unit + full pipeline integration, all mocked)
+  tests/                  Unit + full pipeline integration tests (all mocked; run for current count)
   scripts/run-eval.ts      Runs the 28-case parser eval set against the real Claude API
   docs/                   SETUP.md and SECURITY-BOUNDARIES.md -- read these before deploying
 website/                 Static site, one self-contained file, three routes:

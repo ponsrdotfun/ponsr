@@ -432,8 +432,12 @@ describe('the canary threads one selected deployment', () => {
     expect(code).toMatch(/const isV2 = selected\.tokenParamsVersion/);
   });
 
-  it('decodes the receipt against the selected deployment', () => {
-    expect(code).toMatch(/extractLaunchFromReceipt\([\s\S]{0,60}selected\)/);
+  it('fully confirms the receipt and factory record against the selected deployment', () => {
+    // Shared confirmation performs selected-factory receipt extraction plus
+    // getLaunchedToken reconciliation; requiring the old direct extractor here would
+    // regress the canary back to receipt-only authority.
+    expect(code).toMatch(/confirmCanaryLaunch\(\{[\s\S]{0,120}selected,/);
+    expect(code).toMatch(/readLaunchRecord:[\s\S]{0,220}getLaunchedToken/);
   });
 });
 

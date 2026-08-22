@@ -297,4 +297,43 @@ describe('a launch is confirmed only after everything reconciles', () => {
     });
     expect(r.outcome.kind).toBe('incident');
   });
+
+  it('persists an explicit incident status instead of lying that the landed launch failed', async () => {
+    const r = await run('incident-status', {
+      logs: [launchedLog(TOKEN, CURVE, TREASURY, AAPL)],
+      record: factoryRecord({ pairToken: AAPL }),
+    });
+    expect(r.row.status).toBe('incident');
+  });
+
+  it('accounts the paid fee exactly once when confirmation becomes an incident', async () => {
+    const db = freshDb('incident-spend');
+    const replies: string[] = [];
+    try {
+      const sc = {
+        logs: [launchedLog(TOKEN, CURVE, TREASURY, AAPL)],
+        record: factoryRecord({ pairToken: AAPL }),
+      };
+      const outcome = await handleMention(mention('incident-spend'), deps(db, sc, replies) as never);
+      expect(outcome.kind).toBe('incident');
+      expect(db.totalSpendLast24h()).toBe(LIVE_FEE);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('counts a landed incident against the user launch cap', async () => {
+    const db = freshDb('incident-count');
+    const replies: string[] = [];
+    try {
+      const sc = {
+        logs: [launchedLog(TOKEN, CURVE, TREASURY, AAPL)],
+        record: factoryRecord({ pairToken: AAPL }),
+      };
+      await handleMention(mention('incident-count'), deps(db, sc, replies) as never);
+      expect(db.countLaunchesLast24h('u1')).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
 });

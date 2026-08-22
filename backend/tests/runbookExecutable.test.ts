@@ -36,85 +36,49 @@ const text = fs.readFileSync(RUNBOOK, 'utf8').split('\r\n').join('\n');
 /** Just the shell, so prose mentioning a command is not mistaken for one. */
 const shell = (text.match(/```bash\n([\s\S]*?)```/g) ?? []).join('\n');
 
-describe('the runbook never strands itself', () => {
-  it('never scales to zero and then expects a shell', () => {
-    // The specific unexecutable sequence, in order.
-    const zeroThenSsh = /scale\s+count\s+0[\s\S]{0,600}?fly\s+ssh\s+console/;
-    expect(shell).not.toMatch(zeroThenSsh);
+describe('SQLite maintenance commands match the shipped PID-1 runtime', () => {
+  it('uses the shipped keyless CLI, never sqlite3, pkill, or an invented supervisor', () => {
+    expect(shell).toMatch(/npm run maintenance:db -- backup/);
+    expect(shell).toMatch(/npm run maintenance:db -- rehearse/);
+    expect(shell).toMatch(/npm run maintenance:db -- restore/);
+    expect(shell).not.toMatch(/\bsqlite3\b|\bpkill\b|supervisorctl/);
   });
 
-  it('does not scale to zero at all in backup or restore', () => {
+  it('backs up online but fences restore by stopping the app machine and using a separate maintenance machine', () => {
+    const backup = shell.indexOf('npm run maintenance:db -- backup');
+    const stop = shell.indexOf('fly machine stop');
+    const maintenance = shell.indexOf('fly machine run');
+    const restore = shell.indexOf('npm run maintenance:db -- restore');
+    expect(backup).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(backup);
+    expect(maintenance).toBeGreaterThan(stop);
+    expect(restore).toBeGreaterThan(maintenance);
     expect(shell).not.toMatch(/fly\s+scale\s+count\s+0/);
   });
 
-  it('stops the writer while keeping the machine reachable', () => {
-    // Quiescing the writer is the requirement; killing the host is not.
-    expect(shell).toMatch(/supervisorctl stop app|pkill -f/);
+  it('keeps host-only fly commands out of remote command strings', () => {
+    const remoteCommands = [...shell.matchAll(/fly ssh console[^\n]*-C\s+"([^"]*)"/g)].map((match) => match[1]);
+    expect(remoteCommands.some((command) => /\bfly\b/.test(command))).toBe(false);
   });
 
-  it('confirms the writer actually stopped rather than assuming', () => {
-    expect(shell).toMatch(/pgrep -f[\s\S]{0,80}writer stopped/);
-  });
-});
-
-describe('every pasteable command is complete', () => {
-  /**
-   * `<backend>` is deliberately allowed: it is a hostname the operator supplies once and
-   * cannot be filled in here. Anything else in angle brackets inside a command is a blank
-   * somebody will guess at.
-   */
-  const ALLOWED = new Set(['<backend>', '<splitteraddress>', '<launchedtoken>', '<stamp>', '<image', '<merge']);
-
-  it('leaves no unresolved placeholder in a shell command', () => {
-    const found = (shell.match(/<[a-zA-Z][^>\s]*>?/g) ?? [])
-      .map((p) => p.toLowerCase())
-      .filter((p) => !ALLOWED.has(p));
-    expect(found).toEqual([]);
+  it('uses strict JSON manifests and copies one off-machine', () => {
+    expect(text).toMatch(/strict JSON manifest/i);
+    expect(shell).toMatch(/backup-manifest-\$STAMP\.json/);
+    expect(shell).toMatch(/fly ssh sftp get/);
+    expect(shell).not.toMatch(/awk .*MANIFEST|grep -q .*SHA/);
   });
 
-  it('replays the recorded owner and mode rather than a placeholder', () => {
-    expect(shell).toMatch(/chown \$OWNER/);
-    expect(shell).toMatch(/chmod \$MODE/);
-    expect(shell).not.toMatch(/chown <user>/);
-  });
-});
-
-describe('the backup survives the session that made it', () => {
-  it('writes a manifest off the machine', () => {
-    // $BACKUP dies with the shell. A restore may happen days later, from a different
-    // terminal, possibly by someone else.
-    expect(shell).toMatch(/backup-manifest-/);
+  it('passes explicit offline acknowledgement and validates integrity, FKs, and launch count', () => {
+    expect(shell).toMatch(/rehearse[\s\S]{0,300}--offline/);
+    expect(shell).toMatch(/restore[\s\S]{0,300}--offline/);
+    expect(text).toMatch(/integrity_check/);
+    expect(text).toMatch(/foreign_key_check/);
+    expect(text).toMatch(/launchCount/);
   });
 
-  it('the restore reads that manifest rather than a remembered variable', () => {
-    expect(shell).toMatch(/MANIFEST=/);
-    expect(shell).toMatch(/BACKUP=\$\(awk/);
-  });
-
-  it('verifies the checksum before touching the live file', () => {
-    const shaCheck = shell.indexOf('WANT_SHA');
-    const replace = shell.indexOf('rm -f /data/bot.sqlite');
-    expect(shaCheck).toBeGreaterThan(-1);
-    expect(shaCheck).toBeLessThan(replace);
-  });
-
-  it('preserves the failed database before replacing it', () => {
-    // Whatever went wrong, that file is the only record of everything since the backup,
-    // and it is also the evidence.
-    const preserve = shell.indexOf('bot.sqlite.failed-');
-    const replace = shell.indexOf('rm -f /data/bot.sqlite');
-    expect(preserve).toBeGreaterThan(-1);
-    expect(preserve).toBeLessThan(replace);
-  });
-
-  it('runs integrity and foreign-key checks after restoring', () => {
-    expect(shell).toMatch(/integrity_check/);
-    expect(shell).toMatch(/foreign_key_check/);
-  });
-
-  it('reads application data as well as the pragmas', () => {
-    // A file can pass integrity_check and still be the wrong database.
-    expect(shell).toMatch(/SELECT COUNT\(\*\) FROM launches/);
+  it('does not claim this process was live-tested', () => {
+    expect(text).toMatch(/not LIVE-tested/i);
+    expect(text).not.toMatch(/LIVE-tested successfully/i);
   });
 });
 

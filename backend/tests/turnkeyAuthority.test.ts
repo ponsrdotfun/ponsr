@@ -64,11 +64,37 @@ describe('the Turnkey authority matrix is complete', () => {
     }
   });
 
-  it('only scripts marked as writing credentials touch .env', () => {
-    for (const m of MATRIX.filter((x) => !x.writesCredentials)) {
+  it('no Turnkey script writes root or bot credentials to .env', () => {
+    for (const m of MATRIX) {
       const code = stripComments(read(m.file));
-      expect(code).not.toMatch(/writeFileSync\([^)]*\.env/);
+      expect(code).not.toMatch(/TURNKEY_ROOT_API_(PUBLIC|PRIVATE)_KEY/);
+      expect(code).not.toMatch(/writeFileSync\([^)]*ENV_PATH/);
     }
+  });
+});
+
+describe('bot-user scoping is a recoverable, exact-target ceremony', () => {
+  const code = stripComments(read('turnkey-scope-bot-user.ts'));
+
+  it('requires exact organization, user, and policy targets plus typed acknowledgement', () => {
+    expect(code).toMatch(/--organization-id/);
+    expect(code).toMatch(/--user-name/);
+    expect(code).toMatch(/--policy-name/);
+    expect(code).toMatch(/--acknowledge/);
+  });
+
+  it('writes only non-secret recovery state with partial-failure status and created ids', () => {
+    expect(code).toMatch(/recovery/i);
+    expect(code).toMatch(/partial/i);
+    expect(code).toMatch(/userId/);
+    expect(code).toMatch(/policyId/);
+    expect(code).toMatch(/JSON\.stringify\(state/);
+    expect(code).not.toMatch(/state\.privateKey|state\[['"]privateKey/);
+  });
+
+  it('recommends the non-mutating policy verifier, not the deny-all probe', () => {
+    expect(code).toMatch(/signer:verify-policy/);
+    expect(code).not.toMatch(/turnkey-policy-probe\.ts/);
   });
 });
 
