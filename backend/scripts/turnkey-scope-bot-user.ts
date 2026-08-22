@@ -45,13 +45,22 @@ type Recovery = {
   error?: string;
 };
 
-function requireExactTargets(): asserts organizationId is string {
+/**
+ * Returns the three targets, narrowed.
+ *
+ * Not an `asserts` signature: those may only narrow a parameter or `this`, never a
+ * module-scope binding, so `asserts organizationId is string` did not compile at all.
+ * Returning the values narrows them for real and makes the requirement visible at the
+ * only call site.
+ */
+function requireExactTargets(): { organizationId: string; userName: string; policyName: string } {
   if (!organizationId || !userName || !policyName) {
     throw new Error('Exact --organization-id, --user-name, and --policy-name targets are required.');
   }
   if (userName !== EXPECTED_USER || policyName !== EXPECTED_POLICY) {
     throw new Error(`Targets must be exactly user "${EXPECTED_USER}" and policy "${EXPECTED_POLICY}".`);
   }
+  return { organizationId, userName, policyName };
 }
 
 function writeRecovery(state: Recovery) {
@@ -61,7 +70,7 @@ function writeRecovery(state: Recovery) {
 }
 
 (async () => {
-  requireExactTargets();
+  const { organizationId, userName, policyName } = requireExactTargets();
   const expectedAck = `CREATE ${organizationId} ${userName} ${policyName}`;
   console.log(EXECUTE ? '=== TURNKEY BOT SCOPE — EXECUTION REQUESTED ===' : '=== PLAN ONLY ===');
   console.log(`  organization             ${organizationId}`);
@@ -98,7 +107,7 @@ function writeRecovery(state: Recovery) {
     apiPrivateKey: rootKey.apiPrivateKey,
     defaultOrganizationId: organizationId,
   }).apiClient();
-  const state: Recovery = { status: 'partial', organizationId, userName: userName!, policyName: policyName! };
+  const state: Recovery = { status: 'partial', organizationId, userName, policyName };
   writeRecovery(state);
 
   try {
@@ -107,10 +116,11 @@ function writeRecovery(state: Recovery) {
     const already = (existing.users || []).find((user: any) => user.userName === userName);
     let apiKeyId: string | undefined;
     if (already) {
-      state.userId = already.userId;
+      const existingUserId: string = already.userId;
+      state.userId = existingUserId;
       const created = await client.createApiKeys({
         organizationId,
-        userId: state.userId,
+        userId: existingUserId,
         apiKeys: [{ apiKeyName: `ponsr-bot-api-key-${Date.now()}`, publicKey: keyPair.publicKey, curveType: 'API_KEY_CURVE_P256' }],
       });
       apiKeyId = created?.apiKeyIds?.[0] ?? created?.activity?.result?.createApiKeysResult?.apiKeyIds?.[0];
