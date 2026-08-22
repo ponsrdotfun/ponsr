@@ -1,0 +1,113 @@
+# The verification matrix, run by GitHub rather than claimed in a pull request body.
+#
+# Every check here was previously run on a maintainer's laptop and reported as a table.
+# That is not evidence anybody else can audit: a green pull request with no automation
+# behind it looks exactly like a verified one, and this repository has already shipped a
+# stale artifact, a vacuously-passing test, and a verifier that confirmed the wrong
+# contract. Each of those passed a local run and would have failed a second, independent
+# one.
+#
+# Nothing here signs, broadcasts, deploys, or reads a secret. The contract suite forks
+# mainnet only when FORK=1, which is never set, so the whole matrix runs offline apart
+# from installing dependencies and the audit query.
+
+name: verify
+
+on:
+  pull_request:
+  push:
+
+# A superseded run proves nothing about the commit that replaced it.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to an exact patch, not "22". A floating major silently changes the
+      # runtime under a native module (better-sqlite3) and under the compiler pin the
+      # artifact reproducibility check depends on.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.11.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      # 1. Clean root install. `npm ci`, not `npm install`: it installs the lockfile
+      #    exactly and fails if the lockfile and manifest disagree, which is the whole
+      #    point of running it here.
+      - name: root npm ci
+        run: npm ci
+
+      # 2. Clean backend install.
+      - name: backend npm ci
+        run: npm ci
+        working-directory: backend
+
+      # 3a. The FULL typecheck, which is not the same as the build.
+      #
+      # tsconfig.build.json deliberately excludes tests/ and scripts/ so the production
+      # image does not ship operator tooling. A build alone therefore cannot see a type
+      # error in a script -- and one shipped exactly that way: an `asserts` signature
+      # aimed at a module-scope binding, which made the script unbuildable while
+      # `npm run build` stayed green. Both run, in this order.
+      - name: backend typecheck (src, tests and scripts)
+        run: npx tsc --noEmit -p tsconfig.json
+        working-directory: backend
+
+      # 3b. The production build.
+      - name: backend build
+        run: npm run build
+        working-directory: backend
+
+      # 3c. Complete backend suite.
+      - name: backend tests
+        run: npm test
+        working-directory: backend
+
+      # 4. Contract tests. Run from the root, where hardhat.config.js lives; artifacts are
+      #    committed and compiled out-of-band, hence --no-compile in the root script.
+      #    FORK is unset, so this uses the in-process Hardhat network and reaches nothing.
+      - name: contract tests
+        run: npm test
+
+      # 5. Website smoke tests. No install needed by design.
+      - name: website smoke tests
+        run: node website/smoke-test.js
+
+      # 6. Artifact reproducibility, twice.
+      #
+      # Twice on purpose. A single run cannot distinguish a deterministic compile from
+      # one that happened to agree once -- and solc embeds a hash of the source into the
+      # deployed bytecode's metadata, so anything that varies per run (line endings, a
+      # path, a timestamp) shows up as a difference on the second pass and not the first.
+      - name: artifact reproducibility (run 1)
+        run: node scripts/verify-artifacts-reproducible.js
+
+      - name: artifact reproducibility (run 2)
+        run: node scripts/verify-artifacts-reproducible.js
+
+      # 7. Whitespace errors, and proof that nothing above rewrote a tracked file.
+      #    Compared against HEAD rather than the index so a build that dirties the tree
+      #    fails here instead of being discovered later.
+      - name: git diff --check
+        run: git diff --check HEAD
+
+      # 8. Production dependency audit for the one tree that is actually deployed.
+      #    --omit=dev on purpose: the root toolchain carries known build-time advisories
+      #    that are not reachable from anything a user can send the bot, and are
+      #    documented in docs/DEPENDENCY-RISK.md. This gate is about the running bot.
+      - name: backend npm audit (production deps)
+        run: npm audit --omit=dev
+        working-directory: backend
