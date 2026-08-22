@@ -33,6 +33,41 @@ function makeDb(file: string, count = 1): Database.Database {
   return db;
 }
 
+/** The OS minimum, and deliberately nothing the maintenance CLI itself reads. */
+const BARE_ENV: NodeJS.ProcessEnv =
+  process.platform === 'win32'
+    ? {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        COMSPEC: process.env.COMSPEC,
+        TEMP: process.env.TEMP,
+      }
+    : {};
+
+/**
+ * How to actually start `tsx` from a test.
+ *
+ * Spawning `node_modules/.bin/tsx` failed on Windows twice over. The extensionless file is
+ * a shell script Windows cannot execute, giving ENOENT; and since the fix for
+ * CVE-2024-27980, Node refuses to spawn the `.cmd` shim at all without `shell: true`,
+ * giving EINVAL. Either way `stdout` and `stderr` came back undefined, so the assertions
+ * below reported "received value must be a string" instead of anything about the CLI.
+ *
+ * The CLI was correct throughout -- run by hand it exits 2 and names `--offline`. Only the
+ * way the test launched it was wrong, which is the failure mode worth naming: a test that
+ * cannot start the thing it tests reports a defect in the wrong place.
+ *
+ * So spawn the real JS entrypoint under this same Node binary. No shim, no shell, and
+ * therefore no argument-quoting hazard on a path that already contains a space.
+ */
+const TSX = path.join(__dirname, '../node_modules/tsx/dist/cli.mjs');
+const runCli = (args: string[]) =>
+  spawnSync(process.execPath, [TSX, ...args], {
+    encoding: 'utf8',
+    env: BARE_ENV,
+    cwd: path.join(__dirname, '..'),
+  });
+
 function tempPaths() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-maintenance-'));
   return {
@@ -53,17 +88,12 @@ describe('keyless maintenance CLI', () => {
     const p = tempPaths();
     makeDb(p.source, 4).close();
     const cli = path.join(__dirname, '../scripts/maintenance-db.ts');
-    const tsNode = path.join(__dirname, '../node_modules/.bin/tsx');
-    const backup = spawnSync(tsNode, [cli, 'backup', '--source', p.source, '--backup', p.backup, '--manifest', p.manifest], {
-      encoding: 'utf8', env: {}, cwd: path.join(__dirname, '..'),
-    });
+    const backup = runCli([cli, 'backup', '--source', p.source, '--backup', p.backup, '--manifest', p.manifest]);
     expect(backup.status).toBe(0);
     expect(JSON.parse(backup.stdout)).toEqual(expect.objectContaining({ schema: SCHEMA, backupPath: path.resolve(p.backup) }));
 
     const rehearsal = path.join(p.dir, 'rehearsal.sqlite');
-    const rehearse = spawnSync(tsNode, [cli, 'rehearse', '--manifest', p.manifest, '--destination', rehearsal, '--offline'], {
-      encoding: 'utf8', env: {}, cwd: path.join(__dirname, '..'),
-    });
+    const rehearse = runCli([cli, 'rehearse', '--manifest', p.manifest, '--destination', rehearsal, '--offline']);
     expect(rehearse.status).toBe(0);
     expect(JSON.parse(rehearse.stdout)).toEqual(expect.objectContaining({ launchCount: 4, integrity: 'ok' }));
     fs.rmSync(p.dir, { recursive: true, force: true });
@@ -73,10 +103,7 @@ describe('keyless maintenance CLI', () => {
     const p = tempPaths();
     makeDb(p.source).close();
     const cli = path.join(__dirname, '../scripts/maintenance-db.ts');
-    const tsNode = path.join(__dirname, '../node_modules/.bin/tsx');
-    const result = spawnSync(tsNode, [cli, 'restore', '--manifest', p.manifest, '--destination', p.source], {
-      encoding: 'utf8', env: {}, cwd: path.join(__dirname, '..'),
-    });
+    const result = runCli([cli, 'restore', '--manifest', p.manifest, '--destination', p.source]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/--offline/);
     fs.rmSync(p.dir, { recursive: true, force: true });
