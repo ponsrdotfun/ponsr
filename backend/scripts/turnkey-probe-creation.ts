@@ -101,14 +101,26 @@ async function main() {
   });
   line('2. creation carrying 1 ETH', describeOutcome(withValue, 'denied'));
 
-  // 3. Different code entirely, still a creation.
+  /**
+   * 3. Different code entirely, still a creation, still zero value.
+   *
+   * Reported as an ACCEPTED RESIDUAL rather than a failed expectation. The chosen
+   * remediation binds `eth.tx.value` on the creation clause and deliberately leaves
+   * initcode unbound, so this staying ALLOWED is the design working, not the design
+   * failing. It costs gas, never treasury: a zero-value creation has nothing to carry
+   * away.
+   *
+   * It used to assert 'denied', which printed a red cross beside an outcome nobody
+   * intended to change. That is worse than cosmetic -- an operator who learns that a
+   * correct run shows a failure is an operator who will not notice a real one.
+   */
   const hostile = await attempt('creation, foreign initcode', {
     ...base,
     to: null,
     data: HOSTILE_INITCODE,
     value: 0n,
   });
-  line('3. creation with unrelated initcode', describeOutcome(hostile, 'denied'));
+  line('3. creation, unrelated initcode, value 0', describeOutcome(hostile, 'residual'));
 
   // 4. Control: the treasury's whole balance, to an ordinary address. Known denied.
   const elsewhere = await attempt('transfer elsewhere', {
@@ -147,17 +159,30 @@ async function main() {
     return;
   }
 
+  /**
+   * Case 3 is absent from this verdict on purpose.
+   *
+   * Only the three cases that the remediation actually promises may gate it: the
+   * splitter still deploys, funds cannot ride a creation, and an arbitrary destination
+   * is still refused. Adding the residual here would make a correct configuration fail.
+   */
   const good = zeroValue.kind === 'allowed' && withValue.kind === 'denied' && elsewhere.kind === 'denied';
   console.log(good ? '=== PASSED ===' : '=== NOT SAFE YET ===');
   if (good) {
     console.log('  The bot can deploy a splitter and cannot attach funds to a creation.');
-    if (hostile.kind === 'allowed') {
-      console.log('');
-      console.log('  RESIDUAL: initcode is not bound, so any zero-value contract may be');
-      console.log('  deployed. That costs gas, not treasury -- recorded as residual risk');
-      console.log('  rather than claimed protection.');
-    }
   }
+
+  // Stated on every run, pass or fail, and whichever way it went. A residual that is
+  // only mentioned when it happens to be open is one nobody can audit the history of.
+  console.log('');
+  console.log('  RESIDUAL (initcode is not bound by the chosen remediation):');
+  console.log(
+    hostile.kind === 'allowed'
+      ? '    OPEN as designed -- any ZERO-VALUE contract may be deployed. Costs gas,\n' +
+          '    not treasury. Recorded as accepted residual risk, never as protection.'
+      : '    Closed -- a foreign initcode was refused. Better than this design promises;\n' +
+          '    do not rely on it until a rule is written that requires it.'
+  );
 }
 
 main().catch((err) => {

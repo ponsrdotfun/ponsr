@@ -111,6 +111,47 @@ describe('describeOutcome', () => {
     expect(text).toMatch(/UNKNOWN|not asked/i);
     expect(text).not.toMatch(/✅|❌/);
   });
+
+  /**
+   * A capability a design knowingly leaves open must not print as a failure.
+   *
+   * Option A binds `eth.tx.value` on the creation clause and deliberately leaves
+   * initcode unbound, so a zero-value deploy of arbitrary code stays ALLOWED. Asserting
+   * `denied` there put a red cross beside an outcome nobody intends to change -- and an
+   * operator who learns that a correct run shows a failure is one who will not notice a
+   * real one.
+   */
+  describe('residual', () => {
+    it('reports an open residual as accepted, not as a failure', () => {
+      const text = describeOutcome({ kind: 'allowed' }, 'residual');
+      expect(text).toMatch(/ALLOWED/);
+      expect(text).toMatch(/residual/i);
+      expect(text).not.toMatch(/❌/);
+    });
+
+    it('treats a closed residual as better than required, not as a pass to rely on', () => {
+      const text = describeOutcome({ kind: 'denied', detail: 'policy' }, 'residual');
+      expect(text).toMatch(/denied/);
+      expect(text).not.toMatch(/❌/);
+    });
+
+    it('still reports an unanswered residual as unanswered', () => {
+      const text = describeOutcome({ kind: 'unknown', detail: 'quota' }, 'residual');
+      expect(text).toMatch(/UNKNOWN|not asked/i);
+      expect(text).not.toMatch(/✅|❌/);
+    });
+
+    /**
+     * The abuse this type must never permit.
+     *
+     * `residual` exists to describe initcode. If the funded-creation case were ever
+     * relabelled with it, the finding that the bot key can empty the hot wallet would
+     * print as "accepted" and the probe would stop being evidence of anything.
+     */
+    it('does not soften a denial that is actually required', () => {
+      expect(describeOutcome({ kind: 'allowed' }, 'denied')).toMatch(/❌/);
+    });
+  });
 });
 
 /**

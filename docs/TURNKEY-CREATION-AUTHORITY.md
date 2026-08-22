@@ -77,15 +77,58 @@ Turnkey's policy language does support the fields needed. Confirmed against
 Operators: `== != < > <= >=` on ints, `== !=` on strings, `&& ||`, `in`, and string
 slicing `'abc'[0..2]`. Note **snake_case** — `chain_id`, not `chainId`.
 
-### Option A — bind value on the creation clause
+### Option A — bind value on the creation clause — **CHOSEN 2026-08-22**
+
+The decision is locked, and the condition below is the exact text to apply. It is not
+the bare form first sketched here, and the difference matters.
 
 ```text
-ponsr-bot: splitter deploy, zero value
-  eth.tx.to == '' && eth.tx.value == 0
+ponsr-bot: v1 factory + zero-value splitter deploy
+  (eth.tx.to == '' && eth.tx.value == 0)
+  || eth.tx.to == '0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb'
 ```
+
+**The v1 clause is carried over deliberately.** The policy being replaced,
+`897d432e-16f4-4a5e-b16e-42c365508ec6`, grants two things at once — the v1 factory *and*
+contract creation — and only the creation half is being changed. Replacing it with the
+bare `eth.tx.to == '' && eth.tx.value == 0` would silently revoke the v1 grant as well:
+`turnkey-verify-policy.ts` case 1a would fail on a configuration that is otherwise
+correct, and a rollout that runs the backend on `PONS_FACTORY_VERSION=v1` would find its
+launches refused by the policy engine rather than by the launchpad — two different
+faults that produce the same silence.
+
+The consensus clause must be byte-identical to the existing one:
+
+```text
+approvers.any(user, user.id == '009b2000-01e2-4984-9326-5bb743bf007a')
+```
+
+That user id is confirmed, not assumed: `getWhoami` resolves the runtime API key to
+`009b2000-01e2-4984-9326-5bb743bf007a` / `ponsr-bot`. Get the consensus wrong and the bot
+stops being an approver of its own rule, which denies every launch.
 
 Narrowest change, keeps one key. The splitter constructor is not payable and the bot
 never attaches value to a deploy, so this costs nothing operationally.
+
+#### Required outcomes, all six
+
+| case | required | source |
+|---|---|---|
+| zero-value splitter creation | ALLOWED | probe 1 |
+| creation carrying value | **denied** | probe 2 |
+| unrelated initcode, zero value | ALLOWED — accepted residual | probe 3 |
+| transfer to an arbitrary address | denied | probe 4 |
+| v1 factory | ALLOWED | verify 1a |
+| current V2 factory | ALLOWED | verify 1b |
+
+Case 3 is reported through the `residual` expectation in `describeOutcome`, not as a
+failed `denied`. That is a correctness requirement, not presentation: asserting `denied`
+printed a red cross beside an outcome nobody intends to change, and an operator who
+learns that a correct run shows a failure is one who will not notice a real one. The
+residual is stated on every run, open or closed, so its history can be audited.
+
+`residual` may never be applied to case 2. `tests/turnkeyAuthority.test.ts` fails if it
+is, if case 2 leaves the verdict, or if case 3 enters it.
 
 **Do not trust it until an executed negative probe proves enforcement.** Grammar being
 documented is not the same as a rule biting: `turnkey-probe-creation.ts` case 2 must flip
