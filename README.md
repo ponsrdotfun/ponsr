@@ -26,28 +26,88 @@ website/                 Static site, one self-contained file, three routes:
 docs/                    Every research/spec document from the planning phase, for reference
 ```
 
-## Read this first: `docs/pons-v2-findings.md` §9, then `BUILD-STATUS.md`
+## Read this first: `docs/pons-v2-findings.md` §11, then §10, then §9
 
-The verified source of both live pons v1 contracts was read on 2026-08-04, which settled every
-on-chain question this project had been carrying. The short version:
+Read §11 before anything else in this repository.
 
-- **Target v1.** `launchEnabled()` is `true` and no whitelisting is needed — that guard only
-  applies when launching is globally off. v2's factory is deployed but closed and unaudited.
-- **The real launch interface is checked in** at `backend/src/abi/`. The placeholder it
-  replaced was wrong in every parameter, and the code was calling `creationFee()`, which does
-  not exist on the deployed contract — the real name is `launchFee()`.
-- **`FeeSplitter.sol` was broken, and is fixed.** Fees are pushed, not escrowed, and a contract
-  may be the recipient — but they arrive as **ERC20**, and the contract handled only native
-  ETH. It would have received them with no way to move them out.
+Ponsr spent weeks reading a **superseded** pons factory. Everything §10 concluded about a
+closed launchpad — that launching was switched off, that a whitelist was the blocker, that
+the project was waiting on somebody else — was true of a contract nobody uses. The one pons
+actually uses has been open since 2026-08-03 and has taken over 1,900 launches. Ponsr could
+have launched the whole time.
+
+The lesson that generalises, and the reason it is worth your time: **an address is not an
+identity.** A factory that answers `launchEnabled()` looks exactly like the right factory.
+
+### Three deployments, one of them executable
+
+`backend/src/deployments.ts` is the registry. It exists because a bare config address let a
+superseded factory and the current one look identical, and every guard read the wrong one
+confidently for a week. Each entry binds factory, ABI hash, runtime bytecode hash, fee
+escrow, selector and calldata schema together, so a mismatch is a refusal rather than a
+silent wrong answer.
+
+| deployment | factory | role |
+|---|---|---|
+| `pons-v1` | `0xA5aAb3F0…feB` | indexable only |
+| `pons-v2-legacy-7e1` | `0x7E1EAbd5…dB8` | indexable only — superseded 2026-08-03 |
+| **`pons-v2-current-7ed`** | **`0x7eD598Bc…C7e`** | **executable** |
+
+Exactly one deployment may receive a launch; `executableDeployment()` throws if that is ever
+untrue. The older two stay indexable forever because they hold real launches that must
+remain visible.
+
+- **`launchEnabled()` is `true` and `canLaunch(treasury)` is `true`.** Ponsr can launch today
+  through the public gate and never needed a whitelist to develop or test. A whitelist is
+  still worth having — it survives the gate closing — but it is not a blocker, and any
+  document calling it one is sending you to wait on somebody else's reply.
+- **Three things differ between the two v2 deployments, each failing differently.** The
+  calldata gains a `bytes32 salt`, moving the selector from `0xa41d5f2b` to `0xf35abbcf`; the
+  approved pairing set is 23 assets rather than 8, with RIVN already revoked; and the **fee
+  escrow is different**. The escrow is the dangerous one — it is immutable in each splitter,
+  claims pay `msg.sender`, and there is no `claimFor` — so the wrong one strands a creator's
+  fees permanently. It is asserted before the splitter is deployed and again before the
+  calldata is built.
+- **The treasury is the on-chain deployer, not the X user.** The user receives the creator
+  share through the per-launch splitter instead. `launchTokenFor` would change that but is
+  callable only by pons's own forwarder. No reply or document may say otherwise.
+- **`FeeSplitter.sol` was broken, and is fixed.** Fees arrive as **ERC20** — the launched
+  token plus WETH, never ETH — and the contract handled only native ETH. It could have
+  received them with no way to move them out. Rewritten with `splitERC20`, a per-token
+  claimable ledger and a reentrancy guard.
+- **Nothing about the fee is hardcoded.** Read `launchFee()` live; the function is
+  `launchFee()`, not `creationFee()`, which does not exist and would revert every read. The
+  launch fee, the graduation threshold and the creator share are all owner-settable on pons's
+  side, and the split has already changed once between factories.
 - **No IPFS is needed** — token logo and description travel as calldata strings.
+
+The whole path is proven end to end: exact production calldata passes against the live
+factory by `eth_call`, a forked rehearsal launches paired with AAPL and claims the fee back
+out, and two self-dealt mainnet launches split real trading fees 95/5 with nothing stranded.
+
+**95/5 is not 95/5 of the trading fees.** pons's locker takes 30% before our splitter sees
+anything, so the split divides the remaining 70: the creator's real take is **66.5%** and the
+treasury's is **3.5%**. Those two figures are the only ones that may appear in user-facing
+copy, because they are what the contracts actually transfer and anyone can check on-chain. A
+revenue model built on 5% is overstated by about 1.4×. Treat 30 as today's value rather than
+a constant — `MAX_PROTOCOL_FEE_SHARE` is 50, so pons can cut the share to 2.5% without
+notice.
 
 The ABI pull looked blocked on an API key for weeks because every note pointed at
 `api.blockscout.com` (the Pro aggregator, which needs one). Each chain also runs its own
 Blockscout with an open API:
 
 ```bash
-curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB"
+curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"
 ```
+
+### One security finding is open
+
+The Turnkey policy allows the bot key to sign a **contract creation with no constraint on
+value** — needed for the splitter, but a creation's value lands in the contract being created
+and the sender writes that contract. One transaction can empty the hot wallet while every
+destination-only check still reports green. See `docs/TURNKEY-CREATION-AUTHORITY.md`. It is
+**open**, it is an operator action, and the backend should not run 24/7 until it is closed.
 
 ## Then: `BUILD-STATUS.md`
 
