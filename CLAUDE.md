@@ -209,7 +209,24 @@ Still blocked on the owner:
    Root keys are disposable — mint one with a passkey when an administrative act needs it.
    The bot never needed root: it runs on a scoped key that can reach the pons factories and
    nothing else.
-3. Backend hosting, for the listener to run 24/7.
+3. ~~Backend hosting, for the listener to run 24/7~~ — **done, and has been for a while.**
+   `ponsr-backend` runs on Fly in `iad`, machine `867634bee0e048`, `min_machines_running = 1`
+   and `auto_stop_machines = false`, health check passing. This entry sat here as an open
+   blocker while the thing it describes was already serving `/status` on the public internet.
+
+   What is actually open is the opposite problem: **the deployed image predates the
+   migration.** It was last updated 2026-08-19; the deployment registry landed 2026-08-20,
+   and `main` is now 56 commits ahead of what is running. Production therefore still reads
+   the *superseded* factory, and its own `/status` says so —
+   `"pons has switched launching off and this treasury is not whitelisted -- no launch can
+   succeed"`. That is the pre-migration belief, live, in front of anyone who looks.
+
+   Two consequences, and they point in opposite directions. The running bot cannot launch
+   anything, because it believes the launchpad is shut — so the stale deploy is currently
+   acting as a brake. But it still holds the Turnkey bot key in a live process, and the
+   creation-authority finding above is open, so the hot wallet (0.0260 ETH at last read) is
+   reachable by anyone who obtains that key. **Close the Turnkey finding before deploying,
+   not after** — deploying first removes the brake while leaving the exposure.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 

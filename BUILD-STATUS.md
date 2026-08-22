@@ -19,7 +19,20 @@
 > **The bot is live and the full path is proven** (2026-08-12). A tweet from a real account
 > produced a real token and a real reply on X: parse, anti-Sybil validation, Privy wallet,
 > splitter deploy, `launchToken`, answer. Every provider is wired and verified against its
-> live service.
+> live service; the backend runs on Fly as `ponsr-backend` (`iad`,
+> `min_machines_running = 1`), health check passing.
+>
+> **What is deployed is not what is in this repository.** The running image was last updated
+> 2026-08-19; the deployment registry landed 2026-08-20 and `main` is 56 commits ahead of it.
+> Production is therefore still reading the **superseded** factory and saying so in public —
+> its own `/status` reports *"pons has switched launching off and this treasury is not
+> whitelisted -- no launch can succeed"*, which is the pre-migration belief this repository
+> has since retracted.
+>
+> That stale deploy is currently acting as a brake: the running bot refuses every launch
+> because it thinks the launchpad is shut. It is not, however, a safety measure — the same
+> process holds the Turnkey bot key, and the finding below is open. **Close the creation
+> authority before deploying**, or the deploy removes the brake and leaves the exposure.
 >
 > What remains is not code — see `docs/action-checklist.md`.
 >
