@@ -1,5 +1,7 @@
 # Ponsr — Twitter launch bot for pons on Robinhood Chain
 
+[![verify](https://github.com/ponsrdotfun/ponsr/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/ponsrdotfun/ponsr/actions/workflows/verify.yml)
+
 > The project was originally called **Holdfast**; the brand is now **Ponsr**.
 
 This is the full build: the fee-splitter smart contract, the backend bot service, and the
@@ -11,11 +13,11 @@ below).
 
 ```
 contracts/              FeeSplitter.sol -- the 95/5 fee-splitting contract (Part 8)
-contracts-test/          28 passing tests, including two live reentrancy attacks
+contracts-test/          Contract tests, including two live reentrancy attacks
 backend/                 The bot service: listener -> parser -> validator -> launch -> reply
   src/                    Source code (TypeScript)
   tests/                  Unit + full pipeline integration tests (all mocked; run for current count)
-  scripts/run-eval.ts      Runs the 28-case parser eval set against the real Claude API
+  scripts/run-eval.ts      Runs the parser eval set against the real Claude API
   docs/                   SETUP.md and SECURITY-BOUNDARIES.md -- read these before deploying
 website/                 Static site, one self-contained file, three routes:
                            /               landing page
@@ -77,6 +79,21 @@ on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
 Counts are deliberately not written here. Every hardcoded figure in this repository has
 been wrong within a week of being typed -- README said 151 backend tests while the suite
 had grown past 500 -- and a stale number looks exactly like evidence.
+
+The **verify** badge at the top of this file is the replacement: it reports the result of
+the last run of `.github/workflows/verify.yml` on `main`, which cannot go stale because
+nobody types it. That workflow runs on every push and pull request and is the only claim
+about this repository that a reader has not had to take on trust -- a clean root and
+backend `npm ci`, the backend typecheck, build and full suite, the contract tests, the
+website smoke tests, artifact reproducibility twice, `git diff --check`, and a
+production-only backend audit.
+
+Its first two runs each caught a defect that every local run had missed: a Node pin below
+22.12 that broke jsdom, and a backup test whose concurrency assertion was a race against
+the scheduler rather than a property. That is the argument for the badge in one line --
+passing on one machine is not the same as passing.
+
+Run any suite yourself; each prints its own count:
 
 - **Contract:** `npm test` at the root (`contracts-test/`)
 - **Website:** `node website/smoke-test.js`
