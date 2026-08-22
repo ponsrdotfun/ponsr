@@ -23,6 +23,22 @@
  */
 import { config } from '../src/config';
 
+/**
+ * TWO gates, because one is not enough for this script.
+ *
+ * This probe creates a DENY-EVERYTHING policy on the live organisation to find out
+ * whether policies bite, then removes it in a `finally`. Between those two steps, signing
+ * is disabled for every key in the organisation -- and if the process dies, or the delete
+ * fails, it stays that way. That is precisely the state that cost a day on 2026-08-20,
+ * reached from the other direction.
+ *
+ * It used to run on its name alone. `--execute` is one keystroke from a shell history
+ * entry, so it also needs a sentence the operator has to mean.
+ */
+const EXECUTE = process.argv.includes('--execute');
+const ACK_PHRASE = 'I-UNDERSTAND-THIS-DISABLES-SIGNING';
+const ACKNOWLEDGED = process.argv.includes(`--acknowledge=${ACK_PHRASE}`);
+
 const POLICY_NAME = 'ponsr-probe-deny-all-DELETE-ME';
 
 function line(label: string, value: unknown) {
@@ -70,6 +86,30 @@ function line(label: string, value: unknown) {
     process.exit(1);
   }
 
+  // Everything above this line was a read. Everything below changes the organisation.
+  if (!EXECUTE || !ACKNOWLEDGED) {
+    console.log('\n=== PLAN ONLY — nothing was created and nothing was changed ===');
+    console.log('');
+    console.log('  This probe would create a DENY-EVERYTHING policy on organisation');
+    console.log('  ' + organizationId);
+    console.log('  named "' + POLICY_NAME + '", try to sign under it, and then delete it.');
+    console.log('');
+    console.log('  While that policy exists, NO KEY IN THIS ORGANISATION CAN SIGN. If this');
+    console.log('  process dies in between, or the delete fails, it stays that way until');
+    console.log('  somebody removes it by hand.');
+    console.log('');
+    console.log('  There is usually a better question to ask. `turnkey-read-policies.ts`');
+    console.log('  shows what the rules say, and `turnkey-verify-policy.ts` proves what a');
+    console.log('  scoped key can and cannot sign -- neither changes anything.');
+    console.log('');
+    console.log('  To run it anyway, both of these:');
+    console.log('');
+    console.log('    npx tsx scripts/turnkey-policy-probe.ts \\');
+    console.log('      --execute --acknowledge=' + ACK_PHRASE);
+    console.log('');
+    process.exit(EXECUTE ? 1 : 0);
+  }
+
   let policyId: string | null = null;
   try {
     console.log('\n=== APPLYING A DENY-EVERYTHING POLICY ===');
@@ -81,7 +121,12 @@ function line(label: string, value: unknown) {
       notes: 'Temporary probe by ponsr. Safe to delete.',
     });
     policyId = created?.policyId ?? created?.activity?.result?.createPolicyResult?.policyId ?? null;
-    line('policyId', policyId ?? '(created, id not returned)');
+    // Printed immediately and unmistakably. If this process dies before the delete,
+    // this line is the only record of what has to be removed by hand.
+    console.log('');
+    console.log('  >>> PROBE POLICY ID: ' + (policyId ?? '(NOT RETURNED -- find it by name)'));
+    console.log('  >>> If anything goes wrong from here, DELETE THAT POLICY.');
+    console.log('');
 
     console.log('\n=== SIGNING AGAIN, WITH DENY-ALL ACTIVE ===');
     let blocked = false;
@@ -109,13 +154,30 @@ function line(label: string, value: unknown) {
     }
   } finally {
     if (policyId) {
+      let deleted = false;
       try {
         await client.deletePolicy({ organizationId, policyId });
-        console.log('\n  cleanup: probe policy deleted.');
+        // `deletePolicy` returning without throwing is not proof the policy is gone.
+        // The only proof is that it no longer appears, so this asks.
+        const after = await client.getPolicies({ organizationId });
+        deleted = !(after.policies || []).some((x: any) => x.policyId === policyId);
       } catch (err: any) {
-        console.error('\n  ⚠️  CLEANUP FAILED -- delete this by hand in the dashboard:');
+        console.error('\n  cleanup call failed: ' + (err?.message ?? err));
+      }
+
+      if (deleted) {
+        console.log('\n  cleanup: probe policy deleted, and verified absent.');
+      } else {
+        console.error('\n  ############################################################');
+        console.error('  INCIDENT: THE DENY-ALL POLICY MAY STILL BE ACTIVE.');
+        console.error('');
+        console.error('  While it exists, nothing in this organisation can sign -- the bot');
+        console.error('  cannot launch and no verifier can answer.');
+        console.error('');
+        console.error('  Delete it now, by hand, in the Turnkey dashboard:');
         console.error('     ' + POLICY_NAME + '  (' + policyId + ')');
-        console.error('     ' + (err?.message ?? err));
+        console.error('  ############################################################');
+        process.exitCode = 1;
       }
     }
   }

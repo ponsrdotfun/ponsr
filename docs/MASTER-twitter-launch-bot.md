@@ -1221,9 +1221,9 @@ The full implementation described throughout this spec has been built: the FeeSp
 contract, the backend bot service, and the launch-board website (branded **Ponsr**; the
 project was originally called Holdfast).
 
-**232/232 automated checks passing**: 28 contract tests (including two live
-reentrancy attacks), 151 backend tests (unit + full pipeline integration, every
-external dependency mocked), 53 website smoke-test checks.
+**Automated verification is split across contract, backend, and website suites.** Run
+each suite for its current count and result; totals are deliberately not copied into this
+document because they drift whenever coverage is added.
 
 **What's real and tested vs. what's a stub waiting on your credentials** is documented in
 full, honestly, in `BUILD-STATUS.md` inside the delivered package -- short version: all logic

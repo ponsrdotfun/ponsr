@@ -21,6 +21,8 @@ import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
 import { createLaunchTarget } from './launchTarget';
+import { executableDeployment, PonsDeployment } from './deployments';
+import { readCurrentReadiness } from './currentReadiness';
 import { FixedWindowRateLimit } from './webhookRateLimit';
 
 const app = express();
@@ -108,16 +110,27 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
  * and no reason to spend a log scan finding that out. The set is discovered once at
  * boot (below) and refreshed on an hourly TTL.
  */
-const pairAssets =
-  config.PONS_FACTORY_VERSION === 'v2'
-    ? new PairAssetRegistry(
-        new ChainPairTokenSource({
-          provider,
-          factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
-          fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
-        })
-      )
-    : undefined;
+const pairAssets = (() => {
+  const d = executableDeployment();
+  // v1 prices every launch from its launch config, so there is nothing to discover
+  // and no reason to spend a log scan finding that out.
+  if (config.PONS_FACTORY_VERSION === 'v1') return undefined;
+  return new PairAssetRegistry(
+    new ChainPairTokenSource({
+      provider,
+      // From the registry, not from configuration. Approvals belong to the deployment
+      // that emitted them: the superseded factory approved eight assets, the current
+      // one approves twenty-three and has already revoked one. Reading the old
+      // factory's log would offer a set that is both too small and, for anything
+      // revoked, wrong -- and wrong here means a launch that reverts after the
+      // splitter has been deployed and paid for.
+      // The deployment itself, so the address, the ABI and the start block cannot
+      // disagree. Passing an address and a block separately was two chances to name
+      // different contracts.
+      deployment: d,
+    })
+  );
+})();
 
 const launchTarget = createLaunchTarget(provider);
 
@@ -169,10 +182,19 @@ const deps = {
   xClient: createXClient(),
   treasurySigner,
   provider,
-  getLiveFeeWei: () => getLiveFeeWei(provider),
+  // Priced from the deployment the orchestrator selected, not from the global flag.
+  getLiveFeeWei: (deployment?: PonsDeployment) => getLiveFeeWei(provider, deployment),
   getTreasuryBalanceWei: async () => getBalanceWei(provider, await treasurySigner.address()),
-  getLaunchReadiness: async () =>
-    getLaunchReadiness(provider, await treasurySigner.address(), config.PONS_LAUNCH_CONFIG_ID),
+  // Asked of the deployment the orchestrator selected. Readiness read from a global
+  // describes a contract nobody is calling.
+  getLaunchReadiness: async (deployment?: PonsDeployment) =>
+    getLaunchReadiness(
+      provider,
+      await treasurySigner.address(),
+      config.PONS_LAUNCH_CONFIG_ID,
+      config.PONS_DEX_ID,
+      deployment
+    ),
   // Part 5 mitigation #5. ConsoleNotifier is a starting point only -- Part 5 asks
   // for alerting "wired to something you'll see, not just logs no one reads", so
   // swap in a real transport (Telegram/email/pager) before mainnet. The Notifier
@@ -267,7 +289,27 @@ app.get('/status', async (_req, res) => {
       getBlockNumber: () => provider.getBlockNumber(),
       getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
       getLiveFeeWei: deps.getLiveFeeWei,
-      getLaunchReadiness: deps.getLaunchReadiness,
+      // Read from the deployment the bot launches through, using that contract's own
+      // canLaunch predicate. Reading a superseded factory is precisely how /status
+      // reported the launchpad closed for a week while it was open.
+      getLaunchReadiness: async () => {
+        const d = launchTarget.deployment;
+        if (!d) return deps.getLaunchReadiness();
+        const r = await readCurrentReadiness(
+          provider,
+          await treasurySigner.address(),
+          config.PONS_LAUNCH_CONFIG_ID,
+          '0x0000000000000000000000000000000000000000',
+          d
+        );
+        return {
+          launchEnabled: r.launchEnabled,
+          whitelisted: r.whitelisted,
+          canLaunch: r.canLaunch,
+          durable: r.durable,
+          detail: r.reason ? `${r.reason}` : r.detail,
+        };
+      },
       // The same window the circuit breaker counts, so the page cannot disagree
       // with the thing actually refusing launches.
       spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
@@ -278,6 +320,8 @@ app.get('/status', async (_req, res) => {
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
       factoryVersion: config.PONS_FACTORY_VERSION,
+      deploymentId: launchTarget.deployment?.id,
+      deploymentFactory: launchTarget.deployment?.factory,
       listPairAssets: pairAssets ? async () => (await pairAssets.list()).map((a) => a.symbol) : undefined,
     });
     res.status(statusHttpCode(report)).json(report);
@@ -384,7 +428,13 @@ const crossCheck =
 // to check the wrong contract.
 const launchpadWatches = [
   { label: 'the v1 factory', address: config.PONS_FACTORY_ADDRESS },
-  { label: 'the v2 factory', address: config.PONS_V2_FACTORY_ADDRESS },
+  // The CURRENT factory, from the registry. This watched
+  // `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20 -- the superseded deployment --
+  // which is how a "launchpad closed" alert kept firing accurately about a contract
+  // pons had already replaced, while the one Ponsr would launch through was open the
+  // entire time. A monitor pointed at the wrong contract does not go quiet; it reports
+  // confidently on somewhere else.
+  { label: `the current factory (${executableDeployment().id})`, address: executableDeployment().factory },
 ].map(({ label, address }) =>
   startLaunchpadWatch(
     { getLaunchReadiness: async () => getSwitchState(provider, address, await treasurySigner.address()) },

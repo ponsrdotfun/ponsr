@@ -1,7 +1,8 @@
 /**
  * Connectivity preflight for Privy and Turnkey.
  *
- *   npx ts-node scripts/check-providers.ts
+ *   npx ts-node scripts/check-providers.ts                         # no Privy creation
+ *   npx ts-node scripts/check-providers.ts --create-privy-wallet   # explicit write check
  *
  * Credentials being *present* in `.env` proves nothing. This exercises the exact code paths
  * the bot uses and reports what actually came back.
@@ -23,6 +24,7 @@ import { TurnkeyTreasurySigner } from '../src/treasurySigner';
 import { createProvider, getBalanceWei } from '../src/chainClient';
 
 const CHECK_USER_ID = 'ponsr-connectivity-check';
+const CREATE_PRIVY_WALLET = process.argv.includes('--create-privy-wallet');
 
 function head(title: string) {
   console.log('');
@@ -44,6 +46,12 @@ async function checkPrivy(): Promise<boolean> {
   if (!haveId || !haveSecret) {
     console.log('  -> skipped: fill both in backend/.env');
     return false;
+  }
+
+  if (!CREATE_PRIVY_WALLET) {
+    console.log('  -> plan only: credentials are present, but creating/recovering a Privy wallet is a write.');
+    console.log('     Re-run with --create-privy-wallet to exercise that resource-creation path.');
+    return true;
   }
 
   // A throwaway in-memory-ish DB so the check never touches the real users table.

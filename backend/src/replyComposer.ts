@@ -53,7 +53,27 @@ export function composeSuccessReply(params: {
   const link = `${base}/token/${encodeURIComponent(params.tokenAddress)}`;
 
   if (params.omitAddresses) {
-    return [`${params.tokenName} ($${params.tokenSymbol}) is live.`, link].join('\n');
+    // The board, NOT the token page.
+    //
+    // This used to send `${base}/token/${tokenAddress}` -- which contains a full 0x
+    // address, in a reply whose entire reason for existing is that X rejected the last
+    // one for containing a 0x address. The post text includes the URL, so the retry
+    // almost certainly tripped the same filter: same refusal, no reply delivered, at
+    // $0.200 instead of $0.015 because the retry carries a link. And the degraded-reply
+    // alert fired either way, which made a fallback that could not work look like one
+    // that did.
+    //
+    // Linking by symbol is not the alternative: symbols come from whoever tweets, two
+    // tokens called PONSR were launched within a day on 2026-08-12, and a symbol link
+    // resolves to whichever the site happens to match. Sending someone a stranger's
+    // token is worse than making them look.
+    //
+    // So: the board, and the symbol in the text. They can find it, and nothing here is
+    // an address.
+    return [
+      `${params.tokenName} ($${params.tokenSymbol}) is live.`,
+      `Find it on the board: ${base}/explore`,
+    ].join('\n');
   }
 
   const lines = [
@@ -106,10 +126,30 @@ export function composeRejectionReply(reason: RejectionReason, detail?: string):
       return detail
         ? `Can't pair a launch with that -- ${detail} Nothing was charged to you.`
         : "That pairing asset isn't available for launches. Nothing was charged to you.";
+    case 'PARSER_UNAVAILABLE':
+      // Silent, and deliberately so: the mention's claim is RELEASED on this path and the
+      // sweep retries it. Replying would tell someone their request failed moments before
+      // it succeeds on its own.
+      //
+      // It is listed explicitly rather than left to fall through, because the default
+      // branch echoes `detail` -- and this reason's detail is the raw parser error. A
+      // test proved it: the canary came back as
+      // "Couldn't launch that one (hot wallet 0x08e0 holds 3141592653589793 wei, …
+      // OPENROUTER 402 insufficient credit). Try again."
+      // Nothing sends it today. Nothing had to; the wording was already written.
+      return '';
     case 'DUPLICATE_TWEET':
       return ''; // Silent -- this is a retry/duplicate delivery, not a new user-facing event.
     default:
-      return `Couldn't launch that one (${detail ?? 'unknown reason'}). Try again.`;
+      // Reached only by a reason nobody has written a reply for. It says less than the
+      // branches above on purpose: `detail` comes from the validator and the orchestrator
+      // and carries balances, reserves and provider errors, and this reply is published
+      // unprompted to a stranger's timeline. An attacker who can make the bot refuse can
+      // choose how often they read it.
+      //
+      // The operator still gets the detail -- through the monitor, where it belongs.
+      console.error(`[reply] no reply written for rejection reason; detail withheld: ${detail ?? '(none)'}`);
+      return "Couldn't launch that one. This has been flagged for review -- try again shortly.";
   }
 }
 

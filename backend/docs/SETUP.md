@@ -73,8 +73,9 @@ want to know why.
 npm test
 ```
 
-All 151 backend tests should pass. This runs entirely against mocks -- no real API keys,
-no real chain, no real money, per the design in `tests/orchestrator.test.ts`.
+The backend suite should pass. Its current count is printed by Jest rather than copied here.
+It runs entirely against mocks -- no real API keys, no real chain, no real money, per the
+design in `tests/orchestrator.test.ts`.
 
 ## 5. Run the parser eval set against the real model (requires ANTHROPIC_API_KEY)
 
@@ -109,7 +110,8 @@ cannot be rehearsed there. What can be rehearsed is the contract that matters mo
 **Step 1 — create the wallet.** Writes the key to `.env` and prints only the address:
 
 ```bash
-npx ts-node scripts/new-treasury-wallet.ts
+npx ts-node scripts/new-treasury-wallet.ts          # plan only
+npx ts-node scripts/new-treasury-wallet.ts --write  # deliberately create and persist
 ```
 
 This is a Phase B wallet, not the production treasury -- see item 5 above. Fund it small on
@@ -155,7 +157,8 @@ Privy, Turnkey and the X client -- are implemented as of 2026-08-04, so what rem
 credentials and one verification:
 
 ```bash
-npx ts-node scripts/check-providers.ts        # Privy + Turnkey actually work
+npx ts-node scripts/check-providers.ts        # no Privy resource creation
+npx ts-node scripts/check-providers.ts --create-privy-wallet # explicit Privy write check
 npx ts-node scripts/turnkey-verify-policy.ts  # the treasury key is genuinely restricted
 ```
 

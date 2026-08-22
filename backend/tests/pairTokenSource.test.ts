@@ -1,4 +1,5 @@
 import { ChainPairTokenSource } from '../src/pairTokenSource';
+import { executableDeployment } from '../src/deployments';
 
 /**
  * Only the scanning behaviour is tested here; which approval wins and how a symbol
@@ -22,9 +23,14 @@ function log(address: string, approved: boolean, blockNumber: number, index = 0)
 }
 
 function build(head: () => number, factory: any, fromBlock = 0, chunkSize = 100) {
+  // A deployment that lives at the stub address, rather than a stub address contradicting
+  // whichever deployment happened to be the default. The scanner refuses that mismatch now,
+  // and it is right to: an address from one deployment decoded with another's ABI is how a
+  // superseded contract gets read as current. These tests are about chunking, so the
+  // deployment only needs to be internally consistent.
   const src = new ChainPairTokenSource({
     provider: { getBlockNumber: async () => head() } as any,
-    factoryAddress: '0x' + '11'.repeat(20),
+    deployment: { ...executableDeployment(), factory: '0x' + '11'.repeat(20) },
     fromBlock,
     chunkSize,
   });

@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "description": "Complete authority inventory for executable entrypoints in backend/scripts. Authority describes the maximum capability; defaultMode describes invocation without an explicit effect flag.",
+  "scripts": [
+    {
+      "script": "apply-v2-policy.ps1",
+      "authority": "remote-mutation",
+      "effects": [
+        "loads root credentials from a separate file for one process",
+        "invokes the gated Turnkey policy creator"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "-Execute"
+    },
+    {
+      "script": "apply-v2-policy.sh",
+      "authority": "remote-mutation",
+      "effects": [
+        "loads root credentials from a separate file for one process",
+        "invokes the gated Turnkey policy creator"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "check-providers.ts",
+      "authority": "local-write",
+      "effects": [
+        "reads provider credentials",
+        "reads Turnkey address and chain balance",
+        "creates or recovers a Privy wallet only with --create-privy-wallet",
+        "writes provider-check SQLite only with --create-privy-wallet"
+      ],
+      "defaultMode": "read-only",
+      "explicitGate": "--create-privy-wallet"
+    },
+    {
+      "script": "check-twitterapi.ts",
+      "authority": "read-only",
+      "effects": [
+        "reads twitterapi.io account data"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "check-x-credentials.ts",
+      "authority": "remote-mutation",
+      "effects": [
+        "reads X credentials",
+        "optionally posts and deletes a test post"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--post-test"
+    },
+    {
+      "script": "check-x-quota.ts",
+      "authority": "read-only",
+      "effects": [
+        "reads X API quota"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "collect-and-split-v2.ts",
+      "authority": "broadcast",
+      "effects": [
+        "claims and splits v2 creator fees on chain"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "collect-and-split.ts",
+      "authority": "broadcast",
+      "effects": [
+        "collects and splits v1 creator fees on chain"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "maintenance-db.ts",
+      "authority": "local-write",
+      "effects": [
+        "mutates the local operational database"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "new-treasury-wallet.ts",
+      "authority": "local-write",
+      "effects": [
+        "generates a Phase B private key",
+        "appends the key to backend/.env"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--write"
+    },
+    {
+      "script": "phase-b-launch.ts",
+      "authority": "broadcast",
+      "effects": [
+        "deploys a splitter and launches a token on chain",
+        "writes launch artifacts"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "print-v2-calldata.ts",
+      "authority": "read-only",
+      "effects": [
+        "builds and prints calldata without signing or sending"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "print-webhook-url.ts",
+      "authority": "read-only",
+      "effects": [
+        "derives and prints a webhook URL"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "run-eval.ts",
+      "authority": "read-only",
+      "effects": [
+        "calls the configured parser model and reports eval results"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "set-cold-address.ts",
+      "authority": "local-write",
+      "effects": [
+        "optionally reads chain code and balance",
+        "writes TREASURY_COLD_ADDRESS to backend/.env"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--write"
+    },
+    {
+      "script": "turnkey-allow-v2-factory.ts",
+      "authority": "remote-mutation",
+      "effects": [
+        "creates a Turnkey policy"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "turnkey-policy-probe.ts",
+      "authority": "remote-mutation",
+      "effects": [
+        "creates and deletes a deny-all Turnkey policy",
+        "requests a signature"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "turnkey-probe-creation.ts",
+      "authority": "signing",
+      "effects": [
+        "requests Turnkey signatures for negative creation probes",
+        "never broadcasts"
+      ],
+      "defaultMode": "signer-active"
+    },
+    {
+      "script": "turnkey-read-policies.ts",
+      "authority": "read-only",
+      "effects": [
+        "reads Turnkey users and policies"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "turnkey-scope-bot-user.ts",
+      "authority": "remote-mutation",
+      "effects": [
+        "creates or reuses an exact non-root user",
+        "creates an API key and policy",
+        "writes a separate bot credential file",
+        "writes non-secret recovery JSON",
+        "never writes root or bot credentials to .env"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "turnkey-verify-policy.ts",
+      "authority": "signing",
+      "effects": [
+        "requests allow and deny test signatures",
+        "never broadcasts"
+      ],
+      "defaultMode": "signer-active"
+    },
+    {
+      "script": "validate-splitter.ts",
+      "authority": "broadcast",
+      "effects": [
+        "deploys and exercises a splitter when explicitly executed"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--execute"
+    },
+    {
+      "script": "verify-current-ethcall.ts",
+      "authority": "read-only",
+      "effects": [
+        "performs read-only chain calls and eth_call rehearsal"
+      ],
+      "defaultMode": "read-only"
+    }
+  ]
+}

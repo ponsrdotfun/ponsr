@@ -85,7 +85,7 @@ export interface LaunchRecord {
   splitterAddress: string | null;
   tokenAddress: string | null;
   txHash: string | null;
-  status: 'pending' | 'confirmed' | 'failed' | 'rejected';
+  status: 'pending' | 'confirmed' | 'incident' | 'failed' | 'rejected';
   rejectionReason: RejectionReason | null;
   feeWeiPaid: string | null;
   createdAt: string;
@@ -95,4 +95,44 @@ export interface AccountSignals {
   xUserId: string;
   accountCreatedAt: string; // ISO
   followerCount: number;
+}
+
+/**
+ * Which pons deployment a launch was made through.
+ *
+ * Recorded per launch because Ponsr has now used three, and they differ in ABI, event
+ * shape and fee escrow. Reading a launch back without this means guessing which
+ * contract to ask about it.
+ */
+export interface LaunchProvenance {
+  deploymentId: string;
+  factory: string;
+  feeEscrow: string;
+  chainId: number;
+  /** The address the factory recorded as the launch's deployer. On the direct path
+   *  this is the treasury, not the X user -- the user receives the creator share
+   *  through the splitter instead. */
+  originalDeployer: string;
+  pairToken: string;
+  launchConfigId: string;
+  salt: string;
+  economicsDigest: string | null;
+  curve: string | null;
+  /**
+   * The per-launch FeeSplitter: the creator's fee recipient.
+   *
+   * The only address that can claim this launch's fees out of the escrow -- claims pay
+   * `msg.sender` and there is no `claimFor`. A row without it can only be recovered by
+   * re-deriving the address from a transaction receipt.
+   *
+   * Nullable because launches recorded before this column existed genuinely have no
+   * value here, and backfilling one would be inventing a fact about money.
+   */
+  splitter?: string | null;
+  /** The four bytes actually sent. Two deployments in the registry take different
+   *  calldata for the same nominal function, so a row that cannot say which encoding
+   *  produced it cannot be replayed or audited. */
+  launchSelector?: string | null;
+  /** The TokenParams schema behind that selector: 'v1' | 'v2-no-salt' | 'v2-salt'. */
+  tokenParamsVersion?: string | null;
 }

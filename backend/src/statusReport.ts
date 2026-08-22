@@ -43,7 +43,20 @@ export interface StatusDeps {
   getBlockNumber(): Promise<number>;
   getTreasuryBalanceWei(): Promise<bigint>;
   getLiveFeeWei(): Promise<bigint>;
-  getLaunchReadiness(): Promise<{ launchEnabled: boolean; whitelisted: boolean }>;
+  getLaunchReadiness(): Promise<{
+    launchEnabled: boolean;
+    whitelisted: boolean;
+    /** The factory's own predicate, where the deployment publishes one. Reported
+     *  rather than inferred: Ponsr spent a week deriving this from a superseded
+     *  contract's fields and was confidently wrong the whole time. */
+    canLaunch?: boolean;
+    durable?: boolean;
+    detail?: string;
+  }>;
+  /** Which registry entry the bot launches through, so the page names the contract
+   *  it is actually reading rather than "the launchpad". */
+  deploymentId?: string;
+  deploymentFactory?: string;
   /** Wei spent by the treasury since midnight UTC, and the cap that bounds it. */
   spentTodayWei(): bigint;
   dailyCapWei: bigint;
@@ -131,17 +144,35 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     checks.push({ name: 'launch-fee', state: 'down', detail: reason(err) });
   }
 
+  if (deps.deploymentId) {
+    checks.push({
+      name: 'deployment',
+      state: 'ok',
+      detail: `${deps.deploymentId} (${deps.deploymentFactory ?? 'address not reported'})`,
+    });
+  }
+
   try {
-    const r = await within(deps.getLaunchReadiness(), timeoutMs, 'launchEnabled()');
+    const r = await within(deps.getLaunchReadiness(), timeoutMs, 'launch readiness');
+    // canLaunch is the contract's own answer where it exists; the older deployments
+    // have no such helper, so the inference is the fallback rather than the rule.
+    const permitted = r.canLaunch ?? (r.launchEnabled || r.whitelisted);
     checks.push(
-      r.launchEnabled
-        ? { name: 'launchpad', state: 'ok', detail: 'launching is enabled' }
+      permitted
+        ? {
+            name: 'launchpad',
+            state: 'ok',
+            // Says which of the two is carrying it. A launch riding on an open public
+            // gate works exactly as well as one riding on a whitelist, right up until
+            // the gate closes -- and only one of those is worth planning around.
+            detail:
+              r.detail ??
+              (r.whitelisted ? 'whitelisted on this deployment' : 'open via the public gate'),
+          }
         : {
             name: 'launchpad',
             state: 'degraded',
-            detail: r.whitelisted
-              ? 'launching is globally off, but this treasury is whitelisted'
-              : 'pons has switched launching off and this treasury is not whitelisted -- no launch can succeed',
+            detail: r.detail ?? 'this deployment would refuse a launch from this address',
           }
     );
   } catch (err) {

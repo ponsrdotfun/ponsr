@@ -1,7 +1,14 @@
 import { ethers } from 'ethers';
 import { config } from './config';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
-import { PONS_V2_FACTORY_ABI, buildV2LaunchCalldata, extractV2LaunchDetails } from './ponsV2Encoder';
+import {
+  PONS_V2_CURRENT_ABI,
+  buildCurrentV2LaunchCalldata,
+  extractCurrentV2LaunchDetails,
+  launchSalt,
+} from './ponsV2CurrentEncoder';
+import { PonsDeployment, executableDeployment, deploymentById } from './deployments';
+import { assertEscrowMatches } from './splitterDeployer';
 import { NATIVE_ETH, PairAsset } from './pairTokens';
 
 /**
@@ -24,6 +31,8 @@ import { NATIVE_ETH, PairAsset } from './pairTokens';
  */
 
 export interface LaunchRequest {
+  /** Optional override; defaults to the configured launch config. */
+  launchConfigId?: bigint;
   tokenName: string;
   tokenSymbol: string;
   description: string | null;
@@ -41,7 +50,18 @@ export interface BuiltLaunch {
 }
 
 export interface LaunchTarget {
-  version: 'v1' | 'v2';
+  version: 'v1' | 'v2' | 'v2-current';
+  /**
+   * Which registry entry this builds for. REQUIRED, and that is the point.
+   *
+   * It was optional, and `V1Target` supplied nothing. So the rollback path had no
+   * deployment to verify, and the identity check quietly fell back to
+   * `executableDeployment()` -- verifying the current V2 factory's hashes, escrow and
+   * chain immediately before sending a V1 transaction. A check for one deployment
+   * authorising a transaction to another is not a weaker guard; it is a guard aimed at
+   * the wrong contract, which is this migration's own bug one level up.
+   */
+  deployment: PonsDeployment;
   factoryAddress: string;
   /** True when this target can price a launch in something other than ETH. */
   supportsPairing: boolean;
@@ -52,7 +72,16 @@ export interface LaunchTarget {
 
 class V1Target implements LaunchTarget {
   version = 'v1' as const;
-  factoryAddress = config.PONS_FACTORY_ADDRESS;
+  /**
+   * Rollback, stated explicitly.
+   *
+   * `pons-v1` is `executable: false` and stays that way -- it is not where launches go.
+   * Carrying it here says which contract THIS target addresses, which is a different
+   * question from which deployment the registry routes to by default. Representing
+   * rollback as its own deployment beats bypassing the registry's invariant.
+   */
+  deployment = deploymentById('pons-v1');
+  factoryAddress = deploymentById('pons-v1').factory;
   supportsPairing = false;
 
   async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {
@@ -87,26 +116,66 @@ class V1Target implements LaunchTarget {
   }
 }
 
-class V2Target implements LaunchTarget {
-  version = 'v2' as const;
-  factoryAddress = config.PONS_V2_FACTORY_ADDRESS;
-  supportsPairing = true;
+/*
+ * `V2Target` -- the target for the SUPERSEDED v2 factory -- was deleted on 2026-08-20.
+ *
+ * It had been unreachable since `createLaunchTarget` started routing everything except
+ * v1 to the registry, so it changed no behaviour. It was removed anyway, because what
+ * it still held was `config.PONS_V2_FACTORY_ADDRESS` -- a setting whose default is the
+ * factory pons replaced -- inside a class that looks maintained and deliberate.
+ *
+ * Dead code carrying a superseded address is not neutral. It reads as something kept
+ * for a reason, and the next person to need a "v2 target" finds one already written.
+ *
+ * The superseded deployment stays in `deployments.ts` and stays indexable; what is gone
+ * is the ability to LAUNCH through it. Rollback is v1, which is still selectable.
+ */
 
-  constructor(private provider: ethers.Provider) {}
+/**
+ * The pons deployment that is actually live.
+ *
+ * Three things happen here that the older targets do not do, and each exists because
+ * skipping it costs money rather than raising an error:
+ *
+ *  - the fee escrow is read from the factory and checked against the registry BEFORE
+ *    the splitter is deployed. A splitter is bound to an escrow immutably, escrow
+ *    claims pay `msg.sender`, and no `claimFor` exists -- so the wrong escrow means a
+ *    creator's fees sit somewhere nothing can ever reach.
+ *  - the economics digest is read immediately before building, never cached. A stale
+ *    pin does not protect the launch, it reverts it with LaunchEconomicsMismatch.
+ *  - the salt is derived from chain, factory and request id, so a retry predicts the
+ *    same token address and collides instead of minting a second token.
+ */
+class CurrentV2Target implements LaunchTarget {
+  version = 'v2-current' as const;
+  supportsPairing = true;
+  deployment: PonsDeployment;
+  factoryAddress: string;
+
+  constructor(private provider: ethers.Provider, deployment: PonsDeployment = executableDeployment()) {
+    this.deployment = deployment;
+    this.factoryAddress = deployment.factory;
+  }
 
   async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {
-    const factory = new ethers.Contract(this.factoryAddress, PONS_V2_FACTORY_ABI, this.provider);
+    const factory = new ethers.Contract(this.factoryAddress, PONS_V2_CURRENT_ABI, this.provider);
 
-    // Read immediately before building, never cached. The digest pins supply,
-    // thresholds and fee tiers to what was quoted; a stale one does not protect the
-    // launch, it reverts it. Getting nothing back is the safer failure: a launch
-    // that does not happen beats one priced on terms nobody saw.
+    // Full identity -- runtime hash, ABI hash, selector -- is verified in
+    // `readCurrentReadiness()`, which runs before this and before any gas is spent.
+    // Repeating it here would add an RPC round trip per build and would force this
+    // module's unit tests to fake a 24kB contract byte for byte to stay honest.
+    //
+    // Checked here as well as at splitter-deploy time. By this point the splitter is
+    // already deployed and paid for, so this catches a factory that migrated between
+    // the two steps -- the window is small, and the loss it prevents is permanent.
+    assertEscrowMatches(this.deployment, String(await factory.feeEscrow()));
+
     const expectedEconomics: string = await factory.previewLaunchEconomics(
-      config.PONS_LAUNCH_CONFIG_ID,
+      req.launchConfigId ?? config.PONS_LAUNCH_CONFIG_ID,
       req.pairAsset.address
     );
 
-    const { data, value } = buildV2LaunchCalldata(
+    return buildCurrentV2LaunchCalldata(
       {
         tokenName: req.tokenName,
         tokenSymbol: req.tokenSymbol,
@@ -114,22 +183,27 @@ class V2Target implements LaunchTarget {
         description: req.description ?? '',
         socials: EMPTY_SOCIALS,
         feeWallet: req.splitterAddress,
-        launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
+        launchConfigId: req.launchConfigId ?? config.PONS_LAUNCH_CONFIG_ID,
         pairToken: req.pairAsset.address,
         creatorTaxBps: 0,
         buybackEnabled: false,
         expectedEconomics,
+        salt: launchSalt(this.deployment, req.tweetId),
       },
-      launchFeeWei
+      launchFeeWei,
+      this.deployment
     );
-    return { to: this.factoryAddress, data, value };
   }
 
   extractToken(logs: readonly ethers.Log[]): string | null {
-    return extractV2LaunchDetails(logs)?.token ?? null;
+    return extractCurrentV2LaunchDetails(logs)?.token ?? null;
   }
 }
 
 export function createLaunchTarget(provider: ethers.Provider): LaunchTarget {
-  return config.PONS_FACTORY_VERSION === 'v2' ? new V2Target(provider) : new V1Target();
+  // v1 stays selectable for rollback and for the suites that exercise it. Everything
+  // else routes to whichever deployment the registry marks executable, so the target
+  // cannot drift from the ABI the way a bare address setting allowed.
+  if (config.PONS_FACTORY_VERSION === 'v1') return new V1Target();
+  return new CurrentV2Target(provider);
 }

@@ -1,7 +1,8 @@
 /**
  * Validates a cold treasury address and writes it to `backend/.env`.
  *
- *   npx ts-node scripts/set-cold-address.ts 0xYourColdWalletAddress
+ *   npx ts-node scripts/set-cold-address.ts 0xYourColdWalletAddress          # plan only
+ *   npx ts-node scripts/set-cold-address.ts 0xYourColdWalletAddress --write  # verify and persist
  *
  * WHY THIS TAKES AN ADDRESS AND NEVER A PRIVATE KEY
  * -------------------------------------------------
@@ -49,7 +50,8 @@ function setEnv(contents: string, key: string, value: string): string {
 }
 
 async function main() {
-  const arg = process.argv[2];
+  const WRITE = process.argv.includes('--write');
+  const arg = process.argv.slice(2).find((value) => !value.startsWith('--'));
   if (!arg) {
     console.error('usage: set-cold-address.ts 0xYourColdWalletAddress');
     console.error('\nThe ADDRESS only. Never pass, paste, or store the cold wallet\'s private key.');
@@ -74,6 +76,12 @@ async function main() {
   if (cold === ethers.ZeroAddress) {
     console.error('\nThat is the zero address. Funds sent there are destroyed.');
     process.exit(1);
+  }
+
+  if (!WRITE) {
+    console.log('\nPLAN ONLY: the address is locally valid. No RPC was contacted and backend/.env was not changed.');
+    console.log('Re-run with --write to perform the hot-wallet/code checks and persist it.');
+    return;
   }
 
   const hot = config.TURNKEY_SIGN_WITH;

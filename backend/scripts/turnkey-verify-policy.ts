@@ -16,6 +16,9 @@
  * also allows cases 1 and 2, and would look identical here without it.
  */
 import { config } from '../src/config';
+import { deploymentById, executableDeployment } from '../src/deployments';
+import { classifyTurnkeyOutcome, describeOutcome, Outcome } from '../src/turnkeyOutcome';
+import { splitterArtifactFor } from '../src/splitterDeployer';
 
 const ARBITRARY = '0x000000000000000000000000000000000000dEaD';
 
@@ -53,26 +56,49 @@ function line(label: string, value: unknown) {
     type: 2,
   };
 
-  async function attempt(name: string, tx: any): Promise<boolean> {
+  /**
+   * Three outcomes, not two -- and decided from structured fields, never from prose.
+   *
+   * This returned a boolean, and every failure became `false`, printed as "denied". On
+   * 2026-08-20 the organisation went over its signing quota, so every request failed
+   * for a reason unrelated to policy, and the script announced NOT SAFE YET and sent
+   * the operator to fix a policy created correctly minutes earlier.
+   *
+   * The first repair kept the guess and only widened it: `/permission|policy|not
+   * authorized/i` against the message. Every Turnkey error carries a link to
+   * `docs.turnkey.com/concepts/policies/`, so that rule reads a network timeout as a
+   * refusal. Classification now lives in `src/turnkeyOutcome.ts` and reads gRPC code 7
+   * plus the policy engine's own error type. See its header for the evidence.
+   */
+  async function attempt(name: string, tx: any): Promise<Outcome> {
     try {
       await signer.signTransaction(tx);
-      return true;
-    } catch (err: any) {
-      const msg = String(err?.message ?? err);
-      if (!/permission|policy/i.test(msg)) {
-        // Distinguish "the policy said no" from "the request was malformed" -- treating a
-        // bad request as a successful denial would be a false pass.
-        line(name + ' (error)', msg.slice(0, 90));
-      }
-      return false;
+      return { kind: 'allowed' };
+    } catch (err) {
+      const outcome = classifyTurnkeyOutcome(err);
+      if (outcome.kind === 'unknown') line(name + ' (could not ask)', outcome.detail.slice(0, 100));
+      return outcome;
     }
   }
+
+  const show = describeOutcome;
+
+  // From the registry, because a config address is how this went wrong twice.
+  //
+  // On 2026-08-20 this script read `PONS_V2_FACTORY_ADDRESS` and reported PASSED for
+  // 0x7E1EAbd5…, a deployment pons replaced on 2026-08-03 and which the bot no longer
+  // calls. Every tick was green and none of them described the launch path. That is the
+  // §11 lesson arriving inside the tool written to apply it: an address is not an
+  // identity, and the registry is the only thing that knows which one is executable.
+  const target = executableDeployment();
+  const superseded = deploymentById('pons-v2-legacy-7e1');
 
   console.log('=== VERIFYING THE BOT POLICY ===');
   line('signer', from);
   line('v1 factory', config.PONS_FACTORY_ADDRESS);
-  line('v2 factory', config.PONS_V2_FACTORY_ADDRESS);
-  line('bot launches through', `${config.PONS_FACTORY_VERSION}  <- the one that has to be ALLOWED`);
+  line('current factory', `${target.factory}  (${target.id})`);
+  line('superseded factory', `${superseded.factory}  (not launched through)`);
+  line('bot launches through', `${target.id}  <- the one that has to be ALLOWED`);
   console.log('');
 
   // Both factories, always. This script used to test only v1 and print PASSED, which on
@@ -86,25 +112,52 @@ function line(label: string, value: unknown) {
     value: 500000000000000n,
     data: '0x12345678',
   });
-  line('1a. tx to the v1 factory', toV1 ? 'ALLOWED ✅' : 'denied ❌');
+  line('1a. tx to the v1 factory', show(toV1, 'allowed'));
 
-  const toV2 = await attempt('launch v2', {
+  const toCurrent = await attempt('launch current', {
     ...base,
-    to: config.PONS_V2_FACTORY_ADDRESS,
+    to: target.factory,
     value: 500000000000000n,
-    data: '0x12345678',
+    data: target.launchSelector,
   });
-  line('1b. tx to the v2 factory', toV2 ? 'ALLOWED ✅' : 'denied ❌');
+  line('1b. tx to the CURRENT factory', show(toCurrent, 'allowed'));
+
+  /**
+   * Which deployment the ROLLOUT needs, not which one config currently names.
+   *
+   * With the flag still on v1 this script would PASS while the current V2 factory was
+   * denied -- and the runbook's very next step flips to v2. A gate that goes green
+   * immediately before the change that invalidates it is not a gate.
+   *
+   *   --target-deployment pons-v2-current-7ed
+   *
+   * Given one, that deployment being denied is fatal regardless of the flag.
+   */
+  const targetArg = process.argv
+    .find((a) => a.startsWith('--target-deployment='))
+    ?.slice('--target-deployment='.length);
+  const rolloutTarget = targetArg ? deploymentById(targetArg) : null;
+  if (rolloutTarget) line('rollout target', `${rolloutTarget.id}  <- must be ALLOWED`);
 
   const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
-  const toFactory = wantV2 ? toV2 : toV1;
+  const toFactory = wantV2 ? toCurrent : toV1;
+  // The rollout target, when named, is checked in addition to whatever config says.
+  const rolloutOk =
+    !rolloutTarget ||
+    (rolloutTarget.id === target.id ? toCurrent.kind === 'allowed' : toV1.kind === 'allowed');
 
+  // The ACTUAL splitter initcode, not a ten-byte prefix.
+  //
+  // A prefix proves a creation is allowed in general. If exact-initcode binding is ever
+  // chosen -- it is one of the two designs for closing the funded-creation finding --
+  // a prefix would pass a rule that the real deployment then fails, which is the worst
+  // possible time to discover the difference.
   const deploy = await attempt('deploy', {
     ...base,
-    data: '0x60806040523480156100',
+    data: splitterArtifactFor(target).bytecode,
     value: 0n,
   });
-  line('2. contract creation', deploy ? 'ALLOWED ✅' : 'denied ❌ (bot cannot deploy splitters)');
+  line('2. contract creation', show(deploy, 'allowed'));
 
   const elsewhere = await attempt('elsewhere', {
     ...base,
@@ -112,34 +165,87 @@ function line(label: string, value: unknown) {
     value: 1000000000000000000n,
     data: '0x',
   });
-  line('3. tx to an arbitrary address', elsewhere ? 'ALLOWED ❌ THE POLICY IS NOT RESTRICTING' : 'denied ✅');
+  line('3. tx to an arbitrary address', show(elsewhere, 'denied'));
+
+  /**
+   * The check this script was missing, and the reason its verdict was wrong.
+   *
+   * Cases 1-3 all ask about a DESTINATION. A contract creation has none -- that is what
+   * makes `eth.tx.to == ''` a workable rule and what makes it dangerous. `value` rides
+   * along on a creation exactly as it does on a transfer, and it lands in the contract
+   * being created, whose code the sender writes.
+   *
+   * So a key that may create contracts with value attached may move the whole balance in
+   * one transaction, and case 3 will still print `denied ✅` because no arbitrary address
+   * was ever named. Measured 2026-08-21: Turnkey signed a creation carrying 1 ETH.
+   */
+  const fundedCreation = await attempt('funded creation', {
+    ...base,
+    data: splitterArtifactFor(target).bytecode,
+    value: 1000000000000000000n,
+  });
+  line('4. contract creation CARRYING FUNDS', show(fundedCreation, 'denied'));
 
   console.log('');
-  const good = toFactory && deploy && !elsewhere;
+  // Unknown anywhere means the run proves nothing, in either direction. Reporting
+  // PASSED on unanswered questions would be the same defect pointing the other way.
+  const unknowns = [toV1, toCurrent, deploy, elsewhere, fundedCreation].filter(
+    (o) => o.kind === 'unknown'
+  ).length;
+  if (unknowns > 0) {
+    console.log('=== INCONCLUSIVE ===');
+    console.log(`  ${unknowns} of 5 checks could not be asked, so this run proves nothing.`);
+    console.log('  The most common cause is the Turnkey organisation being over its signing');
+    console.log('  quota, which disables signing for everything and is not a policy problem.');
+    console.log('  Nothing here says the policy is wrong, and nothing says it is right.');
+    process.exitCode = 1;
+    return;
+  }
+
+  const good =
+    rolloutOk &&
+    toFactory.kind === 'allowed' &&
+    deploy.kind === 'allowed' &&
+    elsewhere.kind === 'denied' &&
+    fundedCreation.kind === 'denied';
   if (good) {
     console.log('=== PASSED ===');
-    console.log(`The bot can launch on ${config.PONS_FACTORY_VERSION} and deploy splitters, and`);
-    console.log('cannot move funds anywhere else.');
-    console.log('A leak of this key now costs launches, not the treasury.');
+    console.log(`The bot can launch on ${target.id} and deploy splitters, and`);
+    console.log('cannot move funds anywhere else, including by attaching them to a deploy.');
     console.log('');
     console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
-    if (!toV2) {
+    if (toCurrent.kind !== 'allowed') {
       console.log('');
-      console.log('NOTE: the v2 factory is still denied. That is fine while the bot runs v1,');
+      console.log(`NOTE: ${target.id} is still denied. That is fine while the bot runs v1,`);
       console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
       console.log('every check it makes of pons and is then refused by its own signer --');
       console.log('after the splitter has been deployed and paid for.');
-      console.log('  bash scripts/apply-v2-policy.sh --execute');
+      console.log('  powershell -File scripts\\apply-v2-policy.ps1 -Execute');
     }
   } else {
     console.log('=== NOT SAFE YET ===');
-    if (!toFactory) {
-      console.log(`  The bot launches through ${config.PONS_FACTORY_VERSION}, and that factory is DENIED.`);
-      console.log('  It cannot launch anything at all.');
-      if (wantV2) console.log('  Fix: bash scripts/apply-v2-policy.sh --execute');
+    if (rolloutTarget && !rolloutOk) {
+      console.log(`  The rollout target ${rolloutTarget.id} is DENIED by the policy.`);
+      console.log('  Config still says ' + config.PONS_FACTORY_VERSION + ', so this run would');
+      console.log('  otherwise have passed -- and the next runbook step flips to that target,');
+      console.log('  producing a bot refused by its own signer after the splitter is paid for.');
     }
-    if (!deploy) console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
-    if (elsewhere) console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
+    if (fundedCreation.kind === 'allowed') {
+      console.log('  THE TREASURY IS DRAINABLE BY THIS KEY.');
+      console.log('  Turnkey signed a contract creation carrying funds. A creation has no');
+      console.log('  destination, so the arbitrary-address check above cannot see it: the value');
+      console.log('  lands in a contract whose code the sender chooses. One transaction empties');
+      console.log('  the hot wallet, and every destination-only check still reports green.');
+      console.log('  Do NOT claim anywhere that a leak of this key costs only launches.');
+      console.log('  Closing it is an operator action -- see docs/TURNKEY-CREATION-AUTHORITY.md');
+    }
+    if (toFactory.kind !== 'allowed') {
+      console.log(`  The bot launches through ${target.id}, and that factory is DENIED.`);
+      console.log('  It cannot launch anything at all.');
+      if (wantV2) console.log('  Fix: powershell -File scripts\\apply-v2-policy.ps1 -Execute');
+    }
+    if (deploy.kind !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
+    if (elsewhere.kind === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');
   }
   process.exitCode = good ? 0 : 1;
 })().catch((err) => {

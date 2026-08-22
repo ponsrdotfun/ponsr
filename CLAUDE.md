@@ -9,13 +9,17 @@ survives in historical notes.
 
 ## Read these first, in this order
 
-1. **`docs/pons-v2-findings.md` — start at §10, then §9.** Sections 1–8 are what was believed
-   from documentation; §9 onward is what the verified contracts and two real mainnet launches
-   actually showed, and **§10 (2026-08-18) supersedes §7 outright** — v2 now approves eight
-   pairing assets, six of them tokenised stocks, and both the ETH exemption and the whitelist
-   bypass are settled from source rather than inferred. Where they disagree, the later section
-   wins. §9.10 is an incident report worth reading
-   before touching the deploy path.
+1. **`docs/pons-v2-findings.md` — read §11 first, then §10, then §9.**
+
+   **§11 (2026-08-20) is the most important section in this repository right now.** Ponsr had
+   been reading a *superseded* pons factory. The current one has been open since 2026-08-03 and
+   has taken over 1,900 launches, so everything §10 concluded about a "closed launchpad" was
+   true of a contract nobody uses. §11 also carries the lesson that generalises: an address is
+   not an identity.
+
+   Sections 1–8 are what was believed from documentation. §9 onward is what the verified
+   contracts and real mainnet launches actually showed. Where two sections disagree, the later
+   one wins. §9.10 is an incident report worth reading before touching the deploy path.
 2. `BUILD-STATUS.md` — what's real/tested vs. a clearly-marked stub right now.
 3. `docs/action-checklist.md` — everything that requires the owner's direct action (account
    signups, API keys, emails). Nothing here should be "completed" past a stub without the
@@ -58,7 +62,7 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is live at https://ponsr.fun** (53 smoke checks). Netlify, auto-deploying from
+- **Website is live at https://ponsr.fun** (78 smoke checks). Netlify, auto-deploying from
   `main` — a push publishes, there is no manual step. Three routes in one static file:
   `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
   still reads the old `?view=` / `?token=` forms, so existing links keep working.
@@ -78,46 +82,58 @@ The v1 factory and locker are **verified with full source** on
 `api.blockscout.com`, the Pro aggregator, which does — that one wrong URL is why this looked
 blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi/`.
 
-- **Target v1 — but #17 is re-opened, see §10 of the findings.** One launch config is live
-  (WETH pair, 4.2 ETH graduation). #17 was closed for v1 because v1 was open and v2 was not;
-  **both are closed now**, so that reasoning no longer holds, and v2 is the one that can pair
-  a launch against a tokenised stock.
+- **Target: the CURRENT pons v2, `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e`.** See §11 of
+  the findings. `launchEnabled()` is **true** and `canLaunch(treasury)` is **true** — Ponsr can
+  launch today through the public gate, and never needed a whitelist to develop or test. The
+  whitelist is still worth having, because it survives the gate closing.
 
-  **The code for stock pairing is built and proven** (`pairTokens.ts`, `ponsV2Encoder.ts`,
-  `launchTarget.ts`), verified by simulating real calldata against the live mainnet factory.
-  It is selected by `PONS_FACTORY_VERSION`. The code default is still `v1`, but
-  **production has run `v2` since 2026-08-19** (a Fly secret), because the whitelist that was
-  requested is a v2 grant and v2 is a superset: ETH pairing plus the eight approved assets.
-  Nothing can launch either way until pons whitelists this treasury or reopens the switch.
+  **Deployments are a registry now, not a config address** (`backend/src/deployments.ts`). Each
+  entry binds factory, ABI hash, runtime bytecode hash, escrow, selector and schema; exactly one
+  is executable and the older two stay indexable forever. A bare address let a superseded
+  factory and the current one look identical, and every guard read the wrong one confidently
+  for a week.
 
-  The Turnkey policy was widened to allow the v2 factory on the same day. Verified afterwards:
-  v1 and v2 both ALLOWED, and an arbitrary destination, the fee escrow and even the cold
-  wallet all still denied — a leak of the bot's key costs launches, not the treasury.
+  Three things differ between the V2 deployments, each failing differently: the calldata gains a
+  `salt` (selector `0xf35abbcf`, not `0xa41d5f2b`), the fee escrow is different, and the approved
+  asset set is **23 rather than 8**, with RIVN already revoked. The escrow is the dangerous one —
+  immutable in each splitter, claims pay `msg.sender`, no `claimFor` — so the wrong one strands a
+  creator's fees permanently. Asserted before the splitter is deployed and again before the
+  calldata is built.
 
-  **Before opening v2 to users, run one self-dealt launch through `phase-b-launch.ts` first.**
-  `FeeSplitterV2` has never met a real fee on mainnet. It does pass a full rehearsal on a
-  forked mainnet — `FORK=1 … npx hardhat run --no-compile scripts/fork-rehearsal.js` launches
-  against the real factory paired with AAPL, buys with real AAPL, and claims the fee back out
-  95/5 — so the path is proven against the actual contracts. That fork also settles three
-  things: the chain is on **Cancun**, fees are credited to the escrow per trade rather than
-  swept, and the split reads 94.99/5.00 because the creator's share is floored. But
-  impersonation is what mainnet will not allow, so the rehearsal de-risks the first launch
-  rather than replacing it. See §10.7 of the findings.
+  **The treasury is the on-chain deployer**, not the X user, who receives the creator share
+  through the splitter. `launchTokenFor` would change that but is callable only by pons's
+  forwarder. No reply or document may say otherwise.
 
-  **`launchEnabled()` is `false` as of 2026-08-18, on v1 AND v2.** It was `true` when this
-  was written, and both real launches happened while it was. pons switched it off at
-  **2026-08-12 19:42 UTC** — recorded on-chain by `LaunchEnabledUpdated(false)` on the
-  factory — and **nobody has launched anything through pons since**, so this is a
-  platform-wide pause, not something aimed at Ponsr. No whitelist has been granted to
-  anyone in that window either.
+  Verified with nothing broadcast: exact production calldata PASSES against the live factory by
+  `eth_call`, and a forked rehearsal launches paired with AAPL, trades real AAPL, and claims the
+  fee back out 95/5 with nothing stranded.
 
-  Consequences, none of which are fixable in this codebase: **the bot cannot launch until
-  pons flips it back**, or until this treasury is whitelisted, which needs pons to act.
-  The bot handles it correctly — `validator.ts` reads readiness live, refuses with
-  `LAUNCHPAD_UNAVAILABLE` before any money moves, and tells the person the cause is
-  upstream — so nothing is at risk; it simply cannot do its job. `launchpadWatch.ts` now
-  alerts when this flips either way, because for three days nothing did, and a closed
-  launchpad with no traffic looks exactly like an open one with no traffic.
+  **The Turnkey policy now allows the current factory** (2026-08-20). The operator created
+  `ponsr-bot: launch on pons-v2-current-7ed` (`ece2a399-…`) with root credentials, and
+  verification by signing — not by a config flag — shows the current factory ALLOWED, contract
+  creation ALLOWED, and an arbitrary destination **denied**. That last line is the one that
+  matters: an arbitrary DESTINATION is refused.
+
+  **That is not the same as the treasury being safe, and this file said it was.** The
+  policy also allows `eth.tx.to == ''` -- a contract creation, needed for the splitter --
+  with no constraint on value. Measured 2026-08-21: Turnkey signs a creation carrying
+  1 ETH. A creation's value lands in the contract being created and the sender writes
+  that contract, so one transaction empties the hot wallet while every destination-only
+  check still reports green. See `docs/TURNKEY-CREATION-AUTHORITY.md`. **Open, and an
+  operator action.**
+  `scripts/turnkey-allow-v2-factory.ts` is named per deployment so it cannot collide with the
+  older, still-present rule for the superseded factory.
+
+  Two things about that verification are worth carrying forward. The verifier had been reading
+  `PONS_V2_FACTORY_ADDRESS` and **passed for the superseded factory** — four green ticks about
+  the wrong contract; it reads the registry now. And when Turnkey disabled signing org-wide over
+  a quota, every check failed and the script reported them all as *denied*, sending the operator
+  to fix a policy that was correct. A failure to ask is not a denial, and the run now reports
+  INCONCLUSIVE rather than inventing a verdict.
+
+  Production config, the deployed backend, and the public availability claim are all unchanged.
+  `PONS_FACTORY_VERSION` has **not** been flipped.
+
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
   But they arrive as **ERC20** (the launched token + WETH), and the old splitter handled only
@@ -171,11 +187,28 @@ problem would otherwise surface as a parse failure and send you to the system pr
 
 Still blocked on the owner:
 
-1. Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS` (checklist 0.8).
-2. ~~Move the Turnkey root key out of `~/ponsr-turnkey-root-key.txt`~~ — **done 2026-08-19**,
-   along with the dashboard's original `.json` download in `~/Downloads` holding the same key,
-   which was found by searching rather than by remembering. The bot never needed root: it runs
-   on a scoped key that can reach the pons factories and nothing else.
+1. ~~Create the **cold treasury wallet** and set `TREASURY_COLD_ADDRESS`~~ — the variable
+   **is set** in `backend/.env` (verified 2026-08-20: a well-formed address, distinct from
+   the hot wallet, so boot-time validation passes). This entry stayed on the list after it
+   was done and was repeated back as an open blocker on 2026-08-20 without being checked.
+   What remains is an owner fact no code here can confirm: that the address is a wallet
+   whose key is genuinely held offline. A cold address that is merely a second hot wallet
+   passes every check in this repository and provides none of the protection.
+2. **Turnkey root key: a third copy exists and was used on 2026-08-20.** The 2026-08-19
+   cleanup removed `~/ponsr-turnkey-root-key.txt` and the dashboard's original `.json` in
+   `~/Downloads`, and was recorded here as done. It was not: a copy in
+   `~/Downloads/Telegram Desktop/` survived, and it is the one that created the v2 policy
+   on 2026-08-20. Two copies were found by searching; the third was found by needing it.
+
+   That is the lesson worth keeping, more than the file itself. A credential that has been
+   sent through a chat client exists wherever that client writes attachments, and "I
+   deleted it" describes the copies you remembered. Root bypasses the policy engine
+   entirely, so every surviving copy is a full bypass of the scoping the bot relies on.
+
+   Owner action: delete that file, and delete the root API key from the Turnkey dashboard.
+   Root keys are disposable — mint one with a passkey when an administrative act needs it.
+   The bot never needed root: it runs on a scoped key that can reach the pons factories and
+   nothing else.
 3. Backend hosting, for the listener to run 24/7.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
@@ -221,7 +254,9 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 
   This added one owner action: **`TREASURY_COLD_ADDRESS` must be set** (checklist item 0.8).
   Boot-time validation refuses to call the setup healthy if it's missing or equals the hot
-  wallet — the latter being a split that looks real and isn't.
+  wallet — the latter being a split that looks real and isn't. **It is set** as of
+  2026-08-20. Note what that check can and cannot see: it proves the address is well-formed
+  and different, not that its key is offline.
 - ~~Listener reconciliation (Part 7 §5)~~ — **built 2026-07-30**, `src/reconciler.ts` with
   8 tests. Runs every 5 minutes from `index.ts`. `RealXClient.getRecentMentions` remains a
   stub until the twitterapi.io account exists.
@@ -233,7 +268,7 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 - External dependencies (parser, wallet resolver, X client, treasury signer) are always
   injected via interfaces with a `Mock*` implementation for tests. Follow this pattern for any
   new external integration rather than hardcoding a real client into business logic.
-- The website has its own suite: `node website/smoke-test.js` (45 checks, no install needed).
+- The website has its own suite: `node website/smoke-test.js` (**78 checks**, no install needed).
   Several of those checks exist because a specific bug was found and fixed — read the comment
   above a check before changing it.
 - The contract test workaround (`contracts-test/README.md`) exists for a sandbox network

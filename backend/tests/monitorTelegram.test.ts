@@ -1,3 +1,11 @@
+/**
+ * The Telegram transport, which lives in `src/monitor.ts` alongside the other notifiers.
+ *
+ * Named for the module rather than the class as of 2026-08-21. As
+ * `telegramNotifier.test.ts` it read like the test for a `src/telegramNotifier.ts` that
+ * has never existed, which is a small thing that costs someone a minute every time they
+ * go looking for it.
+ */
 import { TelegramNotifier, MockNotifier } from '../src/monitor';
 import { Alert } from '../src/monitor';
 

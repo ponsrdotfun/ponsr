@@ -37,6 +37,11 @@ import { createLaunchTarget } from '../src/launchTarget';
 import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
 import { PairAssetRegistry } from '../src/pairTokens';
 import { ChainPairTokenSource } from '../src/pairTokenSource';
+import { assertDeploymentIdentity } from '../src/deploymentIdentity';
+import { assertOutgoingLaunch } from '../src/launchAssertions';
+import { confirmCanaryLaunch } from '../src/canaryConfirmation';
+import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
+import { resolveCanaryPair } from '../src/canaryPreflight';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -82,7 +87,11 @@ async function main() {
   console.log('Chain');
   line('rpc', config.RPC_URL);
   line('chainId', `${network.chainId}${network.chainId === 4663n ? '  (Robinhood Chain MAINNET)' : ''}`);
-  line('factory', config.PONS_FACTORY_VERSION === 'v2' ? config.PONS_V2_FACTORY_ADDRESS : config.PONS_FACTORY_ADDRESS);
+  // From the registry, never from configuration. This is the script that would perform
+  // the first real launch on the current factory, and `config.PONS_V2_FACTORY_ADDRESS`
+  // still defaults to the deployment pons replaced -- a landmine for whoever ran it.
+  // Printed from the target below, once it exists. Resolving it here as well was one
+  // of the six independent answers this script used to give.
   console.log();
 
   console.log('Treasury');
@@ -92,16 +101,56 @@ async function main() {
   line('balance', `${formatEth(balance)} ETH`);
   console.log();
 
+  /**
+   * ONE launch target, resolved before anything is asked about it.
+   *
+   * This script used to resolve the deployment six separate times: identity from
+   * `executableDeployment()`, readiness and fee from global defaults, the target created
+   * later, pair scanning from another global read, and the receipt decoded from a third.
+   * Six answers to one question, each free to differ from the others -- and the canary is
+   * the run that spends real money for the first time.
+   *
+   * Everything below reads `selected` and `target`. Nothing re-resolves.
+   */
+  const target = createLaunchTarget(provider);
+  const selected = target.deployment;
+  line('deployment', `${selected.id} (${selected.factory})`);
+  line('launch selector', selected.launchSelector);
+
   // --- Preflight: every guard the factory would apply, read before spending anything ---
   console.log('Preflight');
-  const readiness = await getLaunchReadiness(provider, treasury, config.PONS_LAUNCH_CONFIG_ID, config.PONS_DEX_ID);
+
+  // Identity FIRST, ahead of every permission.
+  //
+  // This script had none. It read permissions through `getLaunchReadiness`, which asks
+  // whether pons would allow a launch and nothing about WHICH contract it is asking --
+  // leaving the one path here that spends real money as the only one with no check that
+  // the chain matches the registry. The bot has three; this had zero.
+  //
+  // A green `canLaunch` from an unexpected contract is not reassurance. It is the most
+  // dangerous reading available, because everything after it looks like a go-ahead.
+  if (selected.tokenParamsVersion !== 'v1') {
+    await assertDeploymentIdentity(selected, provider);
+    line('identity', 'chain id, runtime hash, ABI hash, selector and escrow all match');
+  }
+
+  // Asked of the SELECTED deployment. Read from a global it describes a contract this
+  // run is not calling.
+  const readiness = await getLaunchReadiness(
+    provider,
+    treasury,
+    config.PONS_LAUNCH_CONFIG_ID,
+    config.PONS_DEX_ID,
+    selected
+  );
   line('launchEnabled', readiness.launchEnabled);
   line('whitelisted', readiness.whitelisted);
   line('launchConfig usable', readiness.launchConfigUsable);
   line('dexConfig usable', readiness.dexConfigUsable);
   line('pairToken', readiness.pairToken);
 
-  const fee = await getLiveFeeWei(provider);
+  // Priced by the same contract that will be called.
+  const fee = await getLiveFeeWei(provider, selected);
   line('launchFee (live)', `${formatEth(fee)} ETH`);
 
   const problems: string[] = [];
@@ -143,6 +192,42 @@ async function main() {
   line('value', `${formatEth(fee)} ETH   <- exactly the fee, so the factory performs no dev buy`);
   console.log();
 
+  /**
+   * The pairing, settled BEFORE anything durable exists.
+   *
+   * This used to run AFTER the splitter was deployed, and the dry run returned before
+   * reaching it at all -- so the run whose whole purpose is to surface problems could not
+   * surface this one, and execute bought a splitter before finding out the pair was
+   * refused. The script even said "the splitter above is deployed but unused", which is an
+   * accurate description of money already gone.
+   *
+   * `resolveCanaryPair` also re-reads the live approval: the registry caches for an hour
+   * and pons revokes assets, RIVN among them.
+   */
+  const factoryForPairs = new ethers.Contract(
+    selected.factory,
+    ['function approvedPairTokens(address) view returns (bool)'],
+    provider
+  );
+  let pairAsset: PairAsset;
+  try {
+    const resolvedPair = await resolveCanaryPair(process.env.PAIR_WITH, {
+      deployment: selected,
+      supportsPairing: target.supportsPairing,
+      resolve: (typed) =>
+        new PairAssetRegistry(
+          new ChainPairTokenSource({ provider, deployment: selected })
+        ).resolve(typed),
+      isApprovedNow: (addr) => factoryForPairs.approvedPairTokens(addr) as Promise<boolean>,
+    });
+    pairAsset = resolvedPair.asset;
+    line('paired against', `${pairAsset.symbol}  (${resolvedPair.source})`);
+  } catch (err: any) {
+    console.error('\n' + (err?.message ?? err));
+    console.error('Nothing was deployed and nothing was sent.');
+    process.exit(1);
+  }
+
   if (!EXECUTE) {
     console.log('Dry run complete. Nothing was sent.');
     console.log('Re-run with --execute to deploy the splitter and launch.');
@@ -151,7 +236,34 @@ async function main() {
 
   // --- Execute ---
   console.log('1/2  Deploying FeeSplitter (creator == treasury == this wallet)...');
-  const { splitterAddress, deployTxHash } = await deploySplitter(signer, treasury, treasury, ethers.ZeroAddress);
+  // The provider is not optional here in spirit: without it `deploySplitter` skips its
+  // own identity check, and the splitter is the first artifact that cannot be undone.
+  // Both checks again, with nothing between them and the first durable artifact.
+  //
+  // The dry run above proved them minutes ago. Minutes is an interval, and a factory
+  // upgrade or a revocation landing inside it produces a paid-for splitter bound to a
+  // launch that must revert.
+  await assertDeploymentIdentity(selected, provider);
+  if (pairAsset.address.toLowerCase() !== NATIVE_ETH) {
+    const stillApproved = await factoryForPairs.approvedPairTokens(pairAsset.address);
+    if (!stillApproved) {
+      console.error(`\n${pairAsset.symbol} was revoked since the preflight. Nothing deployed.`);
+      process.exit(1);
+    }
+  }
+
+  const { splitterAddress, deployTxHash } = await deploySplitter(
+    signer,
+    treasury,
+    treasury,
+    ethers.ZeroAddress,
+    provider,
+    // The SELECTED deployment. Omitting it would fall back to module-global selection, so
+    // under rollback or an injected target the identity, readiness and calldata followed
+    // `selected` while the splitter's IMMUTABLE escrow followed something else. The
+    // escrow is the one that cannot be repaired afterwards.
+    selected
+  );
   line('splitter', splitterAddress);
   line('tx', deployTxHash);
 
@@ -181,7 +293,7 @@ async function main() {
   // which pays msg.sender. A splitter without `claimAndSplit` would therefore be
   // credited correctly and forever with no transaction able to move the money: the
   // 2026-08-04 loss again, by a different route, and just as permanent.
-  if (config.PONS_FACTORY_VERSION === 'v2') {
+  if (selected.tokenParamsVersion !== 'v1') {
     const claimSelector = ethers.id('claimAndSplit(address)').slice(2, 10);
     if (!deployedCode.includes(claimSelector)) {
       console.error('\nABORTING: the deployed splitter has no claimAndSplit(address).');
@@ -206,40 +318,12 @@ async function main() {
   // splitter and then sent v1 calldata to the v1 factory. On v1 we are not
   // whitelisted, so the very launch this script exists to make would have reverted,
   // at the exact moment it mattered, for a reason that reads as "pons refused us".
-  const target = createLaunchTarget(provider);
+  // Resolved once at the top of this run; creating a second one here was how the same
+  // question came to have six answers.
   line('factory version', target.version);
   line('factory address', target.factoryAddress);
 
-  // Resolve the pairing asset the same way the bot does, so a self-dealt launch is
-  // the same shape as a user's. PAIR_WITH is a symbol or an address; unset means ETH,
-  // which is what v1 always uses and what v2 defaults to.
-  let pairAsset: PairAsset = {
-    address: NATIVE_ETH, symbol: 'ETH', name: 'Ether', decimals: 18, graduationThreshold: null,
-  };
-  const wanted = process.env.PAIR_WITH;
-  if (wanted && target.supportsPairing) {
-    const registry = new PairAssetRegistry(
-      new ChainPairTokenSource({
-        provider,
-        factoryAddress: config.PONS_V2_FACTORY_ADDRESS,
-        fromBlock: config.PONS_V2_APPROVALS_FROM_BLOCK,
-      })
-    );
-    const resolved = await registry.resolve(wanted);
-    if (!resolved.ok) {
-      console.error(`
-PAIR_WITH="${wanted}" is not an approved pairing asset: ${resolved.detail}`);
-      console.error('Nothing was launched. The splitter above is deployed but unused.');
-      process.exit(1);
-    }
-    pairAsset = resolved.asset;
-  } else if (wanted && !target.supportsPairing) {
-    console.error(`
-PAIR_WITH is set but ${target.version} takes its pairing from the launch config.`);
-    console.error('Set PONS_FACTORY_VERSION=v2, or unset PAIR_WITH to launch against ETH.');
-    process.exit(1);
-  }
-  line('paired against', pairAsset.symbol);
+
 
   const { to, data, value } = await target.build(
     {
@@ -253,6 +337,12 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
     fee
   );
 
+  // Decode and assert the exact bytes before they reach the signer. The selected
+  // deployment, not a global version flag, is the only authority after selection.
+  if (selected.tokenParamsVersion !== 'v1') {
+    assertOutgoingLaunch({ to, data, value }, splitterAddress, selected);
+  }
+
   const sent = await signer.sendTransaction({ to, data, value });
   line('tx', sent.hash);
   const receipt = await sent.wait();
@@ -265,9 +355,82 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
     process.exit(1);
   }
 
-  const details = extractLaunchDetails(receipt.logs);
+  // `selected` was resolved once at the top; do not ask module-global selection again,
+  // because that is a different question from 'which deployment is this run using'.
+  const isV2 = selected.tokenParamsVersion !== 'v1';
+
   console.log();
   console.log('=== LAUNCHED ===');
+
+  if (isV2) {
+    /**
+     * V2 handoff.
+     *
+     * This branch did not exist. After a V2 launch the script read the receipt with the
+     * V1 extractor -- a different event shape from a different factory -- and then told
+     * the operator to call `locker.collectFees` and `splitter.splitERC20`, neither of
+     * which applies. V2 credits an escrow that pays `msg.sender`; there is no collect to
+     * call, and following those instructions would end in confusion at best.
+     */
+    const factory = new ethers.Contract(selected.factory, PONS_V2_CURRENT_ABI, provider);
+    const confirmation = await confirmCanaryLaunch({
+      selected,
+      outgoing: { to, data, value },
+      splitterAddress,
+      treasuryAddress: treasury,
+      receipt: { status: Number(receipt.status), logs: receipt.logs as any },
+      readLaunchRecord: async (deployment, token) => {
+        if (deployment.id !== selected.id) throw new Error('deployment changed during confirmation');
+        const raw = await factory.getLaunchedToken(token);
+        return {
+          token: String(raw.token ?? raw[0]),
+          curve: String(raw.curve ?? raw[1]),
+          deployer: String(raw.deployer ?? raw[2]),
+          creatorFeeRecipient: String(raw.creatorFeeRecipient ?? raw[3]),
+          pairToken: String(raw.pairToken ?? raw[4]),
+          exists: Boolean(raw.exists ?? raw[14]),
+        };
+      },
+    });
+    if (!confirmation.verdict.ok || !confirmation.receipt || !confirmation.token) {
+      console.error(`ABORTING: ${selected.id} launch did not fully reconcile.`);
+      for (const problem of confirmation.verdict.problems) console.error(`  - ${problem}`);
+      process.exit(1);
+    }
+    const found = confirmation.receipt;
+
+    line('deployment', `${selected.id} (${selected.factory})`);
+    line('token', found.token);
+    line('curve', found.curve);
+    line('pairToken', found.pairToken);
+    line('deployer', found.deployer);
+    line('creator recipient', splitterAddress);
+
+    // The treasury must never buy into a token it launched for somebody else. Anything
+    // above the fee is treated by the factory as an initial buy, so an overpayment is a
+    // position taken on a stranger's launch -- fatal, not a warning.
+    const overpaid = value - fee;
+    if (overpaid !== 0n) {
+      console.error();
+      console.error(`ABORTING: the launch carried ${overpaid} wei above the live fee.`);
+      console.error('The factory treats anything above the fee as an initial buy, so the');
+      console.error('treasury has taken a position in a token it launched for someone else.');
+      process.exit(1);
+    }
+
+    console.log();
+    console.log('Next, by hand:');
+    console.log('  1. Trade against the curve a few times to generate real fees.');
+    console.log(`  2. npm run collect:v2 -- ${splitterAddress} --token=${found.token}`);
+    console.log('     (dry run first; add --execute to claim)');
+    console.log('  3. Require RECONCILED -- exact 95/5 and nothing left in escrow or splitter.');
+    console.log();
+    console.log('  Do NOT call locker.collectFees or splitter.splitERC20 here. Those are v1:');
+    console.log('  v2 credits an escrow that pays msg.sender, and there is nothing to collect.');
+    return;
+  }
+
+  const details = extractLaunchDetails(receipt.logs);
   line('token', details?.token ?? '(TokenLaunched not found in logs)');
   line('pool', details?.pool ?? '-');
   line('pairToken', details?.pairToken ?? '-');
@@ -275,9 +438,12 @@ PAIR_WITH is set but ${target.version} takes its pairing from the launch config.
   line('initialBuyAmount', `${details?.initialBuyAmount?.toString() ?? '-'}   <- must be 0`);
   console.log();
 
+  // Fatal on v1 too. A nonzero initial buy means the treasury bought into a token it
+  // launched for somebody else, and a warning printed after the fact changes nothing.
   if (details && details.initialBuyAmount !== 0n) {
-    console.error('⚠️  initialBuyAmount is NOT zero. The treasury just bought into this token.');
-    console.error('   That means msg.value exceeded launchFee -- investigate before launching again.');
+    console.error('ABORTING: initialBuyAmount is NOT zero. The treasury bought into this token.');
+    console.error('msg.value exceeded launchFee. Do not launch again until that is understood.');
+    process.exit(1);
   }
 
   console.log('Next, by hand:');

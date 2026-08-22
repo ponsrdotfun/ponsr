@@ -66,6 +66,13 @@ describe('Db spend tracking', () => {
     db.recordTreasurySpend('l1', large);
     expect(db.totalSpendLast24h()).toBe(large);
   });
+
+  it('records one paid launch exactly once across reconciliation retries', () => {
+    const fee = 500_000_000_000_000n;
+    db.recordTreasurySpend('same-launch', fee);
+    db.recordTreasurySpend('same-launch', fee);
+    expect(db.totalSpendLast24h()).toBe(fee);
+  });
 });
 
 describe('Db user resolution', () => {

@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import feeSplitterArtifact from './feeSplitterArtifact.json';
 import { TreasurySigner } from './treasurySigner';
 import { config } from './config';
+import { PonsDeployment, executableDeployment } from './deployments';
+import { assertDeploymentIdentity } from './deploymentIdentity';
 
 /**
  * Deploys one FeeSplitter per launch (see contracts/FeeSplitter.sol's header comment for why
@@ -26,9 +28,21 @@ import { config } from './config';
  * able to move the money. Deploying the wrong one here is not a degraded launch, it
  * is a launch whose fees are stranded from the first trade.
  */
-function splitterArtifact(): { abi: any; bytecode: string; name: string } {
-  const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
-  const name = wantV2 ? 'FeeSplitterV2' : 'FeeSplitter';
+export function splitterArtifactFor(
+  deployment: PonsDeployment = executableDeployment()
+): { abi: any; bytecode: string; name: string } {
+  // From the deployment's FEE MODEL, not from `config.PONS_FACTORY_VERSION`.
+  //
+  // The flag answers "which factory does this bot launch through by default". This
+  // question is "does the deployment this launch is going to credit an escrow", and the
+  // two can disagree -- a v1 rollback with the flag still v2, or an injected v2 target
+  // while the flag says v1.
+  //
+  // Getting it wrong is not a degraded launch. A plain FeeSplitter named as
+  // creatorFeeRecipient on an escrow-crediting deployment is credited correctly and
+  // forever, with no transaction in existence able to move the money: the escrow pays
+  // `msg.sender` and a v1 splitter cannot call it at all.
+  const name = deployment.feeModel === 'escrow-credit' ? 'FeeSplitterV2' : 'FeeSplitter';
   const art = (feeSplitterArtifact as any)[name];
   if (!art?.bytecode) {
     // Refuse rather than silently fall back to the other one. Falling back is how the
@@ -39,6 +53,47 @@ function splitterArtifact(): { abi: any; bytecode: string; name: string } {
     );
   }
   return { abi: art.abi, bytecode: art.bytecode, name };
+}
+
+/**
+ * Which escrow a splitter for this deployment must be built against.
+ *
+ * Comes from the registry rather than configuration, because the escrow and the
+ * factory are not independently settable facts: each pons deployment credits its own
+ * escrow, and a splitter is bound to one at construction and cannot be repointed.
+ */
+export function splitterEscrowFor(deployment: PonsDeployment = executableDeployment()): string {
+  return deployment.feeEscrow;
+}
+
+/**
+ * Refuses to continue unless the chain agrees with the manifest.
+ *
+ * The manifest is a claim; `factory.feeEscrow()` is the fact. They can disagree in
+ * exactly one interesting way -- somebody edits an address, or pons migrates again --
+ * and the consequence is not a failed launch but a successful one whose fees are
+ * unreachable forever. The escrow is immutable in the splitter, escrow claims pay
+ * `msg.sender`, and no `claimFor` exists, so nothing recovers them afterwards: not
+ * the treasury, not the creator, not pons.
+ *
+ * Called before the splitter is deployed, so a mismatch costs nothing at all.
+ */
+export function assertEscrowMatches(deployment: PonsDeployment, liveEscrow: string): void {
+  const expected = deployment.feeEscrow.toLowerCase();
+  const actual = (liveEscrow ?? '').toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(actual) || /^0x0+$/.test(actual)) {
+    throw new Error(
+      `refusing to deploy a splitter: ${deployment.id} reported an unusable fee escrow "${liveEscrow}". ` +
+        `Expected ${deployment.feeEscrow}.`
+    );
+  }
+  if (expected !== actual) {
+    throw new Error(
+      `refusing to deploy a splitter: fee escrow mismatch for ${deployment.id}. ` +
+        `Manifest says ${deployment.feeEscrow}, the factory reports ${liveEscrow}. ` +
+        'A splitter built against the wrong escrow holds creator fees nothing can ever claim.'
+    );
+  }
 }
 
 export interface SplitterDeployResult {
@@ -61,21 +116,53 @@ export async function deploySplitter(
   signer: TreasurySigner,
   creatorWallet: string,
   treasuryWallet: string,
-  tokenAddressPlaceholder: string
+  tokenAddressPlaceholder: string,
+  /**
+   * Optional, and the reason it exists is timing.
+   *
+   * `readCurrentReadiness` already verifies identity -- but readiness and this deploy
+   * are two separate moments, and only one of them spends gas. A factory upgraded, an
+   * RPC swapped to another chain, an ABI regenerated: all of it lands in the window
+   * between, and the splitter is the first DURABLE artifact this flow creates. A
+   * splitter bound to a factory that has since moved is not a wasted fee; it is a
+   * contract that may be handed a creator's fees and be unable to claim them.
+   *
+   * Pass a provider and the check runs here too, immediately before the bytes go out.
+   * Omit it and the caller is asserting that nothing could have changed since readiness
+   * -- true in the unit tests, which have no chain at all.
+   */
+  provider?: ethers.Provider,
+  /** The deployment this splitter is being built for. Defaults to the executable one;
+   *  the orchestrator passes the SELECTED target's, which can differ under rollback. */
+  deployment: PonsDeployment = executableDeployment()
 ): Promise<SplitterDeployResult> {
-  const { abi, bytecode, name } = splitterArtifact();
+  if (provider) {
+    // Throws rather than returning a flag: after this function returns there is already
+    // a durable side effect, so the refusal has to happen before anything is sent.
+    await assertDeploymentIdentity(deployment, provider);
+  }
+  const { abi, bytecode, name } = splitterArtifactFor(deployment);
   const factory = new ethers.ContractFactory(abi, bytecode);
 
   // v2's splitter takes the escrow address as a fourth argument, and it is immutable:
   // a splitter that could be repointed later is a splitter whose fees could be
   // redirected after a creator has agreed to the terms.
+  //
+  // From the registry, never from configuration. This line read
+  // `config.PONS_V2_FEE_ESCROW_ADDRESS` until 2026-08-20, whose default is the escrow
+  // of the factory pons replaced. Everything around it had already been migrated, so
+  // the launch would have succeeded -- the factory's escrow matched the registry, the
+  // calldata was correct, the transaction confirmed -- and only the splitter would
+  // have been bound to the wrong escrow. That is the failure with no recovery: fees
+  // credited to an address the splitter cannot claim from, forever.
+  const escrow = splitterEscrowFor(deployment);
   const deployTx =
     name === 'FeeSplitterV2'
       ? await factory.getDeployTransaction(
           creatorWallet,
           treasuryWallet,
           tokenAddressPlaceholder,
-          config.PONS_V2_FEE_ESCROW_ADDRESS
+          escrow
         )
       : await factory.getDeployTransaction(creatorWallet, treasuryWallet, tokenAddressPlaceholder);
 

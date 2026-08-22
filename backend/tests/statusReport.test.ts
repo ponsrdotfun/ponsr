@@ -25,6 +25,8 @@ function deps(over: Partial<StatusDeps> = {}): StatusDeps {
     alertsRoute: 'Telegram',
     crossCheckHours: 6,
     factoryVersion: 'v1',
+    deploymentId: 'pons-v2-current-7ed',
+    deploymentFactory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
     ...over,
   };
 }

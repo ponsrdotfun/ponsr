@@ -114,20 +114,30 @@ const ConfigSchema = z.object({
   /** Ceiling on authenticated webhook deliveries per minute. Guards the parser's
    *  prepaid balance, not the treasury -- the daily spend cap already bounds that. */
   WEBHOOK_MAX_PER_MINUTE: z.coerce.number().default(30),
-  PONS_V2_FACTORY_ADDRESS: z.string().default('0x7E1EAbd52Ae29598e6483F72dCf1a70b14284dB8'),
-  /**
-   * Where to begin scanning for `PairTokenApprovalUpdated`.
+  /*
+   * PONS_V2_FACTORY_ADDRESS and PONS_V2_FEE_ESCROW_ADDRESS were REMOVED on 2026-08-20.
    *
-   * The approvals sit around block 23.58M, so this is a little below them. Set it
-   * too high and an approval is missed, which shows up as the bot quietly refusing
-   * an asset pons does support -- indistinguishable from never having approved it.
-   * Set it to 0 and every refresh scans 370 windows for nothing.
+   * Nobody ever wrote the superseded factory into a code path. They read these two
+   * settings, whose defaults were it -- which is exactly why every review of the code
+   * looked clean while every guard was aimed at the contract pons had replaced.
+   *
+   * The last reader is gone, and an unread default is one import away from being read
+   * again by someone reaching for the obvious-looking name. Both addresses live in
+   * `deployments.ts` now, bound to an ABI, an escrow, a selector and hashes that are
+   * checked against the chain -- where an address means something.
+   *
+   * `PONS_FACTORY_VERSION` still selects v1 vs current-v2. Which contract "v2" means is
+   * the registry's answer, not a setting's.
    */
-  PONS_V2_APPROVALS_FROM_BLOCK: z.coerce.number().default(23_400_000),
-  /** `PonsV2FeeEscrow`. v2 credits creator fees here and they are collected by calling
-   *  `claimToken`, which pays `msg.sender` -- so this address is baked immutably into
-   *  every v2 splitter at deployment. Verified source, read 2026-08-18. */
-  PONS_V2_FEE_ESCROW_ADDRESS: z.string().default('0xbc39B6502E1a6Ab36E4A5c5026A35F08342A0A9c'),
+  /*
+   * PONS_V2_APPROVALS_FROM_BLOCK was REMOVED on 2026-08-21, for the same reason as the
+   * two addresses above: a separately settable number that must agree with a deployment
+   * but was free not to. Set below the deployment it scanned millions of empty blocks;
+   * set above it, it silently missed approvals -- which looks exactly like pons never
+   * having granted them.
+   *
+   * The scanner takes the deployment's own startBlock now.
+   */
   /** What a launch pairs against when the person did not ask for anything. ETH keeps
    *  today's behaviour, and is the only pairing that needs no approval. */
   DEFAULT_PAIR_ASSET: z.string().default('ETH'),
