@@ -179,6 +179,9 @@ describe('resolvePairAsset', () => {
 });
 
 describe('PairAssetRegistry', () => {
+  /** Lets a background refresh that was deliberately not awaited actually run. */
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
   it('discovers once and serves the cache until the TTL expires', async () => {
     let scans = 0;
     const s = source({ approvalHistory: async () => { scans++; return [{ pairToken: AAPL, approved: true, blockNumber: 1, logIndex: 0 }]; } });
@@ -191,7 +194,84 @@ describe('PairAssetRegistry', () => {
 
     clock = 1500;
     await reg.list();
+    await settle();
     expect(scans).toBe(2);
+  });
+
+  /**
+   * Expiry must not make the caller wait.
+   *
+   * This is the production symptom, not a hypothetical: `/status` bounds every dependency
+   * call at five seconds, so whichever request landed on the expiring TTL paid for the whole
+   * scan and reported `pair-assets` degraded -- while a valid cached set sat unused. The next
+   * request answered `ok` with the same assets. The check was reporting its own latency.
+   */
+  it('returns the stale set immediately rather than waiting for the refresh', async () => {
+    let released: (() => void) | null = null;
+    let scans = 0;
+    const s = source({
+      approvalHistory: async () => {
+        scans += 1;
+        if (scans > 1) await new Promise<void>((r) => { released = r; });
+        return [
+          { pairToken: AAPL, approved: true, blockNumber: 1, logIndex: 0 },
+          ...(scans > 1 ? [{ pairToken: USDG, approved: true, blockNumber: 2, logIndex: 0 }] : []),
+        ];
+      },
+    });
+    let clock = 0;
+    const reg = new PairAssetRegistry(s, 1000, () => clock);
+    await reg.list();
+
+    clock = 5000;
+    // Resolves against the still-running second scan, not after it.
+    await expect(reg.list()).resolves.toMatchObject([{ symbol: 'AAPL' }]);
+    expect(scans).toBe(2);
+
+    (released as unknown as () => void)();
+    await settle();
+    // And the refresh it kicked off is the one that lands.
+    await expect(reg.list()).resolves.toMatchObject([{ symbol: 'AAPL' }, { symbol: 'USDG' }]);
+  });
+
+  /**
+   * The hazard introduced by not waiting.
+   *
+   * While callers blocked, the next scan could not begin until the last one finished. Now
+   * every caller returns at once, so a persistently failing RPC would have each one start
+   * another scan the instant the previous gave up -- answering a struggling dependency with
+   * more load.
+   */
+  it('does not start a scan per caller while refreshes keep failing', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let scans = 0;
+    let fail = false;
+    const s = source({
+      approvalHistory: async () => {
+        scans += 1;
+        if (fail) throw new Error('ECONNREFUSED');
+        return [{ pairToken: AAPL, approved: true, blockNumber: 1, logIndex: 0 }];
+      },
+    });
+    let clock = 0;
+    const reg = new PairAssetRegistry(s, 1000, () => clock, 60_000);
+    await reg.list();
+    expect(scans).toBe(1);
+
+    fail = true;
+    clock = 5000;
+    for (let i = 0; i < 10; i += 1) {
+      await expect(reg.list()).resolves.toMatchObject([{ symbol: 'AAPL' }]);
+      await settle();
+    }
+    expect(scans).toBe(2);
+
+    // Past the floor, it tries again rather than giving up on the dependency forever.
+    clock = 5000 + 60_000;
+    await reg.list();
+    await settle();
+    expect(scans).toBe(3);
+    jest.restoreAllMocks();
   });
 
   // Every mention would otherwise trigger its own log scan.

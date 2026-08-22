@@ -4,8 +4,9 @@
  * pons v2 lets a launch be priced, funded and graduated in something other than
  * ETH: buyers spend that asset to buy in, the graduation target is counted in it,
  * the Uniswap pool it graduates into is paired against it, and the creator is paid
- * in it. As of 2026-08-18 eight assets are approved and six are tokenised stocks
- * (AAPL, NVDA, GOOGL, TSLA, GME, SPCX, SPY) plus USDG.
+ * in it. The superseded factory approved eight; the current one approves 23 and has
+ * already revoked one -- which is the argument for the next paragraph, not a figure
+ * to rely on. Read the set, never this comment.
  *
  * THE SET IS DISCOVERED, NOT HARDCODED
  * ------------------------------------
@@ -282,25 +283,89 @@ export class PairAssetRegistry {
   private cached: PairAsset[] | null = null;
   private fetchedAt = 0;
   private inFlight: Promise<PairAsset[]> | null = null;
+  /** When a scan last FAILED, or 0 if the last one succeeded. See `retryFloorMs`. */
+  private failedAt = 0;
 
   constructor(
     private source: PairTokenSource,
     private ttlMs = 3600_000,
-    private now: () => number = Date.now
+    private now: () => number = Date.now,
+    /**
+     * How soon a FAILED refresh may be retried.
+     *
+     * Only matters once serving stale stopped blocking. Before, a caller waited for the
+     * scan and the next one could not start until it finished; now every caller returns
+     * immediately, so a persistently failing RPC would have each one start another scan
+     * the moment the last gave up -- turning a slow dependency into a scan storm against
+     * it. `fetchedAt` cannot carry this: moving it on failure would make a stale set look
+     * freshly fetched, which is a lie told to the very code deciding whether to refresh.
+     *
+     * Applies only after a failure. A successful scan clears it, so the ordinary TTL
+     * refresh is never delayed by it.
+     */
+    private retryFloorMs = 60_000
   ) {}
 
+  /**
+   * Fresh cache is served; a stale one is served too, and refreshed behind it.
+   *
+   * Only a cold registry waits. The catch below already decided that serving a stale list
+   * beats refusing a launch over a transient RPC failure -- but the wait on expiry did not
+   * follow that decision, so a refresh that was merely SLOW was treated worse than one that
+   * outright failed. Whichever caller happened to land on the expiring TTL paid for the
+   * whole scan, and on `/status`, where every dependency call is bounded at five seconds,
+   * that surfaced as `pair-assets` degraded while a perfectly good cached set sat unused.
+   *
+   * Observed in production on 2026-08-22: one request degraded, the next `ok` with the same
+   * eight assets, nothing wrong in between. That is the shape of a check that reports on its
+   * own latency rather than on the dependency, and a status page that cries wolf on a timer
+   * teaches its reader to skip it -- the exact failure `launchpadWatch.ts` exists to catch.
+   *
+   * Serving stale is safe here for the reason the catch already gives, and one more: the
+   * launch path re-reads approval live before anything irreversible (`assertPairStillApproved`),
+   * so this list decides what is OFFERED, never what is permitted.
+   */
   async list(): Promise<PairAsset[]> {
     if (this.cached && this.now() - this.fetchedAt < this.ttlMs) return this.cached;
-    // Concurrent mentions must not each trigger their own log scan; they share one.
+
+    // Stale-while-revalidate. A cold registry has nothing to serve and must wait.
+    if (this.cached) {
+      // Not awaited, so its rejection must be marked handled here. The chain below
+      // resolves to the cached set whenever one exists, but `invalidate()` can clear
+      // the cache mid-scan and turn that into a throw nobody is listening for.
+      if (this.mayAttempt()) void this.startRefresh().catch(() => undefined);
+      return this.cached;
+    }
+    return this.startRefresh();
+  }
+
+  /**
+   * Whether a new scan may start.
+   *
+   * Backoff is measured from the last FAILURE, never from the last attempt. Measuring from
+   * the attempt gates the ordinary hourly refresh too -- the first version did exactly that,
+   * and a healthy registry stopped rediscovering entirely while every test that only checked
+   * the happy path still passed.
+   */
+  private mayAttempt(): boolean {
+    if (this.inFlight !== null) return true;
+    if (this.failedAt === 0) return true;
+    return this.now() - this.failedAt >= this.retryFloorMs;
+  }
+
+  /** The single shared scan. Concurrent callers must not each trigger their own. */
+  private startRefresh(): Promise<PairAsset[]> {
     if (this.inFlight) return this.inFlight;
 
     this.inFlight = discoverPairAssets(this.source)
       .then((assets) => {
         this.cached = assets;
         this.fetchedAt = this.now();
+        this.failedAt = 0;
         return assets;
       })
       .catch((err) => {
+        this.failedAt = this.now();
         // Serving a stale list beats refusing every launch over a transient RPC
         // failure: the set changes rarely, and `isApproved` is checked live at
         // launch time anyway. With nothing cached there is nothing to fall back on.
