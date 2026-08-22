@@ -113,13 +113,42 @@ describe('keyless maintenance CLI', () => {
 describe('SQLite maintenance backup', () => {
   it('uses an online WAL-consistent snapshot while a writer continues committing', async () => {
     const p = tempPaths();
-    const writer = makeDb(p.source, 20);
-    let writes = 20;
-    const timer = setInterval(() => {
+    const INITIAL = 500;
+    const writer = makeDb(p.source, INITIAL);
+    let writes = INITIAL;
+    let backupSettled = false;
+
+    /**
+     * The writer runs on setImmediate, not on a timer, and that choice is the test.
+     *
+     * better-sqlite3 drives SQLite's online backup by calling `backup.transfer()` and
+     * rescheduling itself with `setImmediate` between page steps. A `setInterval(..., 1)`
+     * writer therefore competes for a phase the backup never waits in: the check queue
+     * drains before the loop reaches timers, so on a fast machine the copy finished
+     * without a single tick ever firing and `writes` was still exactly its starting
+     * value. That is what happened the first time anything other than the maintainer's
+     * laptop ran this -- it passed on Windows and failed on a Linux runner, which is a
+     * race, not a property.
+     *
+     * Queuing on the same phase the backup yields in makes the interleaving a
+     * consequence of how the backup is implemented rather than of how fast the disk is.
+     * The assertion below is unchanged: writes must still land while the copy is open.
+     *
+     * Bounded, and that bound is not cosmetic. An unbounded pump on this queue adds
+     * pages faster than a one-page-per-step copy retires them, so `remainingPages` never
+     * reaches zero and the backup never resolves -- the test hangs rather than fails,
+     * which is the worse outcome of the two. CONCURRENT_WRITES is small enough that the
+     * copy always wins and large enough that it spans many steps.
+     */
+    const CONCURRENT_WRITES = 50;
+    const pump = () => {
+      if (backupSettled || writes >= INITIAL + CONCURRENT_WRITES) return;
       writer.prepare('INSERT INTO processed_tweets VALUES (?)').run(`tweet-${writes}`);
       writer.prepare('INSERT INTO launches VALUES (?, ?)').run(`launch-${writes}`, `tweet-${writes}`);
       writes += 1;
-    }, 1);
+      setImmediate(pump);
+    };
+    setImmediate(pump);
 
     try {
       const manifest = await createBackup({
@@ -127,7 +156,8 @@ describe('SQLite maintenance backup', () => {
         backupPath: p.backup,
         manifestPath: p.manifest,
       });
-      expect(writes).toBeGreaterThan(20);
+      backupSettled = true;
+      expect(writes).toBeGreaterThan(INITIAL);
       expect(manifest).toEqual(expect.objectContaining({
         schema: SCHEMA,
         version: 1,
@@ -146,11 +176,11 @@ describe('SQLite maintenance backup', () => {
       expect(snapshot.pragma('integrity_check', { simple: true })).toBe('ok');
       expect(snapshot.pragma('foreign_key_check')).toEqual([]);
       const count = (snapshot.prepare('SELECT COUNT(*) AS count FROM launches').get() as any).count;
-      expect(count).toBeGreaterThanOrEqual(20);
+      expect(count).toBeGreaterThanOrEqual(INITIAL);
       expect(count).toBeLessThanOrEqual(writes);
       snapshot.close();
     } finally {
-      clearInterval(timer);
+      backupSettled = true;
       writer.close();
       fs.rmSync(p.dir, { recursive: true, force: true });
     }
