@@ -36,9 +36,20 @@ jobs:
       # Pinned to an exact patch, not "22". A floating major silently changes the
       # runtime under a native module (better-sqlite3) and under the compiler pin the
       # artifact reproducibility check depends on.
+      #
+      # 22.23.0 specifically, and the patch level is load-bearing. The website smoke
+      # test loads jsdom, whose `html-encoding-sniffer` reaches `@exodus/bytes` through
+      # a CommonJS `require()` of an ES module. That only works from Node 22.12, where
+      # `require(esm)` shipped unflagged; this file first pinned 22.11.0 and the smoke
+      # test died with ERR_REQUIRE_ESM while passing on the maintainer's 22.23.0. So
+      # this matches the version the suite is actually verified on, rather than being
+      # a version somebody assumed was equivalent.
+      #
+      # The deployed bot is unaffected -- jsdom is a root devDependency used only to
+      # parse the website in tests, and backend/Dockerfile builds on node:22-slim.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.11.0
+          node-version: 22.23.0
           cache: npm
           cache-dependency-path: |
             package-lock.json
