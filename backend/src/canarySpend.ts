@@ -120,7 +120,27 @@ export function parseBotSpentWei(detail: string): bigint | null {
  * Every refusal below returns null, never zero. An unreadable ledger must refuse; a zero
  * would admit.
  */
-export function readBotRollingSpend(report: unknown, expectedCapWei?: bigint): bigint | null {
+export interface StatusBinding {
+  capWei?: bigint;
+  chainId?: number;
+  deploymentId?: string;
+  factory?: string;
+  treasury?: string;
+  /** Maximum age. A figure with no freshness bound is a figure from any time at all. */
+  maxAgeMs?: number;
+  /** Under execute this must be false: the bot must not be admitting launches concurrently. */
+  requirePublicLaunchDisabled?: boolean;
+  now?: () => number;
+}
+
+const eqAddr = (a: unknown, b?: string) =>
+  b === undefined || (typeof a === 'string' && a.toLowerCase() === b.toLowerCase());
+
+export function readBotRollingSpend(
+  report: unknown,
+  expectedCapWei?: bigint,
+  binding: StatusBinding = {}
+): bigint | null {
   const spend = (report as { spend?: Record<string, unknown> } | null)?.spend;
   if (!spend || typeof spend !== 'object') return null;
   // The window must be named, and named correctly. An unlabelled figure is exactly the
@@ -136,5 +156,28 @@ export function readBotRollingSpend(report: unknown, expectedCapWei?: bigint): b
     // against a ceiling nobody shares is worse than refusing.
     if (typeof cap !== 'string' || !/^[0-9]+$/.test(cap) || BigInt(cap) !== expectedCapWei) return null;
   }
+  /**
+   * The envelope must describe the runtime this canary is about to spend from.
+   *
+   * A rolling total with a matching cap is not enough. An honest endpoint for another
+   * deployment, another treasury or another chain reports exactly that shape and means
+   * something else; a stale one reports a figure that was true an hour ago; a spoofed one
+   * reports zero. Each of those admits a launch against capacity that does not exist.
+   */
+  if (binding.chainId !== undefined && spend.chainId !== binding.chainId) return null;
+  if (binding.deploymentId !== undefined && spend.deploymentId !== binding.deploymentId) return null;
+  if (!eqAddr(spend.factory, binding.factory)) return null;
+  if (!eqAddr(spend.treasury, binding.treasury)) return null;
+
+  if (binding.requirePublicLaunchDisabled && spend.publicLaunchEnabled !== false) return null;
+
+  if (binding.maxAgeMs !== undefined) {
+    const at = typeof spend.generatedAt === 'string' ? Date.parse(spend.generatedAt) : NaN;
+    if (!Number.isFinite(at)) return null;
+    const now = (binding.now ?? Date.now)();
+    // Future-dated is as suspect as stale: a clock that disagrees cannot bound anything.
+    if (at > now + 60_000 || now - at > binding.maxAgeMs) return null;
+  }
+
   return BigInt(raw);
 }

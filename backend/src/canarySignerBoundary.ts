@@ -24,6 +24,9 @@ import { ethers } from 'ethers';
  * written and quietly stop holding everywhere else.
  */
 export function pinnedTreasuryAddress(env: { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string }): string {
+  // TREASURY_ADDRESS first, and TURNKEY_SIGN_WITH only as a fallback that must still look
+  // like an address. Turnkey accepts an opaque private-key ID there, and reading one as an
+  // EVM address would produce a preflight describing an account that does not exist.
   const raw = env.TREASURY_ADDRESS ?? env.TURNKEY_SIGN_WITH;
   if (!raw) {
     throw new Error(
@@ -32,7 +35,11 @@ export function pinnedTreasuryAddress(env: { TURNKEY_SIGN_WITH?: string; TREASUR
     );
   }
   if (!ethers.isAddress(raw)) {
-    throw new Error(`configured treasury address ${raw} is not a valid address`);
+    throw new Error(
+      `configured treasury address "${raw}" is not a valid EVM address. If TURNKEY_SIGN_WITH ` +
+        'holds an opaque Turnkey private-key ID rather than an address, set TREASURY_ADDRESS ' +
+        'explicitly: an identifier is not an account.'
+    );
   }
   return ethers.getAddress(raw);
 }

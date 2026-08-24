@@ -34,6 +34,22 @@ export interface StatusCheck {
 /** Typed, machine-readable spend. See rollingSpendLast24hWei for why it names its window. */
 export interface StatusSpend {
   window: 'rolling-24h';
+  /**
+   * What this figure is ABOUT.
+   *
+   * A rolling total with a matching cap is not enough to trust: an honest endpoint for a
+   * different deployment, a different treasury or a different chain reports exactly that
+   * shape and means something else entirely. A second spender has to be able to prove the
+   * budget it is checking is the budget it will draw from.
+   */
+  chainId: number;
+  deploymentId?: string;
+  factory?: string;
+  treasury?: string;
+  /** Whether the bot is currently admitting public launches. */
+  publicLaunchEnabled: boolean;
+  /** ISO. Freshness is the caller's to bound; staleness is not detectable without it. */
+  generatedAt: string;
   /** Decimal wei string. The window the circuit breaker actually admits against. */
   rolling24hWei: string;
   capWei: string;
@@ -89,6 +105,8 @@ export interface StatusDeps {
    * second spender reading it could be told it had a full cap of headroom.
    */
   rollingSpendLast24hWei?: () => bigint;
+  /** Binds the spend envelope to the runtime it describes. See StatusSpend. */
+  treasuryAddress?: string;
   /** Ponsr's own gate. A healthy upstream factory is not public availability. */
   publicLaunchEnabled: boolean;
   /** Which factory launches are built for. v1 prices every launch in ETH. */
@@ -163,6 +181,12 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
         rolling24hWei: deps.rollingSpendLast24hWei().toString(),
         capWei: deps.dailyCapWei.toString(),
         currentUtcDayWei: deps.spentTodayWei().toString(),
+        chainId: deps.expectedChainId,
+        deploymentId: deps.deploymentId,
+        factory: deps.deploymentFactory,
+        treasury: deps.treasuryAddress,
+        publicLaunchEnabled: deps.publicLaunchEnabled,
+        generatedAt: new Date().toISOString(),
       }
     : undefined;
 

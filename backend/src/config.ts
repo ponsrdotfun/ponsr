@@ -163,6 +163,15 @@ const ConfigSchema = z.object({
   TURNKEY_API_PRIVATE_KEY: z.string().optional(),
   /** Wallet account address, private key address, or private key ID to sign with. */
   TURNKEY_SIGN_WITH: z.string().optional(),
+  /**
+   * The treasury's EVM address, as a non-secret pin.
+   *
+   * Separate from TURNKEY_SIGN_WITH, which Turnkey accepts as a wallet address, a
+   * private-key address OR an opaque private-key ID. Reading an opaque signer identifier
+   * as though it were an address is how a preflight ends up describing an account that
+   * does not exist, and every balance and cap reading above it becomes about nothing.
+   */
+  TREASURY_ADDRESS: z.string().optional(),
   /** Operator's acknowledgement that the signing policy exists. Production refuses to
    *  start without it, because an unpolicied Turnkey key is indistinguishable from a
    *  correctly-policied one until it is abused. */

@@ -7,6 +7,7 @@ import {
   verifyLaunchConfirmation,
 } from './launchAssertions';
 import { decodeCurrentV2Launch } from './ponsV2CurrentEncoder';
+import { verifyDeployedSplitter } from './splitterVerifier';
 
 /**
  * Advancing a canary run that was interrupted, using reads alone.
@@ -53,10 +54,7 @@ export interface CanaryRecoveryResult {
   problems: string[];
 }
 
-/** Selectors a deployed FeeSplitterV2 must expose. A stale build cannot fake these. */
-const REQUIRED_SELECTORS = ['splitERC20(address)', 'claimAndSplit(address)'].map((sig) =>
-  ethers.id(sig).slice(2, 10)
-);
+
 
 /**
  * Everything still open. Terminal rows are skipped entirely -- not read, not re-verified --
@@ -112,9 +110,23 @@ export async function recoverCanary(
         continue;
       } else {
         journal.recordReceipt(row.id, { status: 1 });
+
+        /**
+         * The fee is consumed by LANDING, not by reconciling.
+         *
+         * Ordinary execution recorded it right after receipt success; recovery advanced
+         * rows all the way to confirmed and never recorded it at all. So a crash between
+         * those two points spent real money and left the budget looking untouched.
+         *
+         * Recorded here, before the verdict, because it is true either way: a launch that
+         * landed and did not reconcile spent exactly as much as one that did. Idempotent
+         * in the journal, so repeated passes add nothing.
+         */
+        if (row.op === 'token_launch') journal.recordFee(row.id, row.value);
+
         const verdict =
           row.op === 'splitter_deploy'
-            ? await verifySplitter(row, receipt, deps)
+            ? await verifySplitter(row, receipt, selected, deps)
             : await verifyLaunch(row, receipt, selected, deps);
 
         if (verdict.ok) {
@@ -148,35 +160,31 @@ export async function recoverCanary(
  */
 async function verifySplitter(
   row: CanaryRow,
-  receipt: { contractAddress: string | null },
+  receipt: { status: number | null; contractAddress: string | null },
+  selected: PonsDeployment,
   deps: CanaryRecoveryDeps
 ): Promise<{ ok: boolean; problems: string[]; token: string | null; splitter?: string }> {
-  const problems: string[] = [];
-  const address = receipt.contractAddress;
-  if (!address) {
-    return {
-      ok: false,
-      token: null,
-      problems: ['the receipt carries no contract address, so nothing proves what was created'],
-    };
-  }
-
-  let code = '';
-  try {
-    code = await deps.readCode(address);
-  } catch (err) {
-    return { ok: false, token: null, problems: [`could not read code at ${address}: ${(err as Error)?.message ?? err}`] };
-  }
-
-  const stripped = code.toLowerCase();
-  for (const selector of REQUIRED_SELECTORS) {
-    if (!stripped.includes(selector)) {
-      problems.push(`deployed code at ${address} does not expose selector 0x${selector}`);
+  let code = '0x';
+  if (receipt.contractAddress) {
+    try {
+      code = await deps.readCode(receipt.contractAddress);
+    } catch (err) {
+      return {
+        ok: false,
+        token: null,
+        problems: [`could not read code at ${receipt.contractAddress}: ${(err as Error)?.message ?? err}`],
+      };
     }
   }
-  if (problems.length > 0) return { ok: false, token: null, problems };
-
-  return { ok: true, problems: [], token: null, splitter: address };
+  // ONE verifier, shared with the direct execution path. Two checks for one question
+  // disagree eventually, and the disagreement surfaces on the day somebody relies on them.
+  const verdict = verifyDeployedSplitter({
+    receiptStatus: receipt.status,
+    contractAddress: receipt.contractAddress,
+    deployedCode: code,
+    deployment: selected,
+  });
+  return { ok: verdict.ok, problems: verdict.problems, token: null, splitter: verdict.splitterAddress };
 }
 
 /** The launch verifier, shared with production rather than reimplemented. */

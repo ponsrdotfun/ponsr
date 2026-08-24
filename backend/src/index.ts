@@ -323,6 +323,9 @@ app.get('/status', async (_req, res) => {
       spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
       /** The window that actually refuses launches, published as a typed field. */
       rollingSpendLast24hWei: () => db.totalSpendLast24h(),
+      // Binds the spend envelope to the runtime it describes, so a second spender can
+      // prove the budget it checks is the budget it will draw from.
+      treasuryAddress: config.TURNKEY_SIGN_WITH,
       dailyCapWei: config.DAILY_SPEND_CAP_WEI,
       launchesToday: () => db.countLaunchesBetween(startOfUtcDay(), new Date().toISOString()),
       coldAddressSet: !!config.TREASURY_COLD_ADDRESS,

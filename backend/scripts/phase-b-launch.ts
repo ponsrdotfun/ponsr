@@ -45,6 +45,7 @@ import { resolveCanaryPair } from '../src/canaryPreflight';
 import { CanaryJournal } from '../src/canaryJournal';
 import { admitCanarySpend, readBotRollingSpend } from '../src/canarySpend';
 import { decideCanaryPhase } from '../src/canaryReporting';
+import { verifyDeployedSplitter } from '../src/splitterVerifier';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { pinnedTreasuryAddress, assertSignerMatchesPin, assertRawKeyNotOnMainnet } from '../src/canarySignerBoundary';
 import { deploySplitter } from '../src/splitterDeployer';
@@ -52,9 +53,17 @@ import { formatEth } from '../src/treasuryPolicy';
 
 const EXECUTE = process.argv.includes('--execute');
 
-/** Deliberately boring. This token is permanent and public. */
+/**
+ * The permanent identity. Defaults exist for testnet rehearsal and are refused on mainnet.
+ *
+ * The canonical plan names PONSR STONKS / PSTONKS; this file defaulted to Ponsr Test /
+ * PONSRTEST. Two documents describing one permanent artifact is how a token ends up named
+ * by whichever one the operator happened to read -- and the name cannot be changed
+ * afterwards by anybody, ever.
+ */
 const TOKEN_NAME = process.env.PHASE_B_NAME ?? 'Ponsr Test';
 const TOKEN_SYMBOL = process.env.PHASE_B_SYMBOL ?? 'PONSRTEST';
+const IDENTITY_WAS_EXPLICIT = Boolean(process.env.PHASE_B_NAME && process.env.PHASE_B_SYMBOL);
 /**
  * Journal location. Operator state, deliberately outside the container: a deploy would
  * erase a record describing transactions that are still on chain, and an absent journal
@@ -205,6 +214,20 @@ async function main() {
       problems.push(`the address above (${treasury}) is the one that must be whitelisted -- check it is the address in docs/email-pons-whitelist.md`);
     }
   }
+  /**
+   * No accidental names on mainnet.
+   *
+   * A default is a reasonable convenience for a rehearsal and an unreasonable one for a
+   * permanent public artifact. Requiring both to be typed makes the name a decision
+   * somebody made rather than one nobody noticed.
+   */
+  if (network.chainId === 4663n && !IDENTITY_WAS_EXPLICIT) {
+    problems.push(
+      'PHASE_B_NAME and PHASE_B_SYMBOL must both be set explicitly on mainnet. The token ' +
+        `name is permanent and public; refusing to fall back to "${TOKEN_NAME}" / "${TOKEN_SYMBOL}".`
+    );
+  }
+
   if (fee > config.TREASURY_MAX_FEE_WEI) {
     problems.push(`live fee ${formatEth(fee)} ETH exceeds TREASURY_MAX_FEE_WEI ${formatEth(config.TREASURY_MAX_FEE_WEI)} ETH`);
   }
@@ -224,18 +247,61 @@ async function main() {
    */
   const journalSpent = journal.recordedFeeTotalWei(new Date(Date.now() - 24 * 3600_000).toISOString());
   let botSpent: bigint | null = null;
+  let botSpentSource = 'typed rolling-24h from /status';
   if (BOT_STATUS_URL) {
     try {
       const res = await fetch(BOT_STATUS_URL);
-      // Typed field, and its window is verified. The previous version parsed the
-      // human-readable daily-cap sentence, which is a UTC CALENDAR DAY figure while the
+      // res.ok first: a 500 body parsed as JSON is not a ledger reading, and an endpoint
+      // that is failing is exactly the one whose numbers should not be trusted.
+      if (!res.ok) throw new Error(`status endpoint returned HTTP ${res.status}`);
+      // Typed field, window verified, AND bound to this runtime. The previous version
+      // parsed a human-readable sentence built from a UTC calendar-day figure while the
       // breaker admits against a rolling 24 hours -- a different budget, read confidently.
-      botSpent = readBotRollingSpend(await res.json(), config.DAILY_SPEND_CAP_WEI);
+      botSpent = readBotRollingSpend(await res.json(), config.DAILY_SPEND_CAP_WEI, {
+        chainId: selected.chainId,
+        deploymentId: selected.id,
+        factory: selected.factory,
+        treasury,
+        maxAgeMs: 5 * 60_000,
+        // Under execute the bot must not be admitting launches while this one spends.
+        requirePublicLaunchDisabled: EXECUTE,
+      });
     } catch {
       botSpent = null;
     }
   } else if (process.env.BOT_SPENT_WEI) {
-    botSpent = BigInt(process.env.BOT_SPENT_WEI);
+    /**
+     * A local diagnostic, and never an execute credential.
+     *
+     * This accepted an arbitrary environment value as the bot's spend, with no window
+     * identity, no cap binding and no evidence it came from the production ledger. Setting
+     * BOT_SPENT_WEI=0 turned an authoritative fail-closed gate back into an assertion by
+     * whoever typed the command -- and it made the report's "one query, one window" claim
+     * false, because the query could simply be skipped.
+     *
+     * Under --execute it is refused outright. In a dry run it is accepted and labelled
+     * UNTRUSTED, so a rehearsal remains possible on a machine that cannot reach the bot
+     * without that rehearsal ever standing in for admission.
+     */
+    if (EXECUTE) {
+      problems.push(
+        'BOT_SPENT_WEI is set. It is an operator-supplied number with no window identity, ' +
+          'no cap binding and no proof it came from the production ledger, so it cannot ' +
+          'admit a launch. Set BOT_STATUS_URL and let the typed rolling figure be read.'
+      );
+    } else {
+      botSpent = BigInt(process.env.BOT_SPENT_WEI);
+      botSpentSource = 'UNTRUSTED/MANUAL (dry run only; refused under --execute)';
+    }
+  }
+
+  // Under execute the authoritative source is mandatory. Absent it, there is nothing to
+  // check the fee against except a hope.
+  if (EXECUTE && !BOT_STATUS_URL) {
+    problems.push(
+      'BOT_STATUS_URL is required under --execute: the daily cap has to be checked against ' +
+        "the bot's own typed rolling-24h ledger, not against an absent one."
+    );
   }
 
   const admission = admitCanarySpend({
@@ -245,7 +311,7 @@ async function main() {
     capWei: config.DAILY_SPEND_CAP_WEI,
   });
   line('daily cap', `${formatEth(config.DAILY_SPEND_CAP_WEI)} ETH`);
-  line('bot accounted spend', botSpent === null ? 'UNREADABLE' : `${formatEth(botSpent)} ETH`);
+  line('bot accounted spend', botSpent === null ? 'UNREADABLE' : `${formatEth(botSpent)} ETH  [${botSpentSource}]`);
   line('canary journal spend', `${formatEth(journalSpent)} ETH`);
   line(
     'remaining after this',
@@ -353,6 +419,46 @@ async function main() {
    * hash, and a rerun would happily deploy a second splitter because the journal held no
    * unresolved row to refuse on.
    */
+  /**
+   * Re-read, with nothing between this and the first irreversible byte.
+   *
+   * The preflight reading is minutes old by now: the pair was resolved, identity was
+   * re-verified, and a person may have paused to read it all. The circuit breaker is a
+   * live number and the public gate is a live setting, and an old observation of either
+   * is a statement about a moment that has passed.
+   */
+  if (EXECUTE && BOT_STATUS_URL) {
+    const fresh = await fetch(BOT_STATUS_URL);
+    if (!fresh.ok) {
+      console.error(`
+ABORTING: the status endpoint returned HTTP ${fresh.status} immediately before the splitter deploy.`);
+      journal.close();
+      process.exit(1);
+    }
+    const nowSpent = readBotRollingSpend(await fresh.json(), config.DAILY_SPEND_CAP_WEI, {
+      chainId: selected.chainId,
+      deploymentId: selected.id,
+      factory: selected.factory,
+      treasury,
+      maxAgeMs: 60_000,
+      requirePublicLaunchDisabled: true,
+    });
+    const recheck = admitCanarySpend({
+      botSpentWei: nowSpent,
+      journalSpentWei: journal.recordedFeeTotalWei(new Date(Date.now() - 24 * 3600_000).toISOString()),
+      feeWei: fee,
+      capWei: config.DAILY_SPEND_CAP_WEI,
+    });
+    if (!recheck.admitted) {
+      console.error(`
+ABORTING before the splitter deploy: ${recheck.reason}`);
+      console.error('Nothing has been sent and no fee was spent.');
+      journal.close();
+      process.exit(1);
+    }
+    line('re-checked cap', `${formatEth(recheck.remainingAfterWei ?? 0n)} ETH remaining, public gate false`);
+  }
+
   let splitterRowId = -1;
   const { splitterAddress, deployTxHash } = await deploySplitter(
     signer,
@@ -379,11 +485,17 @@ async function main() {
       },
       onSent: (hash) => journal.bindHash(splitterRowId, hash),
       // status null stays `broadcast`: a receipt nobody saw is not a revert.
+      /**
+       * Records the receipt and NOTHING more.
+       *
+       * This marked the row confirmed on status 1 plus a contract address, and the runtime
+       * code was read afterwards. A stale splitter was therefore persisted as terminal
+       * before anything checked what it was -- and if the later check exited, unresolved()
+       * was clean and a rerun could proceed past a permanent invalid contract. Only the
+       * shared verifier below may confirm.
+       */
       onReceipt: (r) => {
         journal.recordReceipt(splitterRowId, { status: r.status });
-        if (r.status === 1 && r.contractAddress) {
-          journal.markConfirmed(splitterRowId, { token: null, splitterAddress: r.contractAddress });
-        }
       },
     }
   );
@@ -400,33 +512,41 @@ async function main() {
   // Reading the selector back out of the chain is the one check that cannot be fooled by a
   // stale build, because it asks the deployed bytecode what it can actually do. It is two
   // lines and it is the difference between a launch and a permanent loss.
+  /**
+   * One verifier, the same one recovery uses.
+   *
+   * These were two inline selector checks here and a third implementation inside recovery.
+   * Selector presence is also weak evidence on its own: four bytes can appear in unrelated
+   * bytecode by accident or by construction. The shared verifier compares the deployed
+   * runtime against the compiled artifact and checks the interface as a secondary signal.
+   */
   const deployedCode = await provider.getCode(splitterAddress);
-  const splitSelector = ethers.id('splitERC20(address)').slice(2, 10);
-  if (!deployedCode.includes(splitSelector)) {
-    console.error('\nABORTING: the deployed splitter has no splitERC20(address).');
-    console.error('That is the ETH-only version. It can receive pons fees and never pay them out.');
-    console.error('Run `node ../compile-all.js` from the repo root and try again.');
-    console.error(`(The splitter at ${splitterAddress} is already deployed but will not be used.)`);
+  const splitterVerdict = verifyDeployedSplitter({
+    receiptStatus: 1,
+    contractAddress: splitterAddress,
+    deployedCode,
+    deployment: selected,
+  });
+
+  if (!splitterVerdict.ok) {
+    journal.markIncidentAnyState(splitterRowId, { problems: splitterVerdict.problems, token: null });
+    console.error();
+    console.error('=== INCIDENT: SPLITTER DEPLOYED, NOT VERIFIED ===');
+    console.error(`  address                    ${splitterAddress}`);
+    console.error(`  tx                         ${deployTxHash}`);
+    console.error(`  journal row                ${splitterRowId} in ${JOURNAL_PATH}, still open`);
+    for (const p of splitterVerdict.problems) console.error(`  - ${p}`);
+    console.error();
+    console.error('  The contract EXISTS and gas is spent. It is recorded as an open incident so');
+    console.error('  a rerun cannot deploy a second one. Do not re-run; settle it by looking:');
+    console.error('    npm run recover:canary');
+    journal.close();
     process.exit(1);
   }
-  line('splitERC20 in code', 'present ✅');
 
-  // The same check, for the failure v2 introduces. On v2 fees are not pushed here at
-  // all -- they are credited to pons's escrow and collected by calling `claimToken`,
-  // which pays msg.sender. A splitter without `claimAndSplit` would therefore be
-  // credited correctly and forever with no transaction able to move the money: the
-  // 2026-08-04 loss again, by a different route, and just as permanent.
-  if (selected.tokenParamsVersion !== 'v1') {
-    const claimSelector = ethers.id('claimAndSplit(address)').slice(2, 10);
-    if (!deployedCode.includes(claimSelector)) {
-      console.error('\nABORTING: the deployed splitter has no claimAndSplit(address).');
-      console.error('That is the v1 splitter. On v2 it can be credited fees it can never claim.');
-      console.error('Run `node ../compile-all.js` from the repo root and try again.');
-      console.error(`(The splitter at ${splitterAddress} is already deployed but will not be used.)`);
-      process.exit(1);
-    }
-    line('claimAndSplit in code', 'present ✅');
-  }
+  // Only now, on a full green verdict, is the splitter row terminal.
+  journal.markConfirmedAnyState(splitterRowId, { token: null, splitterAddress });
+  line('splitter verified', 'runtime matches the compiled artifact ✅');
   console.log();
 
   console.log('2/2  Launching...');
@@ -493,15 +613,45 @@ async function main() {
   journal.bindHash(launchRowId, sent.hash);
   line('tx', sent.hash);
   const receipt = await sent.wait();
-  journal.recordReceipt(launchRowId, { status: receipt ? Number(receipt.status) : 0 });
+  /**
+   * null, not 0.
+   *
+   * This passed `: 0`, which the journal treats as a terminal revert, which drops the row
+   * out of unresolved(), which unblocks a retry of a launch that may well have landed. The
+   * journal was taught to accept null in round 2 and this caller was never changed -- so
+   * the unit test passed against the journal while the executable path stayed broken.
+   */
+  journal.recordReceipt(launchRowId, { status: receipt ? Number(receipt.status) : null });
 
-  if (!receipt || receipt.status !== 1) {
+  /**
+   * Two outcomes, two different things to say.
+   *
+   * These shared one branch, and the prose said "LAUNCH REVERTED ... before retrying" for
+   * both. For a missing receipt that is false and dangerous in the same sentence: nothing
+   * establishes a revert, and the advice is the one action that must not be taken.
+   */
+  if (!receipt) {
     console.error();
-    console.error(decideCanaryPhase({ receiptStatus: receipt ? Number(receipt.status) : null, txHash: sent.hash, confirmation: null }).banner);
-    console.error('\nLAUNCH REVERTED. The preflight passed, so this is new information -- capture the');
-    console.error('revert reason from the explorer before retrying. Note the salt is deterministic:');
-    console.error('a retry with the same symbol predicts the same token address and will revert with');
+    console.error(decideCanaryPhase({ receiptStatus: null, txHash: sent.hash, confirmation: null }).banner);
+    console.error(`\n  tx                         ${sent.hash}`);
+    console.error(`  journal row                ${launchRowId} in ${JOURNAL_PATH}, still open`);
+    console.error('\nNo receipt was seen. That proves neither a revert nor an absence: the');
+    console.error('transaction may have landed while the RPC failed to answer. The row keeps its');
+    console.error('hash and keeps blocking, which is what stops a second permanent launch.');
+    console.error('\n  DO NOT RE-RUN THIS SCRIPT. Settle it by looking:');
+    console.error('    npm run recover:canary');
+    journal.close();
+    process.exit(1);
+  }
+
+  if (receipt.status !== 1) {
+    console.error();
+    console.error(decideCanaryPhase({ receiptStatus: Number(receipt.status), txHash: sent.hash, confirmation: null }).banner);
+    console.error('\nThe preflight passed, so a revert here is new information -- capture the reason');
+    console.error('from the explorer before retrying. Note the salt is deterministic: a retry with');
+    console.error('the same symbol predicts the same token address and will revert with');
     console.error('PoolAlreadyExists if the first attempt actually did deploy.');
+    journal.close();
     process.exit(1);
   }
 
