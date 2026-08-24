@@ -86,7 +86,20 @@ const EPHEMERAL_PREFIXES = ['/app', '/tmp', '/var/tmp', '/run'];
 export class CanaryJournal {
   private db: Database.Database;
 
-  constructor(private file: string) {
+  /**
+   * @param opts.allowEphemeral bypasses the durability check. Tests only.
+   *
+   * It exists because the guard below caught this project's own test suite: on Linux
+   * `os.tmpdir()` IS `/tmp`, so every journal test failed in CI while passing on Windows.
+   * That is the guard working, not a reason to remove it -- a journal under /tmp on an
+   * operator's machine is very nearly as bad as one inside the container.
+   *
+   * Named rather than inferred. A check that quietly relaxed itself when it detected a
+   * test runner would relax itself in production the first time something looked like
+   * one, and nothing would say so. `tests/canaryScriptAuthority.test.ts` asserts the
+   * canary script never passes it.
+   */
+  constructor(private file: string, opts: { allowEphemeral?: boolean } = {}) {
     const resolved = path.resolve(file);
     // Both the raw string and the resolved one. `path.resolve` prepends a drive letter on
     // Windows, so an operator who typed a container path like /app/canary.sqlite would
@@ -94,7 +107,7 @@ export class CanaryJournal {
     // inspected the resolved form.
     const candidates = [file, resolved].map((c) => c.replace(/\\/g, '/'));
     const isEphemeral = (c: string) => EPHEMERAL_PREFIXES.some((e) => c === e || c.startsWith(e + '/'));
-    if (candidates.some(isEphemeral)) {
+    if (!opts.allowEphemeral && candidates.some(isEphemeral)) {
       throw new Error(
         `${file} is ephemeral container storage. The canary journal must be durable operator ` +
           'state: a deploy would erase the record of transactions that are still on chain, and ' +

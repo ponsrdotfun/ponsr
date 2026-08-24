@@ -81,6 +81,22 @@ describe('irreversible actions are journalled before they can happen', () => {
   });
 });
 
+describe('the journal is durable operator state, not container scratch', () => {
+  /**
+   * `allowEphemeral` exists because the durability guard caught this project's own tests:
+   * on Linux `os.tmpdir()` IS `/tmp`, so every journal test failed in CI while passing on
+   * Windows. That is the guard biting, not a reason to soften it -- and the escape hatch
+   * must stay in the tests that need it.
+   */
+  it('never bypasses the durability check', () => {
+    expect(CODE).not.toMatch(/allowEphemeral/);
+  });
+
+  it('defaults to a path a deploy cannot erase', () => {
+    expect(CODE).toMatch(/CANARY_JOURNAL \?\? '\.\/data\/canary-journal\.sqlite'/);
+  });
+});
+
 describe('the daily spend cap is consulted before anything irreversible', () => {
   it('admits through canarySpend rather than balance alone', () => {
     expect(CODE).toMatch(/admitCanarySpend\(/);

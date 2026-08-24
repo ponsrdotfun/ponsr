@@ -63,7 +63,7 @@ const record = (over: Record<string, unknown> = {}) => ({
 });
 
 function journalWithIncident(file: string): { j: CanaryJournal; id: number } {
-  const j = new CanaryJournal(file);
+  const j = new CanaryJournal(file, { allowEphemeral: true });
   const id = j.prepare({
     runId: 'canary-PSTONKS', op: 'token_launch', deploymentId: D.id, chainId: D.chainId,
     to: D.factory, value: FEE, calldata: calldata(),

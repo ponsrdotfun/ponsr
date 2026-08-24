@@ -98,7 +98,7 @@ describe('the fee is recorded exactly once, whatever the outcome', () => {
   let j: CanaryJournal;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-spend-'));
-    j = new CanaryJournal(path.join(dir, 'canary.sqlite'));
+    j = new CanaryJournal(path.join(dir, 'canary.sqlite'), { allowEphemeral: true });
   });
   afterEach(() => {
     j.close();

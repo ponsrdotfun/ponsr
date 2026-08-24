@@ -51,7 +51,7 @@ describe('the canary journal records intent before it can be acted on', () => {
 
   beforeEach(() => {
     ({ dir, file } = tmpJournal());
-    j = new CanaryJournal(file);
+    j = new CanaryJournal(file, { allowEphemeral: true });
   });
   afterEach(() => {
     j.close();
@@ -63,7 +63,7 @@ describe('the canary journal records intent before it can be acted on', () => {
     const id = j.prepare(prepared());
     j.close();
 
-    const reopened = new CanaryJournal(file);
+    const reopened = new CanaryJournal(file, { allowEphemeral: true });
     const open = reopened.unresolved();
     expect(open).toHaveLength(1);
     expect(open[0].id).toBe(id);
@@ -79,7 +79,7 @@ describe('the canary journal records intent before it can be acted on', () => {
     j.bindHash(id, '0xdeadbeef');
     j.close();
 
-    const reopened = new CanaryJournal(file);
+    const reopened = new CanaryJournal(file, { allowEphemeral: true });
     const row = reopened.unresolved()[0];
     expect(row.state).toBe('broadcast');
     expect(row.txHash).toBe('0xdeadbeef');
@@ -162,7 +162,7 @@ describe('the canary journal records intent before it can be acted on', () => {
     const id = j.prepare(prepared());
     j.bindHash(id, '0xdeadbeef');
     j.close();
-    const reopened = new CanaryJournal(file);
+    const reopened = new CanaryJournal(file, { allowEphemeral: true });
     expect(reopened.byId(id)!.txHash).toBe('0xdeadbeef');
     expect(reopened.integrityOk()).toBe(true);
     reopened.close();
