@@ -551,6 +551,8 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
     expectedTokenPlaceholder: ethers.ZeroAddress,
     expectedEscrow: selected.feeEscrow,
     bindings: splitterBindings,
+    // Authority path: the contract must agree, not merely fail to disagree.
+    requireBindings: true,
   });
 
   if (!splitterVerdict.ok) {

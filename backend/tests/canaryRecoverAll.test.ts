@@ -344,3 +344,91 @@ describe('recovery records the launch fee exactly once', () => {
     expect(j.recordedFeeTotalWei()).toBe(0n);
   });
 });
+
+/**
+ * Getter evidence is required, and the operator command actually supplies it.
+ *
+ * The direct path read creator/treasury/token/escrow before confirming. Recovery declared
+ * an optional `readSplitterBindings` and `recover-canary.ts` never passed one — so a crash
+ * between the splitter receipt and the direct getter check was resolved on byte evidence
+ * alone, while the round-4 report claimed the two paths shared an evidence contract.
+ *
+ * Optional was the real defect: a null read produced no problem, so weaker evidence looked
+ * like agreement.
+ */
+describe('recovery requires the splitter to speak for itself', () => {
+  let dir: string;
+  let file: string;
+  let j: CanaryJournal;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-bindings-'));
+    file = path.join(dir, 'canary.sqlite');
+    j = new CanaryJournal(file, { allowEphemeral: true });
+  });
+  afterEach(() => {
+    j.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const base = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
+    resolveDeployment: (id) => (id === D.id ? D : null),
+    readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER }),
+    readLaunchRecord: async () => record(),
+    readCode: async () => GOOD_CODE,
+    treasuryAddress: TREASURY,
+    ...over,
+  });
+
+  it('leaves an incident when the getters cannot be read at all', async () => {
+    const id = splitterRow(j);
+    j.bindHash(id, '0xdeploy');
+    await recoverCanary(j, base({ readSplitterBindings: async () => { throw new Error('RPC down'); } }));
+    const row = j.byId(id)!;
+    expect(row.state).toBe('confirmed_incident');
+    expect(row.problems.join(' ')).toMatch(/getters could not be read|immutable/i);
+  });
+
+  it('leaves an incident when no getter reader is supplied at all', async () => {
+    const id = splitterRow(j);
+    j.bindHash(id, '0xdeploy');
+    await recoverCanary(j, base());
+    expect(j.byId(id)!.state).toBe('confirmed_incident');
+  });
+
+  /** A contract that names someone else's treasury is refused whatever the bytes say. */
+  it('leaves an incident when a getter names a foreign address', async () => {
+    const id = splitterRow(j);
+    j.bindHash(id, '0xdeploy');
+    await recoverCanary(
+      j,
+      base({
+        readSplitterBindings: async () => ({
+          creator: TREASURY,
+          treasury: '0x000000000000000000000000000000000000dEaD',
+          token: '0x0000000000000000000000000000000000000000',
+          escrow: D.feeEscrow,
+        }),
+      })
+    );
+    expect(j.byId(id)!.state).toBe('confirmed_incident');
+  });
+});
+
+/**
+ * The operator command must wire what the contract requires.
+ *
+ * A source-level check, because instantiating recover-canary.ts needs a provider and a
+ * journal on disk. It is a sentinel, not the proof — the behavioural proof is above — but
+ * the omission it guards against was invisible for a whole review round.
+ */
+describe('the operator recovery command supplies the getter reader', () => {
+  it('passes readSplitterBindings', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../scripts/recover-canary.ts'), 'utf8');
+    expect(src).toMatch(/readSplitterBindings:/);
+    expect(src).toMatch(/creator\(\)/);
+    expect(src).toMatch(/treasury\(\)/);
+    expect(src).toMatch(/token\(\)/);
+    // v1 has no escrow, so asking one for it would fail a correct contract.
+    expect(src).toMatch(/escrow-credit/);
+  });
+});

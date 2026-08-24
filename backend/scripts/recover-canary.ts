@@ -83,6 +83,33 @@ async function main() {
       };
     },
     readCode: (address) => provider.getCode(address),
+    /**
+     * The splitter's own answer about where it sends money.
+     *
+     * This was missing, and the round-4 report claimed recovery supplied it. So the direct
+     * path read creator/treasury/token/escrow while recovery verified bytes alone -- and a
+     * crash between the splitter receipt and the direct getter check was resolved on
+     * weaker evidence than the one it replaced, silently.
+     *
+     * The verifier now requires these on both authority paths, so a read that fails is a
+     * blocking incident rather than an absence nobody notices.
+     */
+    readSplitterBindings: async (address: string, deployment: PonsDeployment) => {
+      const abi = [
+        'function creator() view returns (address)',
+        'function treasury() view returns (address)',
+        'function token() view returns (address)',
+        'function escrow() view returns (address)',
+      ];
+      const c = new ethers.Contract(address, abi, provider);
+      return {
+        creator: String(await c.creator()),
+        treasury: String(await c.treasury()),
+        token: String(await c.token()),
+        // Only v2 credits an escrow; asking v1 for one would fail on a correct contract.
+        ...(deployment.feeModel === 'escrow-credit' ? { escrow: String(await c.escrow()) } : {}),
+      };
+    },
     treasuryAddress: treasury,
   });
 

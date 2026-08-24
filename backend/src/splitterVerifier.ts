@@ -50,6 +50,19 @@ export interface SplitterEvidence {
   expectedEscrow: string;
   /** The contract's own view of its bindings, read independently of the bytes. */
   bindings?: SplitterBindings | null;
+  /**
+   * Whether getter evidence is mandatory.
+   *
+   * True on every authority-bearing path -- the direct canary and operator recovery. It
+   * was optional, and optional meant a null read produced no problem at all, so a splitter
+   * whose getters could not be reached was verified on bytes alone while the report claimed
+   * two independent lines of evidence. An optional default that silently weakens an
+   * authority path is worse than no default.
+   *
+   * Left false for the pure unit tests that have no chain to read from, which is the only
+   * legitimate reason to omit it.
+   */
+  requireBindings?: boolean;
 }
 
 export interface SplitterVerdict {
@@ -218,6 +231,17 @@ export function verifyDeployedSplitter(evidence: SplitterEvidence): SplitterVerd
    * this process assembled. Optional because a caller may have no provider, and its
    * absence is reported rather than treated as agreement.
    */
+  if (evidence.requireBindings && !evidence.bindings) {
+    // Unavailable is not agreement. A getter that could not be read has told us nothing,
+    // and treating silence as confirmation is how a check stops being one.
+    problems.push(
+      `the splitter's own creator/treasury/token${
+        evidence.deployment.feeModel === 'escrow-credit' ? '/escrow' : ''
+      } getters could not be read at ${evidence.contractAddress}. Byte evidence alone is not ` +
+        'sufficient on this path: the contract has to agree about where it sends money.'
+    );
+  }
+
   if (evidence.bindings) {
     const b = evidence.bindings;
     const same = (a: string | undefined, e: string) =>

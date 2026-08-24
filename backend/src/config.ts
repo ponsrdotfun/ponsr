@@ -13,6 +13,25 @@ dotenv.config();
  * check for their own required config at the point of use and fail loudly there, rather than
  * the whole process refusing to start over an unrelated missing key.
  */
+/**
+ * Reads an operator's yes or no exactly as written.
+ *
+ * `z.coerce.boolean()` is JavaScript truthiness: every non-empty string is true, so
+ * "false" and "0" both parsed as TRUE. Applied to TURNKEY_POLICY_CONFIRMED that inverted
+ * the one setting whose entire job is to let somebody say "I have NOT verified the signer
+ * policy" -- and treasurySigner.ts refuses to start in production without it. An operator
+ * writing false got a process that started anyway, holding a signer.
+ *
+ * Tolerant about shape, strict about meaning: case and surrounding whitespace are ignored,
+ * and anything not recognisably "true" is a refusal. Erring toward false costs a startup
+ * and a puzzled operator; erring toward true starts on the strength of a word that said no.
+ */
+export function parseAcknowledgement(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return false;
+  return value.trim().toLowerCase() === 'true';
+}
+
 const ConfigSchema = z.object({
   // -- LLM parser (Part 9: Claude Haiku 4.5 is the chosen model) --
   ANTHROPIC_API_KEY: z.string().optional(),
