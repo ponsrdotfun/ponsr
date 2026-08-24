@@ -1,0 +1,391 @@
+import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as http from 'http';
+import * as os from 'os';
+import * as path from 'path';
+import { pathToFileURL } from 'url';
+
+/**
+ * 5A: proving the dry run never reads a credential, by watching it run.
+ *
+ * The claim under test is narrow and was previously false. The canary dry run constructed no
+ * signer and requested no signature -- both true -- and was described as "keyless". But
+ * `import { config }` runs `dotenv.config()` at module load and parses every credential field,
+ * so on a machine with a populated `backend/.env` the process read the Turnkey API private
+ * key, the raw treasury key and every third-party token before doing anything.
+ *
+ * Source inspection cannot settle this. A transitive import four modules deep is invisible to
+ * a reading, and so is a file opened by a dependency. So the dry run is SPAWNED with an
+ * instrumented `fs` and `Module._load` (tests/fixtures/importProbe.cjs), against a `.env`
+ * whose values are sentinels, and the evidence is what the process actually touched.
+ *
+ * Nothing here reaches a real network: RPC_URL points at a local mock on 127.0.0.1.
+ */
+
+const ROOT = path.join(__dirname, '..');
+const PROBE = path.join(__dirname, 'fixtures', 'importProbe.cjs');
+/**
+ * The tsx ESM loader, as an absolute file URL.
+ *
+ * A bare `--import tsx` is resolved against the child's CWD, which is a temporary directory
+ * with no node_modules, so the process died before loading anything and the probe reported an
+ * empty run. The URL form pins it to this repository's own installation.
+ */
+const TSX_ESM = pathToFileURL(
+  path.join(ROOT, 'node_modules', 'tsx', 'dist', 'esm', 'index.mjs')
+).href;
+/**
+ * The CJS half of tsx, needed as well.
+ *
+ * With only the ESM loader registered, the entrypoint was resolved through CommonJS `require`
+ * and died on `Cannot find module '../src/preflightEnv'` -- TypeScript sources are invisible
+ * to plain `require`. Both halves are registered so the script loads exactly as it does under
+ * the normal `tsx` CLI, while staying in one process the probe can observe.
+ */
+const TSX_CJS = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cjs', 'index.cjs');
+
+/**
+ * A sentinel that must never be read. If the mixed .env is opened, these bytes enter the
+ * process, and the file-open evidence below is what catches it.
+ */
+const SENTINEL = 'SENTINEL-CREDENTIAL-MUST-NEVER-BE-READ';
+
+interface ProbeReport {
+  opened: string[];
+  loaded: string[];
+}
+
+/** A JSON-RPC endpoint that answers from canned values and touches no network. */
+function startMockRpc(): Promise<{ url: string; close: () => Promise<void>; calls: string[] }> {
+  const calls: string[] = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          payload = {};
+        }
+        const one = (m: { method?: string; id?: unknown }) => {
+          calls.push(m.method ?? '?');
+          const answers: Record<string, unknown> = {
+            eth_chainId: '0x1237', // 4663
+            net_version: '4663',
+            eth_blockNumber: '0x2b0f2f4',
+            eth_getBalance: '0x2386f26fc10000',
+            eth_gasPrice: '0x3b9aca00',
+            eth_getCode: '0x60006000',
+            eth_getLogs: [],
+            eth_call: '0x' + '0'.repeat(64),
+            eth_estimateGas: '0x33450',
+            eth_getTransactionCount: '0x7',
+          };
+          return { jsonrpc: '2.0', id: (m as { id?: unknown }).id ?? 1, result: answers[m.method ?? ''] ?? null };
+        };
+        const out = Array.isArray(payload) ? payload.map(one) : one(payload as { method?: string });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(out));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        calls,
+        close: () =>
+          new Promise((done) => {
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
+/**
+ * Runs the canary entrypoint in a throwaway working directory holding a sentinel `.env`.
+ *
+ * The cwd matters: `dotenv.config()` resolves `.env` relative to the working directory, so a
+ * temporary one with a poisoned file is what makes "was it opened?" a meaningful question.
+ */
+async function runCanary(opts: {
+  rpcUrl: string;
+  execute?: boolean;
+  envCanary?: string;
+  extraEnv?: Record<string, string>;
+}): Promise<{ report: ProbeReport; stdout: string; stderr: string; status: number | null; envPath: string }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-5a-'));
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(
+    envPath,
+    [
+      `TURNKEY_API_PRIVATE_KEY=${SENTINEL}`,
+      `TREASURY_SIGNER_PRIVATE_KEY=${SENTINEL}`,
+      `OPENROUTER_API_KEY=${SENTINEL}`,
+      `TELEGRAM_BOT_TOKEN=${SENTINEL}`,
+      `X_API_SECRET=${SENTINEL}`,
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+  if (opts.envCanary !== undefined) {
+    fs.writeFileSync(path.join(dir, '.env.canary'), opts.envCanary, 'utf8');
+  }
+  const probeOut = path.join(dir, 'probe.json');
+
+  /**
+   * The probe is preloaded through argv rather than NODE_OPTIONS.
+   *
+   * NODE_OPTIONS took the Windows path with escaped backslashes and the child failed before
+   * printing anything, which read as "the dry run produced no output" rather than "the
+   * harness is broken" -- an instrumentation bug that would have looked like evidence.
+   */
+  /**
+   * `--import tsx` keeps the script in THIS process; the `tsx` CLI spawns its own child.
+   *
+   * With the CLI, the `-r` preload attached to the wrapper and the real script ran in a
+   * grandchild the probe never saw, so the report came back empty -- which every assertion
+   * below would have read as "touched nothing at all". Registering tsx in-process is what
+   * makes the instrumentation observe the code under test rather than its launcher.
+   */
+  const args = ['-r', PROBE, '-r', TSX_CJS, '--import', TSX_ESM, path.join(ROOT, 'scripts', 'phase-b-launch.ts')];
+  if (opts.execute) args.push('--execute');
+
+  /**
+   * ASYNCHRONOUS, and that is not a style choice.
+   *
+   * `spawnSync` blocks this process's event loop, so the in-process mock RPC below could
+   * never answer and the child waited for a reply that could not arrive. Every run timed out
+   * with an empty probe file, which read as "the dry run touched nothing" -- a broken harness
+   * producing what looked like perfect evidence. The `produced runtime evidence at all` test
+   * exists because of it.
+   */
+  const child = spawn(process.execPath, args, {
+    cwd: dir,
+    env: {
+      ...process.env,
+      PONSR_PROBE_OUT: probeOut,
+      RPC_URL: opts.rpcUrl,
+      CHAIN_ID: '4663',
+      PONS_FACTORY_VERSION: 'v2',
+      TREASURY_ADDRESS: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+      CANARY_JOURNAL: path.join(dir, 'canary.sqlite'),
+      // Not inherited from the developer's own shell.
+      TURNKEY_API_PRIVATE_KEY: '',
+      TURNKEY_SIGN_WITH: '',
+      TREASURY_SIGNER_PRIVATE_KEY: '',
+      ...opts.extraEnv,
+    },
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (c) => (stdout += c));
+  child.stderr.on('data', (c) => (stderr += c));
+
+  const status = await new Promise<number | null>((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(null);
+    }, 90000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+
+  const report: ProbeReport = fs.existsSync(probeOut)
+    ? JSON.parse(fs.readFileSync(probeOut, 'utf8'))
+    : { opened: [], loaded: [] };
+  return { report, stdout, stderr, status, envPath };
+}
+
+const openedMixedEnv = (r: ProbeReport, envPath: string) =>
+  r.opened.some((p) => path.resolve(p) === path.resolve(envPath));
+
+const loadedMatching = (r: ProbeReport, re: RegExp) => r.loaded.filter((m) => re.test(m));
+
+describe('the keyless dry run never reads a credential', () => {
+  let rpc: Awaited<ReturnType<typeof startMockRpc>>;
+  let run: Awaited<ReturnType<typeof runCanary>>;
+
+  beforeAll(async () => {
+    rpc = await startMockRpc();
+    run = await runCanary({ rpcUrl: rpc.url });
+  }, 180000);
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  it('produced runtime evidence at all', () => {
+    // A probe that recorded nothing would make every assertion below vacuously true.
+    expect(run.report.loaded.length).toBeGreaterThan(10);
+    expect(run.report.opened.length).toBeGreaterThan(0);
+  });
+
+  /** The finding itself: the mixed credential file must never be opened. */
+  it('never opens the mixed backend/.env', () => {
+    expect(openedMixedEnv(run.report, run.envPath)).toBe(false);
+  });
+
+  it('never loads the dotenv bootstrap', () => {
+    expect(loadedMatching(run.report, /(^|[\\/])dotenv([\\/]|$)/)).toEqual([]);
+  });
+
+  it('never loads the full credential config module', () => {
+    expect(loadedMatching(run.report, /[\\/]src[\\/]config\.ts$|[\\/]src[\\/]config\.js$/)).toEqual([]);
+  });
+
+  it('never loads the treasury signer or the Turnkey SDK', () => {
+    expect(loadedMatching(run.report, /treasurySigner/)).toEqual([]);
+    expect(loadedMatching(run.report, /@turnkey/)).toEqual([]);
+  });
+
+  it('never prints a sentinel credential value', () => {
+    expect(run.stdout).not.toContain(SENTINEL);
+    expect(run.stderr).not.toContain(SENTINEL);
+  });
+
+  /**
+   * The dry run still does its job on secret-free input.
+   *
+   * Without this, "reads no credentials" could be satisfied by a process that does nothing at
+   * all. It must reach the preflight and answer from the non-secret environment.
+   */
+  it('still reaches the preflight using only non-secret settings', () => {
+    expect(run.stdout).toContain('DRY RUN');
+    expect(run.stdout).toContain('Chain');
+    expect(run.stdout).toContain(rpc.url);
+    expect(run.stdout).toContain('Treasury');
+    // The pinned treasury came from TREASURY_ADDRESS, with no signer anywhere.
+    expect(run.stdout).toContain('0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa');
+    expect(run.stdout).toContain('no signer loaded');
+  });
+
+  it('made real RPC calls, so the preflight was genuinely exercised', () => {
+    expect(rpc.calls).toContain('eth_chainId');
+    expect(rpc.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe('the secret-free source refuses to serve credentials', () => {
+  it('throws rather than reading a credential name', async () => {
+    const { preflightEnv, REFUSED_CREDENTIAL_NAMES } = await import('../src/preflightEnv');
+    expect(REFUSED_CREDENTIAL_NAMES).toContain('TURNKEY_API_PRIVATE_KEY');
+    // The schema itself contains no credential field, so a caller cannot reach one.
+    const env = preflightEnv();
+    for (const name of REFUSED_CREDENTIAL_NAMES) {
+      expect(Object.keys(env)).not.toContain(name);
+    }
+  });
+
+  it('refuses a .env.canary that smuggles a credential in', async () => {
+    const rpc = await startMockRpc();
+    try {
+      const run = await runCanary({
+        rpcUrl: rpc.url,
+        envCanary: `TURNKEY_API_PRIVATE_KEY=${SENTINEL}\n`,
+      });
+      expect(run.status).not.toBe(0);
+      expect(run.stderr + run.stdout).toMatch(/must hold no secrets|is a credential/);
+    } finally {
+      await rpc.close();
+    }
+  }, 180000);
+
+  it('reads non-secret values from .env.canary when the process env is silent', async () => {
+    const rpc = await startMockRpc();
+    try {
+      const run = await runCanary({
+        rpcUrl: rpc.url,
+        envCanary: 'PONS_FACTORY_VERSION=v2\n',
+        extraEnv: { PONS_FACTORY_VERSION: '' },
+      });
+      expect(openedMixedEnv(run.report, run.envPath)).toBe(false);
+      expect(run.stdout).toContain('DRY RUN');
+    } finally {
+      await rpc.close();
+    }
+  }, 180000);
+});
+
+/**
+ * The other half of the boundary: the credentials must still be reachable AFTER the gate.
+ *
+ * A dry run that reads nothing is only half the requirement. If `--execute` could not load the
+ * signer, the split would have been achieved by breaking the thing it protects.
+ */
+describe('the execute gate is where credential loading begins', () => {
+  let rpc: Awaited<ReturnType<typeof startMockRpc>>;
+  let run: Awaited<ReturnType<typeof runCanary>>;
+
+  beforeAll(async () => {
+    rpc = await startMockRpc();
+    run = await runCanary({ rpcUrl: rpc.url, execute: true });
+  }, 180000);
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  it('fails without ever signing or broadcasting, because no credentials are present', () => {
+    expect(run.status).not.toBe(0);
+    // Whatever refused it, nothing was signed and nothing went out.
+    expect(run.stdout + run.stderr).not.toMatch(/broadcast(ing)? transaction/i);
+  });
+
+  it('never leaks a sentinel even on the execute path', () => {
+    expect(run.stdout).not.toContain(SENTINEL);
+    expect(run.stderr).not.toContain(SENTINEL);
+  });
+});
+
+/**
+ * The regression guard the brief asks for: a transitive import of full config or signer
+ * authority anywhere in the preflight graph must fail this test, not merely be noticed later.
+ */
+describe('no preflight dependency imports credential authority', () => {
+  it('has no static import path from the canary entrypoint to config or the signer', () => {
+    const seen = new Set<string>();
+    const offenders: string[] = [];
+
+    const staticImports = (file: string): string[] => {
+      const src = fs.readFileSync(file, 'utf8');
+      const out: string[] = [];
+      /**
+       * Static value imports only.
+       *
+       * `await import()` is excluded because that is exactly the mechanism the execute gate
+       * uses. `import type` is excluded because TypeScript erases it: no module is loaded at
+       * runtime, which the spawned-process evidence above independently confirms.
+       */
+      const re = /^[ \t]*import[ \t]+(?!type[ \t])[^;]*?from[ \t]*['"](\.[^'"]+)['"]/gm;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src))) {
+        const resolved = path.resolve(path.dirname(file), m[1]);
+        if (fs.existsSync(resolved + '.ts')) out.push(resolved + '.ts');
+      }
+      return out;
+    };
+
+    const forbidden = [path.resolve(ROOT, 'src', 'config.ts')];
+
+    const walk = (file: string, chain: string[]) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      for (const dep of staticImports(file)) {
+        const trail = [...chain, path.basename(file), path.basename(dep)];
+        if (forbidden.includes(dep)) offenders.push(trail.join(' -> '));
+        else walk(dep, [...chain, path.basename(file)]);
+      }
+    };
+
+    walk(path.resolve(ROOT, 'scripts', 'phase-b-launch.ts'), []);
+    expect(offenders).toEqual([]);
+  });
+});

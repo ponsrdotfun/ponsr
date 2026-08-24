@@ -15,11 +15,20 @@ const SRC = fs.readFileSync(path.join(__dirname, '../scripts/phase-b-launch.ts')
 const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 describe('the dry run cannot spend anything', () => {
-  it('reaches sendTransaction only after the EXECUTE gate', () => {
+  /**
+   * Re-anchored from `signer.sendTransaction`, which the script no longer contains: signing
+   * and broadcasting are separate steps now. The property is unchanged and is if anything
+   * stricter, because SIGNING is the earlier of the two and is what must sit behind the gate.
+   */
+  it('reaches signing only after the EXECUTE gate', () => {
     const gate = CODE.indexOf('if (!EXECUTE)');
-    const send = CODE.indexOf('signer.sendTransaction');
+    const sign = CODE.indexOf('signAndPersist(');
     expect(gate).toBeGreaterThan(-1);
-    expect(send).toBeGreaterThan(gate);
+    expect(sign).toBeGreaterThan(gate);
+  });
+
+  it('reaches broadcasting only after the EXECUTE gate', () => {
+    expect(CODE.indexOf('broadcastPersisted(')).toBeGreaterThan(CODE.indexOf('if (!EXECUTE)'));
   });
 
   it('reaches the splitter deployment only after the same gate', () => {
@@ -68,25 +77,54 @@ describe('success language is ordered behind the verdict', () => {
 });
 
 describe('irreversible actions are journalled before they can happen', () => {
-  it('prepares the journal row before the launch is sent', () => {
-    const prepare = CODE.indexOf("op: 'token_launch'");
-    const send = CODE.indexOf('signer.sendTransaction');
-    expect(prepare).toBeGreaterThan(-1);
-    expect(prepare).toBeLessThan(send);
+  /**
+   * The script no longer contains `signer.sendTransaction` at all.
+   *
+   * These sentinels used to anchor on it, and that anchor disappeared when signing was split
+   * from broadcasting: the script now signs, persists the identity, and only then hands the
+   * exact bytes to `broadcastPersisted`. The invariants are unchanged and are re-anchored on
+   * the new irreversible point rather than relaxed.
+   */
+  const firstBroadcast = () => CODE.indexOf('broadcastPersisted(');
+
+  it('never signs and broadcasts in one call', () => {
+    expect(CODE).not.toMatch(/signer\.sendTransaction/);
   });
 
-  it('binds the transaction hash before awaiting the receipt', () => {
-    const bind = CODE.indexOf('journal.bindHash(');
+  /**
+   * Anchored on the LAUNCH's own row, not on the first signature in the file — the first one
+   * belongs to the splitter creation and legitimately runs earlier.
+   */
+  it('prepares the journal row before the launch is signed', () => {
+    const prepare = CODE.indexOf("op: 'token_launch'");
+    const signLaunch = CODE.indexOf('launchRowId,');
+    expect(prepare).toBeGreaterThan(-1);
+    expect(signLaunch).toBeGreaterThan(-1);
+    expect(prepare).toBeLessThan(signLaunch);
+  });
+
+  /** The identity is durable before the bytes can go out, for BOTH operations. */
+  it('signs and persists before any broadcast is reachable', () => {
+    expect(CODE.indexOf('signAndPersist(')).toBeLessThan(firstBroadcast());
+    // Two operations, two independent identities: splitter creation and the launch.
+    expect(CODE.split('signAndPersist(').length - 1).toBeGreaterThanOrEqual(2);
+    expect(CODE.split('broadcastPersisted(').length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  it('awaits the receipt only after the broadcast of persisted bytes', () => {
     const wait = CODE.indexOf('await sent.wait()');
-    expect(bind).toBeGreaterThan(-1);
-    expect(bind).toBeLessThan(wait);
+    expect(wait).toBeGreaterThan(-1);
+    expect(firstBroadcast()).toBeLessThan(wait);
   });
 
   it('refuses to start while the journal holds unresolved work', () => {
     expect(CODE).toMatch(/journal\.unresolved\(\)/);
-    const check = CODE.indexOf('journal.unresolved()');
-    const send = CODE.indexOf('signer.sendTransaction');
-    expect(check).toBeLessThan(send);
+    expect(CODE.indexOf('journal.unresolved()')).toBeLessThan(firstBroadcast());
+  });
+
+  /** The legacy hash-binding path must never appear in an executable script. */
+  it('never uses the pre-identity legacy binding', () => {
+    expect(CODE).not.toMatch(/bindHashLegacy/);
   });
 });
 

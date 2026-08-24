@@ -53,7 +53,7 @@ describe('a missing receipt is ambiguous, never reverted', () => {
 
   it('leaves a hash-bound row nonterminal when no receipt arrives', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: null });
 
     const row = j.byId(id)!;
@@ -64,7 +64,7 @@ describe('a missing receipt is ambiguous, never reverted', () => {
 
   it('keeps blocking a replacement after a missing receipt', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: null });
 
     expect(j.unresolved().map((r) => r.id)).toContain(id);
@@ -74,7 +74,7 @@ describe('a missing receipt is ambiguous, never reverted', () => {
   /** An actual status 0 IS terminal. The distinction is the whole point. */
   it('still records a real reverted receipt as terminal', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 0 });
     expect(j.byId(id)!.state).toBe('receipt_reverted');
     expect(j.unresolved()).toHaveLength(0);
@@ -82,7 +82,7 @@ describe('a missing receipt is ambiguous, never reverted', () => {
 
   it('records no launch fee for an ambiguous receipt', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: null });
     expect(() => j.recordFee(id, FEE)).toThrow();
     expect(j.recordedFeeTotalWei()).toBe(0n);

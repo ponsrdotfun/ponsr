@@ -69,7 +69,7 @@ function journalWithIncident(file: string): { j: CanaryJournal; id: number } {
     to: D.factory, value: FEE, calldata: calldata(),
     tokenName: 'PONSR STONKS', tokenSymbol: 'PSTONKS', splitterAddress: SPLITTER,
   });
-  j.bindHash(id, '0x' + 'ab'.repeat(32));
+  j.bindHashLegacy(id, '0x' + 'ab'.repeat(32));
   j.recordReceipt(id, { status: 1 });
   j.markIncident(id, { problems: ['factory record unavailable'], token: null });
   return { j, id };

@@ -93,10 +93,16 @@ describe('the script keeps the signer behind the execute gate', () => {
     expect(check).toBeLessThan(prepare);
   });
 
-  it('refuses raw-key on mainnet before anything is sent', () => {
+  /**
+   * Re-anchored on signing. The script no longer has a combined send, and signing is now the
+   * first irreversible-adjacent act: a raw key on mainnet must be refused before it is asked
+   * to produce broadcastable bytes, not merely before those bytes go out.
+   */
+  it('refuses raw-key on mainnet before anything is signed', () => {
     const guard = CODE.indexOf('assertRawKeyNotOnMainnet(');
-    const send = CODE.indexOf('signer.sendTransaction');
+    const sign = CODE.indexOf('signAndPersist(');
     expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(send);
+    expect(sign).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(sign);
   });
 });

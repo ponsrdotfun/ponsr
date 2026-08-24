@@ -112,7 +112,7 @@ describe('the fee is recorded exactly once, whatever the outcome', () => {
 
   it('records the fee on a reconciled launch', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 1 });
     expect(j.recordFee(id, FEE)).toBe(true);
     expect(j.recordedFeeTotalWei()).toBe(FEE);
@@ -121,7 +121,7 @@ describe('the fee is recorded exactly once, whatever the outcome', () => {
   /** A landed-but-unreconciled launch spent the fee just as surely. */
   it('records the fee on an unreconciled launch too', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 1 });
     j.markIncident(id, { problems: ['mismatch'], token: null });
     expect(j.recordFee(id, FEE)).toBe(true);
@@ -130,7 +130,7 @@ describe('the fee is recorded exactly once, whatever the outcome', () => {
 
   it('does not double-count when recovery runs again', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 1 });
     j.recordFee(id, FEE);
     expect(j.recordFee(id, FEE)).toBe(false);
@@ -146,7 +146,7 @@ describe('the fee is recorded exactly once, whatever the outcome', () => {
    */
   it('records no launch fee for a reverted receipt', () => {
     const id = j.prepare(prep());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 0 });
     expect(j.byId(id)!.state).toBe('receipt_reverted');
     expect(j.recordedFeeTotalWei()).toBe(0n);

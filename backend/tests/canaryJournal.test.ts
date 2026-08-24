@@ -76,7 +76,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 2. Crash after send returns, before wait completes. */
   it('recovers the transaction hash bound the instant send returned', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.close();
 
     const reopened = new CanaryJournal(file, { allowEphemeral: true });
@@ -89,7 +89,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 3. Receipt never arrives. Ambiguous is a state, not an excuse to send again. */
   it('keeps a hash-bound row ambiguous and refuses a replacement payload', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
 
     expect(() => j.prepare(prepared())).toThrow(/unresolved/i);
     expect(j.unresolved()).toHaveLength(1);
@@ -99,7 +99,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 4. Reverted is terminal. */
   it('records a reverted receipt as terminal, and does not reopen it', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.recordReceipt(id, { status: 0 });
     expect(j.unresolved()).toHaveLength(0);
     expect(j.byId(id)!.state).toBe('receipt_reverted');
@@ -108,7 +108,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 5. Landed but unreconciled is durable, and is not failure. */
   it('records a landed-but-unreconciled launch as a confirmed incident', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.recordReceipt(id, { status: 1 });
     j.markIncident(id, { problems: ['creatorFeeRecipient disagrees'], token: '0xtoken' });
 
@@ -123,7 +123,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 6. Recovery twice changes nothing. */
   it('is idempotent across repeated recovery passes', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.recordReceipt(id, { status: 1 });
     j.markIncident(id, { problems: ['x'], token: null });
 
@@ -140,7 +140,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** 7. The same run cannot launch twice. */
   it('refuses a second launch for a run that already succeeded', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.recordReceipt(id, { status: 1 });
     j.markConfirmed(id, { token: '0xtoken' });
     expect(j.unresolved()).toHaveLength(0);
@@ -151,7 +151,7 @@ describe('the canary journal records intent before it can be acted on', () => {
   /** A splitter deploy and a launch are different operations within one run. */
   it('allows the launch after the splitter deploy of the same run has settled', () => {
     const s = j.prepare(prepared('splitter_deploy'));
-    j.bindHash(s, '0xsplitter');
+    j.bindHashLegacy(s, '0xsplitter');
     j.recordReceipt(s, { status: 1 });
     j.markConfirmed(s, { token: null });
 
@@ -160,7 +160,7 @@ describe('the canary journal records intent before it can be acted on', () => {
 
   it('survives reopen with WAL and reports the same rows', () => {
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xdeadbeef');
+    j.bindHashLegacy(id, '0xdeadbeef');
     j.close();
     const reopened = new CanaryJournal(file, { allowEphemeral: true });
     expect(reopened.byId(id)!.txHash).toBe('0xdeadbeef');
@@ -245,7 +245,7 @@ describe('an older journal is migrated rather than rejected', () => {
     const { dir, file } = tmpJournal();
     const j = new CanaryJournal(file, { allowEphemeral: true });
     const id = j.prepare(prepared());
-    j.bindHash(id, '0xabc');
+    j.bindHashLegacy(id, '0xabc');
     j.recordReceipt(id, { status: 1 });
     j.recordFee(id, 500_000_000_000_000n);
     const at = j.byId(id)!.feeRecordedAt;
