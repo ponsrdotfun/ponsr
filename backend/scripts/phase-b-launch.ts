@@ -82,7 +82,39 @@ function line(label: string, value: unknown) {
   console.log(`  ${label.padEnd(26)} ${value}`);
 }
 
-async function main() {
+/**
+ * Bounded read-only substitutes for the chain reads the preflight makes.
+ *
+ * WHY THIS EXISTS. The completion proof for the secret-free dry run has to watch a REAL run
+ * finish -- exit 0, terminal line, instrumentation active throughout -- and the preflight
+ * verifies the factory's deployed runtime against a recorded sha256 of 24,177 bytes. No mock
+ * RPC can produce bytes that hash to that, and reading the live chain is not available to a
+ * repository-only task. So the entrypoint accepts substitutes for exactly those reads.
+ *
+ * WHY IT CANNOT WEAKEN EXECUTE. They are dropped unconditionally when `--execute` is present,
+ * before any of them can be consulted, and a test asserts that. There is no flag, no
+ * environment variable and no ordering that lets a substitute reach a run that spends money:
+ * the one branch that signs and broadcasts always uses the real implementations.
+ */
+export interface DryRunOverrides {
+  assertIdentity?: typeof assertDeploymentIdentity;
+  readReadiness?: typeof getLaunchReadiness;
+  readFee?: typeof getLiveFeeWei;
+  resolvePair?: typeof resolveCanaryPair;
+}
+
+export async function main(overrides: DryRunOverrides = {}) {
+  /**
+   * Dropped for an executing run, at the top, before anything reads them.
+   *
+   * Written as a rebinding rather than a check at each use site, so a later call that forgets
+   * to ask cannot reintroduce the hole.
+   */
+  const sub: DryRunOverrides = EXECUTE ? {} : overrides;
+  const assertIdentityFn = sub.assertIdentity ?? assertDeploymentIdentity;
+  const readReadinessFn = sub.readReadiness ?? getLaunchReadiness;
+  const readFeeFn = sub.readFee ?? getLiveFeeWei;
+  const resolvePairFn = sub.resolvePair ?? resolveCanaryPair;
   console.log(EXECUTE ? '=== PHASE B — EXECUTING (real transactions) ===' : '=== PHASE B — DRY RUN (nothing is sent) ===');
   console.log();
 
@@ -182,13 +214,13 @@ async function main() {
   // A green `canLaunch` from an unexpected contract is not reassurance. It is the most
   // dangerous reading available, because everything after it looks like a go-ahead.
   if (selected.tokenParamsVersion !== 'v1') {
-    await assertDeploymentIdentity(selected, provider);
+    await assertIdentityFn(selected, provider);
     line('identity', 'chain id, runtime hash, ABI hash, selector and escrow all match');
   }
 
   // Asked of the SELECTED deployment. Read from a global it describes a contract this
   // run is not calling.
-  const readiness = await getLaunchReadiness(
+  const readiness = await readReadinessFn(
     provider,
     treasury,
     preflightEnv().PONS_LAUNCH_CONFIG_ID,
@@ -202,7 +234,7 @@ async function main() {
   line('pairToken', readiness.pairToken);
 
   // Priced by the same contract that will be called.
-  const fee = await getLiveFeeWei(provider, selected);
+  const fee = await readFeeFn(provider, selected);
   line('launchFee (live)', `${formatEth(fee)} ETH`);
 
   const problems: string[] = [];
@@ -360,7 +392,7 @@ async function main() {
   );
   let pairAsset: PairAsset;
   try {
-    const resolvedPair = await resolveCanaryPair(process.env.PAIR_WITH, {
+    const resolvedPair = await resolvePairFn(process.env.PAIR_WITH, {
       deployment: selected,
       supportsPairing: target.supportsPairing,
       resolve: (typed) =>
@@ -526,6 +558,16 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
           to: null, // a true contract creation, not a call to a placeholder
           data: initcode,
           value: 0n,
+          /**
+           * A creation carries NOTHING. Zero is not a formality here: a funded contract
+           * creation is the exact finding closed in the Turnkey policy on 2026-08-22, because
+           * a creation's value lands in the contract being created and the sender writes that
+           * contract. The signer would refuse it; this refuses it earlier, and says why.
+           *
+           * Gas is budgeted separately from value, and from the reserve that exists precisely
+           * so both transactions of one launch can pay for themselves.
+           */
+          ceilings: { maxValueWei: 0n, maxGasCostWei: preflightEnv().TREASURY_GAS_RESERVE_WEI },
         });
         return broadcastPersisted({ broadcaster }, journal, splitterRowId);
       },
@@ -685,7 +727,25 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
     { signer: preSigner, broadcaster },
     journal,
     launchRowId,
-    { chainId: selected.chainId, to, data, value }
+    {
+      chainId: selected.chainId,
+      to,
+      data,
+      value,
+      /**
+       * The launch carries the PROTOCOL fee, which is read live and already checked against
+       * TREASURY_MAX_FEE_WEI in the preflight. Passing that same ceiling here binds it to the
+       * bytes actually signed, so a fee that changed between the preflight and this moment
+       * cannot ride out under a reading taken minutes earlier.
+       *
+       * Kept separate from the gas budget on purpose: adding them would let a generous gas
+       * allowance quietly raise how much value the transaction may carry.
+       */
+      ceilings: {
+        maxValueWei: preflightEnv().TREASURY_MAX_FEE_WEI,
+        maxGasCostWei: preflightEnv().TREASURY_GAS_RESERVE_WEI,
+      },
+    }
   );
   // The hash is already durable at this point; printing it is a courtesy, not the record.
   line('tx', signedLaunch.hash);
@@ -894,7 +954,17 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
   console.log('  4. Confirm both shares landed 95/5. Only then is the fee path proven end to end.');
 }
 
-main().catch((err) => {
-  console.error('\nFAILED:', err?.message ?? err);
-  process.exit(1);
-});
+/**
+ * Runs only when this file IS the program.
+ *
+ * Without the guard, importing the module to drive it with bounded read-only substitutes
+ * would start a second, real run in the same process. The CLI behaviour is unchanged: invoked
+ * as a script, `require.main === module` holds and it runs exactly as before.
+ */
+const invokedDirectly = typeof require !== 'undefined' && require.main === module;
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error('\nFAILED:', err?.message ?? err);
+    process.exit(1);
+  });
+}

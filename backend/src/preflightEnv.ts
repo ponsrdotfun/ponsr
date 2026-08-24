@@ -83,10 +83,24 @@ function canaryFileValues(): Record<string, string> {
       const eq = trimmed.indexOf('=');
       if (eq <= 0) continue;
       const key = trimmed.slice(0, eq).trim();
-      if (CREDENTIAL_NAMES.includes(key)) {
+      /**
+       * ALLOWLIST, not a denylist.
+       *
+       * The denylist that stood here enumerated credential names by hand and had already
+       * drifted: `X_API_KEY` and `X_ACCESS_TOKEN` exist in `config.ts` and were missing, so a
+       * file called secret-free could carry live X authentication material and pass the
+       * guard. Every future credential would have had to be remembered here too.
+       *
+       * An allowlist inverts the failure. The only names accepted are the exact non-secret
+       * fields this module serves; anything unrecognised is refused whether or not anybody
+       * anticipated it. Forgetting to add a credential now costs a loud refusal instead of a
+       * silent read.
+       */
+      if (!ALLOWED_NAMES.has(key)) {
         throw new Error(
-          `.env.canary contains ${key}, which is a credential. This file is read by the ` +
-            'keyless preflight and must hold no secrets. Move it to backend/.env.'
+          `.env.canary contains ${key}, which is not one of the non-secret preflight settings. ` +
+            'This file is read by the keyless preflight and may hold only those. If it is a ' +
+            `credential it belongs in backend/.env. Allowed: ${[...ALLOWED_NAMES].join(', ')}.`
         );
       }
       values[key] = trimmed.slice(eq + 1).trim();
@@ -97,10 +111,17 @@ function canaryFileValues(): Record<string, string> {
 }
 
 function raw(name: string): string | undefined {
-  if (CREDENTIAL_NAMES.includes(name)) {
+  /**
+   * Same allowlist, applied to reads as well as to the file.
+   *
+   * One policy rather than two: a name this module does not serve cannot be read through it,
+   * whether it appears in `.env.canary` or in the process environment, and whether or not
+   * anyone remembered to classify it as a credential.
+   */
+  if (!ALLOWED_NAMES.has(name)) {
     throw new Error(
-      `${name} is a credential and must not be read through the secret-free preflight ` +
-        'environment. Load it explicitly, after the execute gate.'
+      `${name} is not a non-secret preflight setting and must not be read through the ` +
+        'secret-free preflight environment. Load it explicitly, after the execute gate.'
     );
   }
   const fromProcess = process.env[name];
@@ -143,6 +164,12 @@ const PreflightSchema = z.object({
 });
 
 export type PreflightEnv = z.infer<typeof PreflightSchema>;
+
+/**
+ * The single source of truth for what `.env.canary` may contain: the schema's own field
+ * names. Derived, so it cannot drift from what this module actually serves.
+ */
+const ALLOWED_NAMES: ReadonlySet<string> = new Set(Object.keys(PreflightSchema.shape));
 
 /**
  * Reads the non-secret environment. Call it; never cache it at module scope.

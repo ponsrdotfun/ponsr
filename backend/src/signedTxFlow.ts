@@ -87,14 +87,42 @@ export interface TxBroadcaster {
   broadcastTransaction(raw: string): Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
 }
 
+/**
+ * Two ceilings, deliberately separate.
+ *
+ * They bound different things and must not be added together or substituted for one another.
+ * `maxValueWei` is what the transaction CARRIES -- for a launch that is the protocol's launch
+ * fee, and for a contract creation it is zero, because a funded creation is the finding that
+ * was closed in the Turnkey policy on 2026-08-22. `maxGasCostWei` is what the transaction may
+ * COST to execute. Folding them into one number would let a large gas budget silently
+ * authorise a value transfer, or a value ceiling refuse an ordinary gas price.
+ *
+ * Both are REQUIRED. The previous ceiling was optional and neither call site supplied it, so
+ * the check existed and protected nothing.
+ */
+export interface TxCeilings {
+  /** Maximum wei the transaction may carry as `value`. Zero for a contract creation. */
+  maxValueWei: bigint;
+  /** Maximum wei the transaction may cost in gas: gasLimit x the highest per-gas price. */
+  maxGasCostWei: bigint;
+}
+
 export interface TxIntent {
   chainId: number;
   /** null for a contract creation. Never a placeholder address. */
   to: string | null;
   data: string;
   value: bigint;
-  /** Optional ceiling; the flow refuses to sign a fee above it. */
-  maxFeeWei?: bigint;
+  ceilings: TxCeilings;
+}
+
+/** The exact fee shape that was populated, kept so the signed bytes can be held to it. */
+interface PopulatedFees {
+  type: number;
+  gasLimit: bigint;
+  maxFeePerGas: bigint | null;
+  maxPriorityFeePerGas: bigint | null;
+  gasPrice: bigint | null;
 }
 
 export interface SignedTx {
@@ -174,25 +202,46 @@ export async function signAndPersist(
    */
   const maxFeePerGas = fee.maxFeePerGas ?? null;
   const maxPriorityFeePerGas = fee.maxPriorityFeePerGas ?? null;
-  if (maxFeePerGas !== null && maxPriorityFeePerGas !== null) {
-    request.type = 2;
-    request.maxFeePerGas = maxFeePerGas;
-    request.maxPriorityFeePerGas = maxPriorityFeePerGas;
-  } else if (fee.gasPrice != null) {
-    request.type = 0;
-    request.gasPrice = fee.gasPrice;
-  } else {
-    throw new Error('provider offered neither EIP-1559 fees nor a gas price -- refusing to sign a transaction whose fee the chain would fill in later');
-  }
-  request.gasLimit = gasLimit;
+  const populated: PopulatedFees =
+    maxFeePerGas !== null && maxPriorityFeePerGas !== null
+      ? { type: 2, gasLimit, maxFeePerGas, maxPriorityFeePerGas, gasPrice: null }
+      : fee.gasPrice != null
+        ? { type: 0, gasLimit, maxFeePerGas: null, maxPriorityFeePerGas: null, gasPrice: fee.gasPrice }
+        : (() => {
+            throw new Error(
+              'provider offered neither EIP-1559 fees nor a gas price -- refusing to sign a ' +
+                'transaction whose fee the chain would fill in later'
+            );
+          })();
 
-  if (intent.maxFeeWei !== undefined) {
-    const worstCase = gasLimit * (maxFeePerGas ?? fee.gasPrice ?? 0n) + intent.value;
-    if (worstCase > intent.maxFeeWei) {
-      throw new Error(
-        `worst-case cost ${worstCase} wei exceeds the ceiling ${intent.maxFeeWei} wei -- not signed`
-      );
-    }
+  request.type = populated.type;
+  request.gasLimit = populated.gasLimit;
+  if (populated.type === 2) {
+    request.maxFeePerGas = populated.maxFeePerGas!;
+    request.maxPriorityFeePerGas = populated.maxPriorityFeePerGas!;
+  } else {
+    request.gasPrice = populated.gasPrice!;
+  }
+
+  /**
+   * Both ceilings, checked BEFORE a signature is requested.
+   *
+   * Refusing here costs nothing. Refusing after signing would still leave broadcastable bytes
+   * in existence, which is the thing this module is organised around not doing.
+   */
+  const perGas = populated.type === 2 ? populated.maxFeePerGas! : populated.gasPrice!;
+  const worstCaseGas = populated.gasLimit * perGas;
+  if (worstCaseGas > intent.ceilings.maxGasCostWei) {
+    throw new Error(
+      `worst-case gas cost ${worstCaseGas} wei exceeds the gas ceiling ` +
+        `${intent.ceilings.maxGasCostWei} wei -- not signed`
+    );
+  }
+  if (intent.value > intent.ceilings.maxValueWei) {
+    throw new Error(
+      `transaction value ${intent.value} wei exceeds the value ceiling ` +
+        `${intent.ceilings.maxValueWei} wei -- not signed`
+    );
   }
 
   // ONE signature, over exactly these populated bytes.
@@ -235,6 +284,67 @@ export async function signAndPersist(
   }
   if (recovered.toLowerCase() !== sender.toLowerCase()) {
     mismatches.push(`recovered signer ${recovered || '(none)'} != ${sender}`);
+  }
+
+  /**
+   * The economics of the transaction, held to what was populated.
+   *
+   * These were built above and then never checked, so a signer could return bytes with a
+   * different gasLimit and a different fee and be believed. Measured: 21,000 -> 999,999 and
+   * maxFeePerGas 2 -> 999,999,999,999 was accepted and persisted as `signed`.
+   *
+   * It matters because gas is spent from the same hot wallet the ceilings exist to protect,
+   * and because a transaction type change silently reinterprets the fee fields: type 2's
+   * maxFeePerGas and type 0's gasPrice are different promises about what the sender will pay.
+   */
+  if (decoded.type !== populated.type) {
+    mismatches.push(`transaction type ${decoded.type} != populated ${populated.type}`);
+  }
+  if (decoded.gasLimit !== populated.gasLimit) {
+    mismatches.push(`gasLimit ${decoded.gasLimit} != populated ${populated.gasLimit}`);
+  }
+  if (populated.type === 2) {
+    if (decoded.maxFeePerGas !== populated.maxFeePerGas) {
+      mismatches.push(`maxFeePerGas ${decoded.maxFeePerGas} != populated ${populated.maxFeePerGas}`);
+    }
+    if (decoded.maxPriorityFeePerGas !== populated.maxPriorityFeePerGas) {
+      mismatches.push(
+        `maxPriorityFeePerGas ${decoded.maxPriorityFeePerGas} != populated ${populated.maxPriorityFeePerGas}`
+      );
+    }
+  } else if (decoded.gasPrice !== populated.gasPrice) {
+    mismatches.push(`gasPrice ${decoded.gasPrice} != populated ${populated.gasPrice}`);
+  }
+
+  /**
+   * Nothing was asked for beyond a plain transfer of authority.
+   *
+   * An access list changes what the transaction may touch and what it costs; blob fields
+   * belong to a transaction type this flow never populates. Neither was requested, so their
+   * presence means the returned bytes are not the transaction that was built -- refused
+   * rather than tolerated, because "we did not ask for it" is exactly when a field is
+   * interesting.
+   */
+  const accessList = (decoded as unknown as { accessList?: unknown[] | null }).accessList;
+  if (Array.isArray(accessList) && accessList.length > 0) {
+    mismatches.push(`signed bytes carry an access list of ${accessList.length} entr(ies), none was requested`);
+  }
+  const blobs = (decoded as unknown as { maxFeePerBlobGas?: bigint | null }).maxFeePerBlobGas;
+  if (blobs !== undefined && blobs !== null) {
+    mismatches.push('signed bytes carry blob fee fields, none was requested');
+  }
+
+  // Re-checked from the DECODED bytes, not from what was populated: the ceilings must bind
+  // what will actually be broadcast.
+  const decodedPerGas = decoded.type === 2 ? (decoded.maxFeePerGas ?? 0n) : (decoded.gasPrice ?? 0n);
+  const decodedGasCost = decoded.gasLimit * decodedPerGas;
+  if (decodedGasCost > intent.ceilings.maxGasCostWei) {
+    mismatches.push(
+      `signed worst-case gas cost ${decodedGasCost} exceeds the ceiling ${intent.ceilings.maxGasCostWei}`
+    );
+  }
+  if (decoded.value > intent.ceilings.maxValueWei) {
+    mismatches.push(`signed value ${decoded.value} exceeds the ceiling ${intent.ceilings.maxValueWei}`);
   }
   if (mismatches.length > 0) {
     throw new Error(

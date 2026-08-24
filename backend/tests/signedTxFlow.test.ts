@@ -73,19 +73,25 @@ function fakeBroadcaster(opts: { nonce?: number; onBroadcast?: (raw: string) => 
   return b;
 }
 
+/** Gas at the fixture's own numbers: 210,000 x 2 gwei = 0.00042 ETH, well under the budget. */
+const GAS_CEILING = 2_000_000_000_000_000n;
+
 const LAUNCH_INTENT = {
   chainId: CHAIN,
   to: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
   data: '0xf35abbcf' + '11'.repeat(64),
   value: 500_000_000_000_000n,
+  ceilings: { maxValueWei: 2_000_000_000_000_000n, maxGasCostWei: GAS_CEILING },
 };
 
 /** A contract creation: no destination at all, which is the shape that must survive. */
 const SPLITTER_INTENT = {
   chainId: CHAIN,
-  to: null,
+  to: null as string | null,
   data: '0x60806040' + 'ab'.repeat(40),
   value: 0n,
+  /** A creation carries nothing: zero is the ceiling, not a starting point. */
+  ceilings: { maxValueWei: 0n, maxGasCostWei: GAS_CEILING },
 };
 
 function prepareRow(journal: CanaryJournal, op: 'token_launch' | 'splitter_deploy', intent: typeof LAUNCH_INTENT | typeof SPLITTER_INTENT) {
@@ -328,6 +334,184 @@ describe.each(BOTH)('2B for %s', (op, intent) => {
     expect(() => prepareRow(journal, op, intent)).toThrow(/unresolved/);
     expect(signer.signCount).toBe(1);
     expect(broadcaster.broadcastCount).toBe(0);
+    journal.close();
+  });
+});
+
+/**
+ * The economics of the transaction, which were built and then never checked.
+ *
+ * Measured against the previous code: a signer returning gasLimit 999,999 instead of 21,000
+ * and maxFeePerGas 999,999,999,999 instead of 2 was accepted, and the row was persisted as
+ * `signed`. Gas comes out of the same hot wallet the ceilings exist to protect, so "only the
+ * fee changed" is not a smaller problem than a changed destination -- it is a spend nobody
+ * authorised, attached to bytes that are already broadcastable.
+ */
+describe.each(BOTH)('signer-mutated gas and fee bytes are refused for %s', (op, intent) => {
+  const mutating = (change: (tx: ethers.TransactionRequest) => ethers.TransactionRequest) => {
+    const wallet = new ethers.Wallet(KEY);
+    return {
+      address: async () => wallet.address,
+      signTransaction: async (tx: ethers.TransactionRequest) => wallet.signTransaction(change({ ...tx })),
+    } as PreSigningSigner;
+  };
+
+  const refuses = async (
+    change: (tx: ethers.TransactionRequest) => ethers.TransactionRequest,
+    pattern: RegExp
+  ) => {
+    const { journal } = tmpJournal();
+    const broadcaster = fakeBroadcaster();
+    const id = prepareRow(journal, op, intent);
+    await expect(
+      signAndPersist({ signer: mutating(change), broadcaster }, journal, id, intent)
+    ).rejects.toThrow(pattern);
+    // Refused BEFORE persistence, so nothing broadcastable was written down.
+    const row = journal.byId(id)!;
+    expect(row.state).toBe('prepared');
+    expect(row.rawTx).toBeNull();
+    expect(broadcaster.broadcastCount).toBe(0);
+    journal.close();
+  };
+
+  it('refuses an inflated gasLimit', () =>
+    refuses((tx) => ({ ...tx, gasLimit: 999_999n }), /gasLimit .* != populated/));
+
+  it('refuses an inflated maxFeePerGas', () =>
+    refuses((tx) => ({ ...tx, maxFeePerGas: 999_999_999_999n }), /maxFeePerGas .* != populated/));
+
+  it('refuses a changed maxPriorityFeePerGas', () =>
+    refuses(
+      (tx) => ({ ...tx, maxPriorityFeePerGas: 999_999_999n }),
+      /maxPriorityFeePerGas .* != populated/
+    ));
+
+  /** Type 0 reinterprets the fee fields entirely: gasPrice replaces the 1559 pair. */
+  it('refuses a downgrade to a legacy transaction', () =>
+    refuses(
+      (tx) => ({
+        ...tx,
+        type: 0,
+        gasPrice: 3_000_000_000n,
+        maxFeePerGas: undefined,
+        maxPriorityFeePerGas: undefined,
+      }),
+      /transaction type 0 != populated 2|gasPrice/
+    ));
+
+  it('refuses an access list nobody asked for', () =>
+    refuses(
+      (tx) => ({
+        ...tx,
+        type: 2,
+        accessList: [{ address: '0x' + '4'.repeat(40), storageKeys: ['0x' + '0'.repeat(64)] }],
+      }),
+      /access list/
+    ));
+});
+
+describe('the ceilings are required and bind before signing', () => {
+  it('refuses a gas cost above the gas ceiling, without asking for a signature', async () => {
+    const { journal } = tmpJournal();
+    const signer = realSigner();
+    // 210,000 gas x 2 gwei = 4.2e14 wei. A ceiling below that must refuse.
+    const broadcaster = fakeBroadcaster();
+    const id = prepareRow(journal, 'token_launch', LAUNCH_INTENT);
+    await expect(
+      signAndPersist({ signer, broadcaster }, journal, id, {
+        ...LAUNCH_INTENT,
+        ceilings: { maxValueWei: LAUNCH_INTENT.ceilings.maxValueWei, maxGasCostWei: 1_000n },
+      })
+    ).rejects.toThrow(/worst-case gas cost .* exceeds the gas ceiling/);
+    expect(signer.signCount).toBe(0);
+    journal.close();
+  });
+
+  /**
+   * The two ceilings are separate, and this is the case that proves it. A generous gas budget
+   * must never authorise carrying value: a splitter creation may cost gas and must carry zero.
+   */
+  it('refuses value on a creation however large the gas budget is', async () => {
+    const { journal } = tmpJournal();
+    const signer = realSigner();
+    const broadcaster = fakeBroadcaster();
+    const id = prepareRow(journal, 'splitter_deploy', SPLITTER_INTENT);
+    await expect(
+      signAndPersist({ signer, broadcaster }, journal, id, {
+        ...SPLITTER_INTENT,
+        value: 1_000_000_000_000_000_000n, // 1 ETH into a contract creation
+        ceilings: { maxValueWei: 0n, maxGasCostWei: 10n ** 18n },
+      })
+    ).rejects.toThrow(/value .* exceeds the value ceiling 0/);
+    expect(signer.signCount).toBe(0);
+    journal.close();
+  });
+
+  it('accepts a transaction inside both ceilings', async () => {
+    const { journal } = tmpJournal();
+    const signer = realSigner();
+    const broadcaster = fakeBroadcaster();
+    const id = prepareRow(journal, 'token_launch', LAUNCH_INTENT);
+    await signAndPersist({ signer, broadcaster }, journal, id, LAUNCH_INTENT);
+    expect(journal.byId(id)!.state).toBe('signed');
+    journal.close();
+  });
+});
+
+describe('the journal is not readable by anyone but its owner', () => {
+  /**
+   * `raw_tx` is a complete signed transaction: whoever reads it can broadcast it, from any
+   * machine, with no key. Under an ordinary umask the journal was created 0644.
+   *
+   * WAL and SHM are checked too, and they are the interesting ones -- SQLite writes the newest
+   * pages there before checkpointing, so the rows most likely to be unresolved live in the
+   * sidecar first.
+   */
+  const modeOf = (p: string) => fs.statSync(p).mode & 0o777;
+
+  it('creates the database and its sidecars owner-only', async () => {
+    const previous = typeof process.umask === 'function' ? process.umask(0o022) : null;
+    try {
+      const { journal, file } = tmpJournal();
+      const signer = realSigner();
+      const broadcaster = fakeBroadcaster();
+      const id = prepareRow(journal, 'token_launch', LAUNCH_INTENT);
+      // Forces the WAL into existence, and is the write that puts raw bytes on disk.
+      await signAndPersist({ signer, broadcaster }, journal, id, LAUNCH_INTENT);
+
+      const present = [file, `${file}-wal`, `${file}-shm`].filter((p) => fs.existsSync(p));
+      expect(present).toContain(file);
+
+      if (process.platform !== 'win32') {
+        for (const p of present) {
+          expect(modeOf(p) & 0o077).toBe(0);
+        }
+      } else {
+        // Windows reports a synthesised mode; the real control is the ACL, which the journal
+        // sets and verifies on open. Reaching here at all means that verification passed.
+        expect(fs.existsSync(file)).toBe(true);
+      }
+      journal.close();
+    } finally {
+      if (previous !== null) process.umask(previous);
+    }
+  });
+
+  it('tightens an existing world-readable journal before writing raw bytes', async () => {
+    if (process.platform === 'win32') return; // mode bits are not the mechanism here
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-2b-mode-'));
+    const file = path.join(dir, 'canary.sqlite');
+
+    // A journal from before this guard existed.
+    const Database = require('better-sqlite3');
+    const raw = new Database(file);
+    raw.exec('CREATE TABLE t (a INTEGER)');
+    raw.close();
+    fs.chmodSync(file, 0o644);
+    expect(modeOf(file) & 0o077).not.toBe(0);
+
+    const journal = new CanaryJournal(file, { allowEphemeral: true });
+    expect(modeOf(file) & 0o077).toBe(0);
     journal.close();
   });
 });

@@ -50,6 +50,11 @@ const TSX_CJS = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cjs', 'index.cjs
  */
 const SENTINEL = 'SENTINEL-CREDENTIAL-MUST-NEVER-BE-READ';
 
+/** The treasury pin every run below uses, and the address the status envelope must bind to. */
+const TEST_TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
+/** Set explicitly rather than left to default, so the envelope and the canary agree. */
+const STATUS_CAP_WEI = '10000000000000000'; // 0.01 ETH
+
 interface ProbeReport {
   opened: string[];
   loaded: string[];
@@ -60,6 +65,39 @@ function startMockRpc(): Promise<{ url: string; close: () => Promise<void>; call
   const calls: string[] = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
+      /**
+       * The bot's own /status, served beside the RPC.
+       *
+       * The preflight refuses to proceed on an unreadable bot ledger -- "an unknown ledger is
+       * not an empty one" -- so a run that completes has to be given one. Every binding field
+       * matches what the canary expects, because `readBotRollingSpend` checks the window,
+       * chain, deployment, factory, treasury and freshness rather than trusting the number.
+       */
+      if (req.url === '/status') {
+        calls.push('GET /status');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            state: 'degraded',
+            at: new Date().toISOString(),
+            checks: [{ name: 'public-launches', state: 'degraded', detail: 'paused by Ponsr' }],
+            spend: {
+              window: 'rolling-24h',
+              rolling24hWei: '0',
+              capWei: STATUS_CAP_WEI,
+              currentUtcDayWei: '0',
+              chainId: 4663,
+              deploymentId: 'pons-v2-current-7ed',
+              factory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
+              treasury: TEST_TREASURY,
+              publicLaunchEnabled: false,
+              generatedAt: new Date().toISOString(),
+            },
+          })
+        );
+        return;
+      }
+
       let body = '';
       req.on('data', (c) => (body += c));
       req.on('end', () => {
@@ -115,6 +153,12 @@ async function runCanary(opts: {
   execute?: boolean;
   envCanary?: string;
   extraEnv?: Record<string, string>;
+  /**
+   * Runs the harness that supplies bounded read-only substitutes for the four chain reads a
+   * mock cannot satisfy, so the preflight can run to completion. Same process, same
+   * instrumentation, same module graph -- see tests/fixtures/dryRunHarness.ts.
+   */
+  complete?: boolean;
 }): Promise<{ report: ProbeReport; stdout: string; stderr: string; status: number | null; envPath: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-5a-'));
   const envPath = path.join(dir, '.env');
@@ -150,7 +194,10 @@ async function runCanary(opts: {
    * below would have read as "touched nothing at all". Registering tsx in-process is what
    * makes the instrumentation observe the code under test rather than its launcher.
    */
-  const args = ['-r', PROBE, '-r', TSX_CJS, '--import', TSX_ESM, path.join(ROOT, 'scripts', 'phase-b-launch.ts')];
+  const entry = opts.complete
+    ? path.join(__dirname, 'fixtures', 'dryRunHarness.ts')
+    : path.join(ROOT, 'scripts', 'phase-b-launch.ts');
+  const args = ['-r', PROBE, '-r', TSX_CJS, '--import', TSX_ESM, entry];
   if (opts.execute) args.push('--execute');
 
   /**
@@ -170,8 +217,17 @@ async function runCanary(opts: {
       RPC_URL: opts.rpcUrl,
       CHAIN_ID: '4663',
       PONS_FACTORY_VERSION: 'v2',
-      TREASURY_ADDRESS: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+      TREASURY_ADDRESS: TEST_TREASURY,
       CANARY_JOURNAL: path.join(dir, 'canary.sqlite'),
+      DAILY_SPEND_CAP_WEI: STATUS_CAP_WEI,
+      /**
+       * The permanent identity, explicit because mainnet refuses a default. A dry run that
+       * could not name the token would abort before the stages this test exists to observe.
+       */
+      PHASE_B_NAME: 'PONSR STONKS',
+      PHASE_B_SYMBOL: 'PSTONKS',
+      /** The bot's ledger. Unreadable is a blocking condition, and correctly so. */
+      BOT_STATUS_URL: `${opts.rpcUrl}/status`,
       // Not inherited from the developer's own shell.
       TURNKEY_API_PRIVATE_KEY: '',
       TURNKEY_SIGN_WITH: '',
@@ -284,6 +340,52 @@ describe('the secret-free source refuses to serve credentials', () => {
     }
   });
 
+  /**
+   * The denylist had already drifted, which is why there is no denylist any more.
+   *
+   * `X_API_KEY` and `X_ACCESS_TOKEN` are declared in `config.ts` and were missing from the
+   * enumerated refusal list, so a file called secret-free could carry live X authentication
+   * material and pass the guard. Every future credential would have had to be remembered by
+   * hand, in a second place, forever.
+   *
+   * The allowlist inverts that: only the exact non-secret settings this module serves are
+   * accepted, so a name nobody anticipated is refused rather than admitted.
+   */
+  it('refuses every credential name in config.ts, including the ones no denylist remembered', async () => {
+    const { preflightEnv } = await import('../src/preflightEnv');
+    const cfg = fs.readFileSync(path.join(ROOT, 'src', 'config.ts'), 'utf8');
+    const declared = [...cfg.matchAll(/^ {2}([A-Z][A-Z0-9_]+):/gm)].map((m) => m[1]);
+    const secretish = declared.filter((n) => /KEY|SECRET|TOKEN|PRIVATE|PASSWORD/.test(n));
+
+    // The two the enumerated list had missed, named explicitly so a regression is legible.
+    expect(secretish).toEqual(expect.arrayContaining(['X_API_KEY', 'X_ACCESS_TOKEN']));
+
+    const served = Object.keys(preflightEnv());
+    for (const name of secretish) {
+      expect(served).not.toContain(name);
+    }
+  });
+
+  it('refuses an unknown name in .env.canary, not just known credentials', async () => {
+    const rpc = await startMockRpc();
+    try {
+      const run = await runCanary({
+        rpcUrl: rpc.url,
+        envCanary: 'SOME_FUTURE_CREDENTIAL=whatever\n',
+      });
+      expect(run.status).not.toBe(0);
+      expect(run.stderr + run.stdout).toMatch(/not one of the non-secret preflight settings/);
+    } finally {
+      await rpc.close();
+    }
+  }, 180000);
+
+  it('accepts every documented non-secret field', async () => {
+    const { preflightEnv } = await import('../src/preflightEnv');
+    const names = Object.keys(preflightEnv());
+    expect(names).toEqual(expect.arrayContaining(['RPC_URL', 'CHAIN_ID', 'PONS_FACTORY_VERSION']));
+  });
+
   it('refuses a .env.canary that smuggles a credential in', async () => {
     const rpc = await startMockRpc();
     try {
@@ -310,6 +412,98 @@ describe('the secret-free source refuses to serve credentials', () => {
       expect(run.stdout).toContain('DRY RUN');
     } finally {
       await rpc.close();
+    }
+  }, 180000);
+});
+
+/**
+ * A COMPLETE dry run, not one that aborted early and looked clean.
+ *
+ * The earlier proof asserted the opening output and some RPC traffic, which a run that died
+ * at the deployment-identity check also satisfies -- so the later preflight stages were never
+ * exercised while the import evidence was presented as covering the whole run. This drives
+ * the real entrypoint to its terminal line, under the same instrumentation, and requires exit
+ * status 0.
+ */
+describe('the secret-free dry run runs to completion', () => {
+  let rpc: Awaited<ReturnType<typeof startMockRpc>>;
+  let run: Awaited<ReturnType<typeof runCanary>>;
+
+  beforeAll(async () => {
+    rpc = await startMockRpc();
+    run = await runCanary({ rpcUrl: rpc.url, complete: true });
+  }, 180000);
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  it('exits 0', () => {
+    expect(run.stderr).not.toMatch(/FAILED|BLOCKED/);
+    expect(run.status).toBe(0);
+  });
+
+  it('reaches the terminal line', () => {
+    expect(run.stdout).toContain('Dry run complete. Nothing was sent.');
+  });
+
+  it('ran every major preflight stage', () => {
+    for (const stage of [
+      'identity',
+      'launchEnabled',
+      'whitelisted',
+      'launchFee (live)',
+      'daily cap',
+      'bot accounted spend',
+      'canary journal spend',
+      'paired against',
+      'Preflight clean.',
+      'Planned launch',
+      'salt',
+    ]) {
+      expect(run.stdout).toContain(stage);
+    }
+  });
+
+  it('bound the bot ledger rather than skipping it', () => {
+    expect(rpc.calls).toContain('GET /status');
+    expect(run.stdout).not.toContain('UNREADABLE');
+  });
+
+  it('printed a pairing the real resolver could have produced', () => {
+    expect(run.stdout).toMatch(/paired against\s+ETH\s+\(default-eth\)/);
+    expect(run.stdout).not.toContain('undefined');
+  });
+
+  /** The completion run is held to the same secret-free boundary as the plain one. */
+  it('still never opened the mixed .env or loaded credential modules', () => {
+    expect(run.report.loaded.length).toBeGreaterThan(10);
+    expect(openedMixedEnv(run.report, run.envPath)).toBe(false);
+    expect(loadedMatching(run.report, /(^|[\\/])dotenv([\\/]|$)/)).toEqual([]);
+    expect(loadedMatching(run.report, /[\\/]src[\\/]config\.ts$|[\\/]src[\\/]config\.js$/)).toEqual([]);
+    expect(loadedMatching(run.report, /treasurySigner/)).toEqual([]);
+    expect(loadedMatching(run.report, /@turnkey/)).toEqual([]);
+    expect(run.stdout).not.toContain(SENTINEL);
+  });
+
+  /**
+   * The negative case, and the reason the completion requirement exists at all.
+   *
+   * Without substitutes the run aborts at the deployment-identity check -- and that aborted
+   * run still satisfies every import and file-open assertion. Proving both here keeps the two
+   * claims separate: "read no credentials" and "did the whole job" are different facts, and
+   * only one of them used to be checked.
+   */
+  it('an early identity abort cannot pass as a completed dry run', async () => {
+    const other = await startMockRpc();
+    try {
+      const aborted = await runCanary({ rpcUrl: other.url, complete: false });
+      expect(aborted.status).not.toBe(0);
+      expect(aborted.stdout).not.toContain('Dry run complete. Nothing was sent.');
+      // ...while still being clean on the secret-free boundary, which is exactly the trap.
+      expect(openedMixedEnv(aborted.report, aborted.envPath)).toBe(false);
+    } finally {
+      await other.close();
     }
   }, 180000);
 });
@@ -343,6 +537,29 @@ describe('the execute gate is where credential loading begins', () => {
     expect(run.stdout).not.toContain(SENTINEL);
     expect(run.stderr).not.toContain(SENTINEL);
   });
+
+  /**
+   * The dry-run substitutes must be inert here, and this is the test that says so.
+   *
+   * A test seam that a spending run could reach would be worse than no seam at all: the
+   * deployment-identity check is the guard that stopped this exact script launching against
+   * the wrong factory. Run with `--execute`, the harness's substitutes are dropped and the
+   * real check runs, so the run dies on identity rather than sailing past it.
+   */
+  it('drops the dry-run substitutes entirely under --execute', async () => {
+    const other = await startMockRpc();
+    try {
+      const executed = await runCanary({ rpcUrl: other.url, complete: true, execute: true });
+      expect(executed.status).not.toBe(0);
+      // The substitute would have printed this line and suppressed the real check.
+      expect(executed.stdout).not.toContain('[harness] deployment identity substituted');
+      expect(executed.stdout + executed.stderr).toMatch(
+        /is not the contract the registry describes|runtime sha256/
+      );
+    } finally {
+      await other.close();
+    }
+  }, 180000);
 });
 
 /**
