@@ -12,7 +12,7 @@ happened.
 
 | gate | how | abort if |
 |---|---|---|
-| Turnkey creation authority **(signer-active)** | `npm run signer:probe-creation` | case 2 is **ALLOWED** — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). This is currently open. |
+| Turnkey creation authority **(signer-active)** | `npm run signer:probe-creation` | case 2 must be **denied**, case 1 **ALLOWED**. Closed 2026-08-22 by `b647cc07-…`; re-run to confirm it still holds. Case 3 stays ALLOWED as an accepted residual — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). |
 | Policy verified for the rollout target **(signer-active)** | `npm run signer:verify-policy -- --target-deployment=pons-v2-current-7ed` | anything other than **PASSED** |
 | Artifacts reproduce | `node scripts/verify-artifacts-reproducible.js` | **NOT REPRODUCIBLE** |
 | Suites | `cd backend && npm run build && npm test`, then `npm test` and `node website/smoke-test.js` at the root | any failure |
@@ -46,9 +46,12 @@ rollout verification. Running one is a separate operator ceremony that names the
 script and the exact mutation, and it is not part of this runbook. The authority matrix
 is in [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md).
 
-The first row blocks everything else. A bot key that can attach funds to a contract
-creation can empty the hot wallet, so shipping the launch path before closing it makes
-the treasury reachable by anyone who obtains that key.
+The first row blocked everything else until 2026-08-22, when policy `b647cc07-…` bound
+`eth.tx.value == 0` on the creation clause and the broad `897d432e-…` was removed. Re-run it
+rather than trusting this paragraph: a bot key that can attach funds to a contract creation
+can empty the hot wallet, and the only evidence that it cannot is a probe that says so
+today. Case 3 stays ALLOWED by design — initcode is unbound, which costs gas and never
+treasury.
 
 ## 1. Online SQLite backup and offline rehearsal
 

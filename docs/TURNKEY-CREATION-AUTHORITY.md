@@ -1,13 +1,67 @@
-# The bot key can drain the treasury
+# The bot key could drain the treasury
 
-**Status: OPEN.** Measured 2026-08-21. Closing it requires an explicit operator ceremony;
-ordinary install, test, audit, and rollout commands do not mutate Turnkey.
+**Status: CLOSED — 2026-08-22.** Closed by an operator ceremony and proven by an executed
+negative probe, not by a policy being written.
+
+<!-- historical -->
+It read **Status: OPEN**, measured 2026-08-21, from the day the finding was raised until
+the ceremony below. That state is preserved rather than deleted: the reason every guard in
+this repository exists is that the finding was once live, and a document that erases its
+own history leaves the guards looking arbitrary.
+<!-- /historical -->
+
+| | |
+|---|---|
+| Replacement policy | `b647cc07-a7fe-4941-914c-2c1032392f80` |
+| Removed | `897d432e-16f4-4a5e-b16e-42c365508ec6` |
+| Condition now | `(eth.tx.to == '' && eth.tx.value == 0) \|\| eth.tx.to == '0xa5aab3f0…feb'` |
+| Proven by | `signer:probe-creation` and `signer:verify-policy`, both PASSED |
+| Broadcast | none — signing only, no funds moved |
+
+**Measured 2026-08-22, against the new policy:**
+
+```text
+1. creation, value 0 (splitter)              ALLOWED   <- the bot still deploys splitters
+2. creation carrying 1 ETH                   denied    <- THE FINDING, CLOSED
+3. creation, unrelated initcode, value 0     ALLOWED   <- accepted residual, see below
+4. transfer to an arbitrary address          denied    <- the original control still holds
+1a. tx to the v1 factory                     ALLOWED
+1b. tx to the CURRENT factory                ALLOWED
+```
+
+Case 2 is the whole finding: measured `ALLOWED` on 2026-08-21 and `denied` on 2026-08-22.
+
+`verify-policy`'s creation case signs the **actual splitter bytecode**, not a ten-byte
+prefix, so what is proven is that the real deployment path still works — not merely that
+creation in general is permitted.
+
+## The accepted residual — read this before claiming initcode is protected
+
+**Initcode is not bound.** Any **zero-value** contract may still be deployed by the bot key.
+
+That costs **gas, never treasury**: a zero-value creation has nothing to carry away, and the
+constructor trick that made this finding dangerous depends entirely on value riding along.
+
+This is the designed limit of Option A, recorded as accepted residual risk. It is **not**
+protection, and no document may describe it as one. Closing it would require binding
+initcode, or moving creation authority to a separate gas-only key (Option B below).
+
+## What is NOT true because of this closure
+
+The following remain false, and closing the finding does not touch them:
+
+- the backend is **not** deployed with this change — the running image predates it;
+- `PONS_FACTORY_VERSION` has **not** been flipped to the current V2;
+- **no canary has been run**;
+- `TURNKEY_POLICY_CONFIRMED` has **not** been set.
 
 ---
 
-## What was measured
+## What was measured when the finding was raised
 
-`scripts/turnkey-probe-creation.ts`, signing only, nothing broadcast:
+<!-- historical -->
+2026-08-21, `scripts/turnkey-probe-creation.ts`, signing only, nothing broadcast. This is
+the state that has since been closed; the current readings are at the top of this file.
 
 ```text
 1. creation, value 0 (splitter)              ALLOWED   <- intended
@@ -15,15 +69,18 @@ ordinary install, test, audit, and rollout commands do not mutate Turnkey.
 3. creation with unrelated initcode          ALLOWED   <- residual
 4. transfer to an arbitrary address          denied    <- the check everyone ran
 ```
+<!-- /historical -->
 
 ## Why every previous check missed it
 
-The bot's policy is:
+The bot's policy **was** (`897d432e`, since deleted):
 
+<!-- historical -->
 ```text
 ponsr-bot: launch + splitter deploy only
   eth.tx.to == '0xa5aab3f0…feb' || eth.tx.to == ''
 ```
+<!-- /historical -->
 
 `eth.tx.to == ''` is a contract creation, and the bot needs it: every launch deploys a
 per-launch `FeeSplitterV2` first.
@@ -46,7 +103,10 @@ still prints green on the way past, because no arbitrary address was ever named.
 
 ## What this makes false
 
-Until this is closed, these statements are **wrong** and have been corrected in place:
+These statements were **wrong** while the finding was open, and were corrected in place.
+They are listed so the corrections are traceable, not to be reinstated -- each is still
+false in the specific form quoted, because the residual below means no document may claim
+initcode is bound:
 
 <!-- historical -->
 - `CLAUDE.md` — "a leak of the bot's key now costs launches, not the treasury"
@@ -56,12 +116,13 @@ Until this is closed, these statements are **wrong** and have been corrected in 
 - `scripts/turnkey-verify-policy.ts` — printed it on PASS
 <!-- /historical -->
 
-The verifier now runs the funded-creation case as check 4 and **cannot report PASSED**
-while it is allowed.
+The verifier runs the funded-creation case as check 4 and **cannot report PASSED** while
+it is allowed. On 2026-08-22 it reported PASSED with that case `denied`, which is what
+closed this finding.
 
 ---
 
-## Two ways to close it
+## Two ways to close it — A was chosen and applied on 2026-08-22
 
 Turnkey's policy language does support the fields needed. Confirmed against
 `docs.turnkey.com/concepts/policies/language`:
@@ -170,16 +231,27 @@ and a wrong-selector mutation must be denied. Until then it is a proposal, not a
 
 ---
 
-## Operator steps
+## Operator steps — all completed 2026-08-22
 
-1. Choose Option A or B. A is smaller; B is stronger.
-2. Apply it with a root credential, from the dashboard or a one-shot script.
-3. Run `npm run signer:probe-creation` and require:
-   - case 1 `ALLOWED` — the bot can still deploy its splitter;
-   - case 2 `denied` — the finding is closed;
-   - case 4 `denied` — the original control still holds.
-4. Run `npm run signer:verify-policy` and require PASSED.
-5. Only then may any document say a leaked bot key cannot reach the treasury.
+1. ~~Choose Option A or B.~~ **A**, with the v1 clause carried over.
+2. ~~Apply it with a root credential.~~ Done through the dashboard by the operator, as
+   `b647cc07-a7fe-4941-914c-2c1032392f80`, created **before** `897d432e` was deleted so no
+   window existed in which contract creation was ungranted.
+3. ~~Run `npm run signer:probe-creation`.~~ case 1 `ALLOWED`, case 2 `denied`,
+   case 4 `denied`. **PASSED.**
+4. ~~Run `npm run signer:verify-policy`.~~ **PASSED**, with 1a and 1b both `ALLOWED`.
+5. A document may now say a leaked bot key cannot attach treasury funds to a creation.
+   It may **not** say initcode is bound — see the accepted residual at the top.
+
+Read-only policy digests, before and after, taken with one tool:
+
+```text
+before   7ae7c68df2919ffe  1b8b585f   e1a02029ef4cbab4  897d432e   80db0bfe838192f9  ece2a399
+after    7ae7c68df2919ffe  1b8b585f   a4efe63979c30280  b647cc07   80db0bfe838192f9  ece2a399
+```
+
+`897d432e` is absent afterwards; the two untouched policies carry identical digests, which
+is what makes "no unexpected policy changed" checkable rather than merely asserted.
 
 ### What this repository CAN do, stated plainly
 

@@ -30,13 +30,16 @@
 > has since retracted.
 >
 > That stale deploy is currently acting as a brake: the running bot refuses every launch
-> because it thinks the launchpad is shut. It is not, however, a safety measure — the same
-> process holds the Turnkey bot key, and the finding below is open. **Close the creation
-> authority before deploying**, or the deploy removes the brake and leaves the exposure.
+> because it thinks the launchpad is shut. It was never a safety measure — the same process
+> holds the Turnkey bot key — but the creation-authority finding below is now **closed**, so
+> the reason to keep the deploy blocked has gone. What remains is a sequencing question:
+> deploying IS the migration cut-over, because production still carries
+> `PONS_FACTORY_VERSION=v2`, which on this code means the CURRENT factory where
+> `canLaunch(treasury)` is true. The deploy belongs with the canary plan, not on its own.
 >
 > What remains is not code — see `docs/action-checklist.md`.
 >
-> ## ⚠️ On the treasury: the bot's key CAN empty the hot wallet
+> ## On the treasury: the bot's key could empty the hot wallet — closed 2026-08-22
 >
 > **This block used to say the opposite, and the correction is the point.**
 >
@@ -46,22 +49,30 @@
 > launches rather than the treasury."
 <!-- /historical -->
 >
-> That is false, and it was measured false on 2026-08-21. The policy also allows
+> That was false, and it was measured false on 2026-08-21. The policy also allowed
 > `eth.tx.to == ''` — a contract creation, which the splitter deploy genuinely needs — **with no
 > constraint on value**, and Turnkey signed a creation carrying 1 ETH. A creation's value lands
-> in the contract being created, and the sender writes that contract. So one transaction empties
-> the hot wallet while every destination-based check still reports green, because a creation has
+> in the contract being created, and the sender writes that contract, so one transaction could
+> empty the hot wallet while every destination-based check still reported green — a creation has
 > no destination for those checks to look at.
 >
-> The reasoning error is worth keeping: a policy was verified by testing the cases somebody
-> thought of. "Arbitrary destination denied" is a true sentence that does not mean what it was
-> being used to mean. See `docs/TURNKEY-CREATION-AUTHORITY.md` — **status OPEN**, and an
-> operator action.
+> The reasoning error is worth keeping even now that the hole is shut: a policy was verified by
+> testing the cases somebody thought of. "Arbitrary destination denied" is a true sentence that
+> does not mean what it was being used to mean.
 >
-> Until it is closed: the hot wallet is **not** a one-way valve, the daily cap
-> (`DAILY_SPEND_CAP_WEI`) is what actually bounds the damage, and the backend should not be
-> left running 24/7. Keep the reserve in cold storage and fund the hot wallet in small amounts —
-> advice that stands for a different reason than the one first given for it.
+> **CLOSED 2026-08-22.** Policy `b647cc07-a7fe-4941-914c-2c1032392f80` binds
+> `eth.tx.value == 0` on the creation clause; the broad `897d432e-…` was deleted only after
+> the replacement was in place. A signed probe, nothing broadcast, measured the funded
+> creation **denied** where it had been ALLOWED the day before, with the zero-value splitter
+> deploy still ALLOWED and both factories ALLOWED.
+>
+> **Residual, accepted rather than fixed:** initcode is not bound, so a zero-value deploy of
+> arbitrary code is still possible. Gas, never treasury — a zero-value creation has nothing
+> to carry away. It is not initcode protection and must not be described as any.
+>
+> Still true regardless: the daily cap (`DAILY_SPEND_CAP_WEI`) is what bounds a compromised
+> key's damage, and the reserve belongs in cold storage with the hot wallet funded in small
+> amounts. `TURNKEY_POLICY_CONFIRMED` has not been set.
 
 Read this before anything else. Every component below is marked exactly as it stands — real
 and tested, or a clearly-marked stub. Nothing here is overstated.
@@ -105,7 +116,7 @@ and tested, or a clearly-marked stub. Nothing here is overstated.
 | Superseded v2 launch path (`ponsV2Encoder.ts`, `launchTarget.ts`) | OK (code) / SUPERSEDED — see the row above | **Everything in this row describes `0x7E1EAbd5…`, the factory pons replaced on 2026-08-03.** It is kept because that deployment holds real launches and the encoder still has to read them; it is not the launch path. `NotWhitelisted` and "no salt" below are facts about that contract, not about Ponsr today — the current factory takes a `salt` and `canLaunch(treasury)` is true. **v2's `launchToken` is a different function**, not v1 plus an argument: `dexId` and `salt` are gone, `feeWallet` became `creatorFeeRecipient`, and `creatorTaxBps`, `buybackEnabled` and `expectedEconomics` appeared. Ponsr sends **creatorTaxBps 0** — a tax is a charge on every trade of somebody else's token, invisible to them, on a launch they cannot renegotiate — and **pins `expectedEconomics`** from `previewLaunchEconomics`, so a change on pons's side between the read and the transaction landing reverts rather than silently repricing. **Note v2 has no salt**, so the only duplicate-launch guard there is the database's idempotency claim. Selected by `PONS_FACTORY_VERSION`; v1 remains the default. **Verified by simulation against the live mainnet factory**: from a whitelisted address, launches paired against AAPL, GME, SPY, USDG and ETH all return WOULD SUCCEED, a bogus asset reverts `PairTokenNotApproved`, and from this treasury the same calldata reverts `NotWhitelisted` — the one gate that is not ours to fix. 25 tests. |
 | v2 fee path (`FeeSplitterV2.sol`) | OK (code) / REHEARSED (not yet live) | **Added 2026-08-18, and it is the reason a v2 launch would have lost money.** v1 pushes fees to the recipient; **v2 credits them to `PonsV2FeeEscrow` and pays whoever calls `claimToken` — `msg.sender`, with no `claimFor`.** A plain `FeeSplitter` named as a v2 launch's `creatorFeeRecipient` would be credited correctly and forever with no transaction able to move the money: §9.10 by a different route. `FeeSplitterV2` inherits the split logic rather than restating it, and adds `claimAndSplit` plus an amount-taking form the escrow's own docs say is necessary. Three independent guards refuse to get it wrong quietly: one compile emits both artifacts, the deployer picks by factory version and throws rather than falling back, and `phase-b-launch.ts` reads `claimAndSplit`'s selector out of the deployed bytecode. 12 contract tests against a mock built from the escrow's source, **and a full rehearsal on a forked mainnet** (`scripts/fork-rehearsal.js`, 2026-08-19): a launch paired against AAPL through the real factory, a real 50 AAPL buy on the bonding curve, and the fee claimed back out and split — creator 0.16255 AAPL, treasury 0.00855, nothing stranded. The fork taught three things reading could not: the chain is on **Cancun** (under Shanghai the launch reverts with a bare `invalid opcode`, because pons v2 graduates into Uniswap V4), fees are **credited to the escrow on every trade** rather than accumulating on the curve so there is nothing to sweep, and the split prints as 94.99/5.00 because the creator's share is floored and the dust goes to the treasury. **Still not a live launch:** impersonation is exactly what mainnet will not allow, so the first real one must still be self-dealt. |
 | Wallet resolver (`walletResolver.ts`) | ✅ | **Implemented 2026-08-04** against `@privy-io/node` (`server-auth`, which the old TODO named, is deprecated). One embedded wallet per X user, created on first contact. The X user ID is stored as Privy's `external_id` — write-once and unique on their side, so a database restore or a race cannot mint a second wallet for someone who already has one; on that collision the existing wallet is recovered. **Verified live**: `scripts/check-providers.ts` created a real wallet. |
-| Treasury signer (`treasurySigner.ts`) | ✅ | **Implemented and scoped 2026-08-04.** `RawKeyTreasurySigner` remains testnet-only and refuses to run under `NODE_ENV=production`. `TurnkeyTreasurySigner` signs through `@turnkey/ethers`.<br><br>The important work was not the code. A probe measured that the **root user bypasses Turnkey's policy engine** — a DENY-all policy was active and a signature still went through — so any policy written for the original key would have appeared in the dashboard and enforced nothing. The bot now runs as a non-root, API-only user whose policy allows exactly two things, **verified rather than assumed**: a transaction to the pons factory (ALLOWED), a contract creation for the splitter (ALLOWED), a transaction anywhere else (DENIED). A leak of that key costs launches **but not, as this line used to claim, only launches**: the same policy allows `eth.tx.to == ''` for the splitter deploy with no value constraint, and Turnkey was measured on 2026-08-21 signing a creation carrying 1 ETH. A creation has no destination for the arbitrary-address check to catch. See `docs/TURNKEY-CREATION-AUTHORITY.md`.<br><br>`assertTurnkeyPolicyAcknowledged()` blocks production start until `TURNKEY_POLICY_CONFIRMED` is set, because an unpolicied key is indistinguishable from a correct one until it is abused. |
+| Treasury signer (`treasurySigner.ts`) | ✅ | **Implemented and scoped 2026-08-04.** `RawKeyTreasurySigner` remains testnet-only and refuses to run under `NODE_ENV=production`. `TurnkeyTreasurySigner` signs through `@turnkey/ethers`.<br><br>The important work was not the code. A probe measured that the **root user bypasses Turnkey's policy engine** — a DENY-all policy was active and a signature still went through — so any policy written for the original key would have appeared in the dashboard and enforced nothing. The bot now runs as a non-root, API-only user whose policy allows exactly two things, **verified rather than assumed**: a transaction to the pons factory (ALLOWED), a contract creation for the splitter (ALLOWED), a transaction anywhere else (DENIED). A leak of that key once reached further than launches: the policy allowed `eth.tx.to == ''` for the splitter deploy with no value constraint, and Turnkey was measured on 2026-08-21 signing a creation carrying 1 ETH — a creation has no destination for the arbitrary-address check to catch. **Closed 2026-08-22** by `b647cc07-…`, which binds `eth.tx.value == 0` on that clause; re-probed the same day, the funded creation came back denied. Initcode is still unbound, so a zero-value deploy of arbitrary code remains possible: gas, never treasury, and recorded as accepted residual rather than protection. See `docs/TURNKEY-CREATION-AUTHORITY.md`.<br><br>`assertTurnkeyPolicyAcknowledged()` blocks production start until `TURNKEY_POLICY_CONFIRMED` is set, because an unpolicied key is indistinguishable from a correct one until it is abused. |
 | X client (`xClient.ts`) | ✅ (code) / 🔴 (needs keys) | **Implemented 2026-08-04, and split across two providers.** Reads (mentions, account signals) go to twitterapi.io; writes (replies) go to **X's own API** over OAuth 1.0a. They are different kinds of operation: reading is invisible high-volume data collection, posting is account activity that can get `@ponsrdotfun` suspended — and unlike a domain or a contract, an account cannot be re-minted. X's move to pay-per-use made this affordable: $0.015 a reply, one reply per launch, roughly $1.50/month. That retires Part 10's unanswered question about third-party posting rather than arguing it.<br><br>⚠️ **A reply containing a URL costs $0.200, not $0.015** — 13x. Linking to ponsr.fun from the success reply is therefore a pricing decision, held behind `REPLY_INCLUDE_LINK` and defaulting to off. 8 tests, including that reads never touch the write path.<br><br>Needs `TWITTERAPI_IO_KEY` plus the four `X_API_*` credentials. |
 | pons factory ABI (`ponsEncoder.ts`) | ✅ | **Resolved 2026-08-04 — this was the project's longest-standing gap.** The verified ABI is checked in at `src/abi/ponsLaunchFactory.json`, pulled from `robinhoodchain.blockscout.com`, whose API needs no key. (Every checklist item pointed at `api.blockscout.com`, the Pro aggregator, which does — one wrong URL is why this read as blocked on an account signup.) The placeholder was wrong in every parameter. Tests now round-trip through the real ABI, so a wrong struct shape fails the suite instead of passing against a fiction. See `docs/pons-v2-findings.md` §9. |
 | Orchestrator (`orchestrator.ts`) | ✅ | Full pipeline tested end-to-end with mocks for every external dependency, including the specific prompt-injection scenario from Part 9 and an on-chain-revert failure path. |
