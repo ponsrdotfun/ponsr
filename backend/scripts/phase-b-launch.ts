@@ -42,6 +42,9 @@ import { assertOutgoingLaunch } from '../src/launchAssertions';
 import { confirmCanaryLaunch } from '../src/canaryConfirmation';
 import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
 import { resolveCanaryPair } from '../src/canaryPreflight';
+import { CanaryJournal } from '../src/canaryJournal';
+import { admitCanarySpend, parseBotSpentWei } from '../src/canarySpend';
+import { decideCanaryPhase } from '../src/canaryReporting';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -51,6 +54,16 @@ const EXECUTE = process.argv.includes('--execute');
 /** Deliberately boring. This token is permanent and public. */
 const TOKEN_NAME = process.env.PHASE_B_NAME ?? 'Ponsr Test';
 const TOKEN_SYMBOL = process.env.PHASE_B_SYMBOL ?? 'PONSRTEST';
+/**
+ * Journal location. Operator state, deliberately outside the container: a deploy would
+ * erase a record describing transactions that are still on chain, and an absent journal
+ * reads as "nothing was attempted".
+ */
+const JOURNAL_PATH = process.env.CANARY_JOURNAL ?? './data/canary-journal.sqlite';
+/** Stable per-token run id, so a rerun for the same symbol is recognised as the same run. */
+const RUN_ID = process.env.CANARY_RUN_ID ?? `canary:${TOKEN_SYMBOL}`;
+/** The bot's own accounted 24h spend, from its /status. See canarySpend.ts. */
+const BOT_STATUS_URL = process.env.BOT_STATUS_URL ?? '';
 const TOKEN_DESCRIPTION =
   process.env.PHASE_B_DESCRIPTION ??
   'Validation launch for ponsr.fun. Not a project, not an investment, holds no value.';
@@ -117,6 +130,25 @@ async function main() {
   line('deployment', `${selected.id} (${selected.factory})`);
   line('launch selector', selected.launchSelector);
 
+  /**
+   * Opened before the preflight, because the preflight reads it for the daily-cap
+   * arithmetic and because an unresolved row must block a new attempt before any guard
+   * has a chance to say the coast is clear.
+   */
+  const journal = new CanaryJournal(JOURNAL_PATH);
+  const stillOpen = journal.unresolved();
+  if (stillOpen.length > 0) {
+    console.error('BLOCKED: the canary journal has unresolved work.');
+    for (const r of stillOpen) {
+      console.error(`  - id ${r.id} ${r.op} state=${r.state} tx=${r.txHash ?? '(never broadcast)'}`);
+      for (const problem of r.problems) console.error(`      ${problem}`);
+    }
+    console.error();
+    console.error('Recover it read-only before sending anything else. A replacement payload sent');
+    console.error('because polling timed out is how one ambiguous transaction becomes two.');
+    process.exit(1);
+  }
+
   // --- Preflight: every guard the factory would apply, read before spending anything ---
   console.log('Preflight');
 
@@ -170,6 +202,45 @@ async function main() {
   if (balance < needed) {
     problems.push(`balance ${formatEth(balance)} ETH is below the fee plus gas reserve (${formatEth(needed)} ETH)`);
   }
+
+  /**
+   * The daily spend circuit breaker, which this script had never consulted.
+   *
+   * Balance, fee ceiling and gas reserve are all per-transaction questions. The breaker is
+   * a rolling 24h total, and Part 5's audit is explicit that an attacker need not steal
+   * anything -- only make the bot spend. A second spender that ignores the shared budget is
+   * exactly that shape, whoever is running it.
+   */
+  const journalSpent = journal.recordedFeeTotalWei(new Date(Date.now() - 24 * 3600_000).toISOString());
+  let botSpent: bigint | null = null;
+  if (BOT_STATUS_URL) {
+    try {
+      const res = await fetch(BOT_STATUS_URL);
+      const body: any = await res.json();
+      const cap = (body?.checks ?? []).find((c: any) => c.name === 'daily-cap');
+      botSpent = cap ? parseBotSpentWei(String(cap.detail ?? '')) : null;
+    } catch {
+      botSpent = null;
+    }
+  } else if (process.env.BOT_SPENT_WEI) {
+    botSpent = BigInt(process.env.BOT_SPENT_WEI);
+  }
+
+  const admission = admitCanarySpend({
+    botSpentWei: botSpent,
+    journalSpentWei: journalSpent,
+    feeWei: fee,
+    capWei: config.DAILY_SPEND_CAP_WEI,
+  });
+  line('daily cap', `${formatEth(config.DAILY_SPEND_CAP_WEI)} ETH`);
+  line('bot accounted spend', botSpent === null ? 'UNREADABLE' : `${formatEth(botSpent)} ETH`);
+  line('canary journal spend', `${formatEth(journalSpent)} ETH`);
+  line(
+    'remaining after this',
+    admission.remainingAfterWei === undefined ? 'n/a' : `${formatEth(admission.remainingAfterWei)} ETH`
+  );
+  if (!admission.admitted) problems.push(admission.reason ?? 'the daily spend cap refuses this launch');
+  console.log(`  ${'note'.padEnd(26)} ${admission.caveat}`);
   console.log();
 
   if (problems.length > 0) {
@@ -343,11 +414,38 @@ async function main() {
     assertOutgoingLaunch({ to, data, value }, splitterAddress, selected);
   }
 
+  /**
+   * Intent first, then the send.
+   *
+   * The row exists before the signer can broadcast, so a crash between these two lines
+   * still leaves a record naming exactly what was about to happen. The hash is bound the
+   * instant `sendTransaction` returns -- before the receipt is awaited, which is the window
+   * that used to be invisible.
+   */
+  const launchRowId = journal.prepare({
+    runId: RUN_ID,
+    op: 'token_launch',
+    deploymentId: selected.id,
+    chainId: selected.chainId,
+    to,
+    value,
+    calldata: data,
+    tokenName: TOKEN_NAME,
+    tokenSymbol: TOKEN_SYMBOL,
+    salt,
+    pairToken: pairAsset.address,
+    splitterAddress,
+  });
+
   const sent = await signer.sendTransaction({ to, data, value });
+  journal.bindHash(launchRowId, sent.hash);
   line('tx', sent.hash);
   const receipt = await sent.wait();
+  journal.recordReceipt(launchRowId, { status: receipt ? Number(receipt.status) : 0 });
 
   if (!receipt || receipt.status !== 1) {
+    console.error();
+    console.error(decideCanaryPhase({ receiptStatus: receipt ? Number(receipt.status) : null, txHash: sent.hash, confirmation: null }).banner);
     console.error('\nLAUNCH REVERTED. The preflight passed, so this is new information -- capture the');
     console.error('revert reason from the explorer before retrying. Note the salt is deterministic:');
     console.error('a retry with the same symbol predicts the same token address and will revert with');
@@ -359,8 +457,17 @@ async function main() {
   // because that is a different question from 'which deployment is this run using'.
   const isV2 = selected.tokenParamsVersion !== 'v1';
 
+  /**
+   * Neutral language, and only neutral language, until the verdict exists.
+   *
+   * This printed `=== LAUNCHED ===` here, thirteen lines before `confirmCanaryLaunch` ran.
+   * A status=1 receipt means the transaction landed and the fee is spent; it does not mean
+   * the factory agrees who the creator fee recipient is, or that the receipt carries an
+   * event from the factory we selected. The banner was the one line guaranteed to appear.
+   */
   console.log();
-  console.log('=== LAUNCHED ===');
+  console.log(decideCanaryPhase({ receiptStatus: 1, txHash: sent.hash, confirmation: null }).banner);
+  journal.recordFee(launchRowId, fee);
 
   if (isV2) {
     /**
@@ -392,12 +499,66 @@ async function main() {
         };
       },
     });
+    /**
+     * Landed but unreconciled is an INCIDENT, not a failure.
+     *
+     * This printed `ABORTING:` and exited 1 -- ordinary failure language for a transaction
+     * that is on chain and paid for. It points the reader at the one action that must not
+     * be taken next: running it again. The salt makes that second attempt revert, after
+     * paying gas, with PoolAlreadyExists, which by then reads like an unrelated fault.
+     *
+     * The row is written down instead, with the hash and the problems, so recovery can
+     * reconcile it read-only later. Nothing here is described as failed and nothing is
+     * described as launched.
+     */
     if (!confirmation.verdict.ok || !confirmation.receipt || !confirmation.token) {
-      console.error(`ABORTING: ${selected.id} launch did not fully reconcile.`);
+      const phase = decideCanaryPhase({
+        receiptStatus: 1,
+        txHash: sent.hash,
+        confirmation: {
+          ok: false,
+          problems: confirmation.verdict.problems,
+          token: confirmation.receipt?.token ?? null,
+        },
+        outgoing: { to, data, value },
+      });
+      journal.markIncident(launchRowId, {
+        problems: confirmation.verdict.problems,
+        token: confirmation.receipt?.token ?? null,
+      });
+      console.error();
+      console.error(phase.banner);
+      console.error(`  tx                         ${sent.hash}`);
+      console.error(`  deployment                 ${selected.id} (${selected.factory})`);
+      console.error(`  splitter                   ${splitterAddress} (tx ${deployTxHash})`);
+      console.error(`  token candidate            ${confirmation.receipt?.token ?? 'unknown'}`);
+      console.error(`  fee consumed               ${formatEth(fee)} ETH, recorded against the daily cap`);
+      console.error(`  journal row                ${launchRowId} in ${JOURNAL_PATH}`);
+      console.error();
+      console.error('  The transaction LANDED. Do not run this again: the salt is deterministic and a');
+      console.error('  retry reverts after paying gas. Reconcile the recorded row read-only instead.');
       for (const problem of confirmation.verdict.problems) console.error(`  - ${problem}`);
+      journal.close();
       process.exit(1);
     }
     const found = confirmation.receipt;
+
+    /**
+     * Final success language, and the only place it appears.
+     *
+     * Reached only with a green verdict from the full confirmation gate: the event came
+     * from the selected factory, the token matches the calldata, and the factory's own
+     * record agrees on the creator fee recipient.
+     */
+    journal.markConfirmed(launchRowId, { token: found.token });
+    console.log();
+    console.log(
+      decideCanaryPhase({
+        receiptStatus: 1,
+        txHash: sent.hash,
+        confirmation: { ok: true, problems: [], token: found.token },
+      }).banner
+    );
 
     line('deployment', `${selected.id} (${selected.factory})`);
     line('token', found.token);
