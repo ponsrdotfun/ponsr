@@ -1,43 +1,56 @@
-import { ethers } from 'ethers';
 import { verifyDeployedSplitter } from '../src/splitterVerifier';
-import { splitterArtifactFor } from '../src/splitterDeployer';
 import { deploymentById } from '../src/deployments';
 
 /**
- * One verifier, used by both paths, and strong enough to matter.
+ * What a chainless test can honestly say about a deployed-contract verifier.
  *
- * The direct path marked a splitter row `confirmed` from the receipt alone and read the
- * deployed code afterwards. A stale contract was therefore recorded as terminal before
- * anything checked what it was — and if the later check exited, `unresolved()` was clean
- * and a rerun could proceed past a permanent invalid splitter. That is the 2026-08-04
- * wrong-splitter loss again, this time under a green journal.
+ * This file used to hand the compiler's `deployedBytecode` template to the verifier AS the
+ * deployed code and assert that it passed. The fixture WAS the expected value, so the test
+ * could not fail — and it hid the defect that would have stopped the first authorised
+ * canary: `creator`, `treasury`, `token` and `escrow` are Solidity immutables, patched in
+ * during construction, so a correct deployment never equals the template. Measured on a
+ * real deployment: 14 runs of 20 bytes.
  *
- * Recovery meanwhile grew its own selector check while the script kept a different one
- * inline. Two verifiers for one question disagree eventually, on the day it matters.
+ * The real coverage now lives in contracts-test/SplitterRuntime.test.js, which deploys the
+ * committed bytecode and reads it back through eth_getCode. What remains here is the set of
+ * questions that need no chain: refusals that happen before any comparison is attempted.
+ * A verifier for deployed contracts cannot be proven without a deployed contract, and
+ * pretending otherwise is what went wrong.
  */
 
 const D = deploymentById('pons-v2-current-7ed');
-const V1 = deploymentById('pons-v1');
 const ADDR = '0x9999999999999999999999999999999999999999';
-
-const artifactRuntime = (d = D) => {
-  const a = splitterArtifactFor(d) as { deployedBytecode?: string; runtimeBytecode?: string };
-  return (a.deployedBytecode ?? a.runtimeBytecode ?? '') as string;
-};
+const TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
 
 const ev = (over: Record<string, unknown> = {}) => ({
-  receiptStatus: 1,
-  contractAddress: ADDR,
-  deployedCode: artifactRuntime(),
+  receiptStatus: 1 as number | null,
+  contractAddress: ADDR as string | null,
+  deployedCode: '0x60806040',
   deployment: D,
+  expectedCreator: TREASURY,
+  expectedTreasury: TREASURY,
+  expectedTokenPlaceholder: '0x0000000000000000000000000000000000000000',
+  expectedEscrow: D.feeEscrow,
   ...over,
 });
 
-describe('the deployed splitter is verified, not assumed', () => {
-  it('accepts the exact compiled artifact', () => {
-    const v = verifyDeployedSplitter(ev());
-    expect(v.ok).toBe(true);
-    expect(v.splitterAddress).toBe(ADDR);
+describe('refusals that need no chain', () => {
+  /** Ambiguity is not failure, and must not read as one. */
+  it('reports a missing receipt as ambiguous and forbids deploying another', () => {
+    const v = verifyDeployedSplitter(ev({ receiptStatus: null, contractAddress: null }));
+    expect(v.ok).toBe(false);
+    expect(v.problems.join(' ')).toMatch(/ambiguous/i);
+    expect(v.problems.join(' ')).toMatch(/do not deploy another/i);
+  });
+
+  it('refuses a reverted deployment', () => {
+    expect(verifyDeployedSplitter(ev({ receiptStatus: 0, contractAddress: null })).ok).toBe(false);
+  });
+
+  it('refuses a success carrying no contract address', () => {
+    const v = verifyDeployedSplitter(ev({ contractAddress: null }));
+    expect(v.ok).toBe(false);
+    expect(v.problems.join(' ')).toMatch(/no contract address/i);
   });
 
   it('refuses an empty account', () => {
@@ -47,60 +60,31 @@ describe('the deployed splitter is verified, not assumed', () => {
   });
 
   /**
-   * The reviewer's case 2: a four-byte string can sit inside unrelated bytecode by
-   * coincidence or by construction, so selector presence alone is not identity.
+   * Length is checked before the byte walk, so a wholly different contract is refused with
+   * a message about being different rather than a byte offset nobody can act on.
    */
-  it('refuses unrelated bytecode that merely contains the required selectors', () => {
-    const fake =
-      '0x60806040' +
-      ethers.id('splitERC20(address)').slice(2, 10) +
-      ethers.id('claimAndSplit(address)').slice(2, 10) +
-      'deadbeef'.repeat(8);
-    const v = verifyDeployedSplitter(ev({ deployedCode: fake }));
+  it('refuses runtime of the wrong length as different code entirely', () => {
+    const v = verifyDeployedSplitter(ev({ deployedCode: '0x' + 'ab'.repeat(40) }));
     expect(v.ok).toBe(false);
-    expect(v.problems.join(' ')).toMatch(/does not match the artifact/i);
+    expect(v.problems.join(' ')).toMatch(/different code entirely|bytes/i);
   });
 
-  it('refuses the wrong deployment’s splitter', () => {
-    const v = verifyDeployedSplitter(ev({ deployedCode: artifactRuntime(V1) }));
-    expect(v.ok).toBe(false);
-  });
-
-  /** A missing receipt is ambiguous, and must not read as a failed verification. */
-  it('reports a null receipt as ambiguous, and says not to deploy another', () => {
-    const v = verifyDeployedSplitter(ev({ receiptStatus: null, contractAddress: null }));
-    expect(v.ok).toBe(false);
-    expect(v.problems.join(' ')).toMatch(/ambiguous/i);
-    expect(v.problems.join(' ')).toMatch(/do not deploy another/i);
-  });
-
-  it('refuses a reverted deployment', () => {
-    const v = verifyDeployedSplitter(ev({ receiptStatus: 0, contractAddress: null }));
-    expect(v.ok).toBe(false);
-  });
-
-  it('refuses a success with no contract address', () => {
-    const v = verifyDeployedSplitter(ev({ contractAddress: null }));
-    expect(v.ok).toBe(false);
-    expect(v.problems.join(' ')).toMatch(/no contract address/i);
+  it('refuses bytecode that merely contains the required selectors', () => {
+    const fake = '0x60806040' + 'deadbeef'.repeat(16);
+    expect(verifyDeployedSplitter(ev({ deployedCode: fake })).ok).toBe(false);
   });
 
   /**
-   * Metadata is stripped before comparison. solc hashes the source into the trailing CBOR,
-   * so a byte of path or line-ending difference changes the tail without changing the
-   * logic — and a check that flags a correct splitter is a check somebody deletes.
+   * Without the immutable offsets there is no way to distinguish a constructor-patched
+   * byte from a tampered one, so the verifier must refuse rather than guess in either
+   * direction. Guessing "patched" would accept an attacker's recipients; guessing
+   * "tampered" would reject every real splitter, which is what it did.
    */
-  it('accepts the artifact with different trailing metadata', () => {
-    const runtime = artifactRuntime().toLowerCase().replace(/^0x/, '');
-    const declared = parseInt(runtime.slice(-4), 16);
-    const body = runtime.slice(0, runtime.length - 4 - declared * 2);
-    const rebuilt = '0x' + body + 'ab'.repeat(declared) + runtime.slice(-4);
-    expect(verifyDeployedSplitter(ev({ deployedCode: rebuilt })).ok).toBe(true);
-  });
-
-  /** v1 has no escrow claim, so requiring claimAndSplit there would refuse a correct one. */
-  it('does not require claimAndSplit on v1', () => {
-    const v = verifyDeployedSplitter(ev({ deployment: V1, deployedCode: artifactRuntime(V1) }));
-    expect(v.ok).toBe(true);
+  it('fails closed when the artifact carries no immutable references', () => {
+    const stripped = { ...D, feeModel: 'push-from-locker' as const, tokenParamsVersion: 'v1' as const };
+    const v = verifyDeployedSplitter(
+      ev({ deployment: { ...stripped, id: 'pons-v1' }, deployedCode: '0x60806040' })
+    );
+    expect(v.ok).toBe(false);
   });
 });

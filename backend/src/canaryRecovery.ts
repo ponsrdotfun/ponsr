@@ -43,6 +43,11 @@ export interface CanaryRecoveryDeps {
   ) => Promise<FactoryLaunchRecord | null>;
   /** Deployed runtime code, for proving a landed splitter is actually a splitter. */
   readCode: (address: string) => Promise<string>;
+  /** The splitter's own view of its immutables, read through the EVM rather than the bytes. */
+  readSplitterBindings?: (
+    address: string,
+    deployment: PonsDeployment
+  ) => Promise<{ creator: string; treasury: string; token: string; escrow?: string } | null>;
   treasuryAddress: string;
 }
 
@@ -178,11 +183,34 @@ async function verifySplitter(
   }
   // ONE verifier, shared with the direct execution path. Two checks for one question
   // disagree eventually, and the disagreement surfaces on the day somebody relies on them.
+  let bindings: Awaited<ReturnType<NonNullable<CanaryRecoveryDeps['readSplitterBindings']>>> = null;
+  if (deps.readSplitterBindings && receipt.contractAddress) {
+    try {
+      bindings = await deps.readSplitterBindings(receipt.contractAddress, selected);
+    } catch {
+      // Reported by its absence below rather than treated as agreement.
+      bindings = null;
+    }
+  }
+
+  /**
+   * The same verifier the direct path uses, with the same expectations.
+   *
+   * Self-dealt: creator and treasury are both the treasury, and the token placeholder is
+   * the zero address the launch flow passes. Those are the values construction was meant
+   * to bind, and binding them is what stops a splitter with foreign recipients passing an
+   * "exact" comparison.
+   */
   const verdict = verifyDeployedSplitter({
     receiptStatus: receipt.status,
     contractAddress: receipt.contractAddress,
     deployedCode: code,
     deployment: selected,
+    expectedCreator: deps.treasuryAddress,
+    expectedTreasury: deps.treasuryAddress,
+    expectedTokenPlaceholder: '0x0000000000000000000000000000000000000000',
+    expectedEscrow: selected.feeEscrow,
+    bindings,
   });
   return { ok: verdict.ok, problems: verdict.problems, token: null, splitter: verdict.splitterAddress };
 }

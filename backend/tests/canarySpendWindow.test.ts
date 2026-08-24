@@ -20,9 +20,19 @@ import { readBotRollingSpend } from '../src/canarySpend';
 
 const CAP = 10_000_000_000_000_000n;
 
+/**
+ * Named as the interface names them.
+ *
+ * This said `chainId` and `blockNumber`, which StatusDeps does not have — and
+ * `as unknown as StatusDeps` silenced it, so `deps.getChainId` was undefined in every test
+ * here. Nothing noticed until buildStatus started calling it. A cast that lets a fixture
+ * disagree with the interface removes the one check that would have said so.
+ */
 const base = {
-  chainId: async () => 4663,
-  blockNumber: async () => 1,
+  expectedChainId: 4663,
+  getChainId: async () => 4663,
+  getBlockNumber: async () => 1,
+  publicLaunchEnabled: false,
   getLiveFeeWei: async () => 500_000_000_000_000n,
   getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
   getTreasuryBalanceWei: async () => 26_000_000_000_000_000n,
@@ -105,5 +115,64 @@ describe('the canary reads the rolling figure, and refuses anything else', () =>
   it('refuses when the reported cap differs from the local one', () => {
     expect(readBotRollingSpend(report(), CAP)).toBe(8_000_000_000_000_000n);
     expect(readBotRollingSpend(report({ capWei: '999' }), CAP)).toBeNull();
+  });
+});
+
+/**
+ * The envelope must describe the runtime that was observed, not the one configured.
+ *
+ * It was assembled before the RPC read and took chainId from `expectedChainId`. A backend
+ * connected to the wrong chain therefore published an envelope naming the chain it was
+ * supposed to be on, and a consumer binding against it passed. The separate `rpc: down`
+ * check said so elsewhere — but nothing reading the typed block ever saw that.
+ */
+describe('the spend envelope is evidence, not configuration', () => {
+  const withChain = (observed: number, over: Record<string, unknown> = {}) =>
+    ({
+      ...base,
+      expectedChainId: 4663,
+      getChainId: async () => observed,
+      rollingSpendLast24hWei: () => 1_000_000_000_000_000n,
+      deploymentId: 'pons-v2-current-7ed',
+      deploymentFactory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
+      treasuryAddress: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+      publicLaunchEnabled: false,
+      ...over,
+    }) as unknown as StatusDeps;
+
+  it('publishes the observed chain id when it matches', async () => {
+    const r = await buildStatus(withChain(4663));
+    expect(r.spend).toBeDefined();
+    expect(r.spend!.chainId).toBe(4663);
+  });
+
+  it('publishes NO envelope when the observed chain disagrees with the expected one', async () => {
+    const r = await buildStatus(withChain(1));
+    expect(r.spend).toBeUndefined();
+  });
+
+  it('publishes no envelope when the chain cannot be read at all', async () => {
+    const r = await buildStatus(
+      withChain(4663, {
+        getChainId: async () => {
+          throw new Error('RPC unavailable');
+        },
+      })
+    );
+    expect(r.spend).toBeUndefined();
+  });
+
+  it('carries the deployment, factory, treasury and public gate', async () => {
+    const r = await buildStatus(withChain(4663));
+    expect(r.spend!.deploymentId).toBe('pons-v2-current-7ed');
+    expect(r.spend!.factory).toBe('0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e');
+    expect(r.spend!.treasury).toBe('0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa');
+    expect(r.spend!.publicLaunchEnabled).toBe(false);
+    expect(Date.parse(r.spend!.generatedAt)).toBeGreaterThan(0);
+  });
+
+  it('reports the public gate honestly when it is open', async () => {
+    const r = await buildStatus(withChain(4663, { publicLaunchEnabled: true }));
+    expect(r.spend!.publicLaunchEnabled).toBe(true);
   });
 });

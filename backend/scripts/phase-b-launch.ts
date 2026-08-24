@@ -521,11 +521,36 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
    * runtime against the compiled artifact and checks the interface as a secondary signal.
    */
   const deployedCode = await provider.getCode(splitterAddress);
+  // The splitter's own answer, read through the EVM. Independent evidence for the same
+  // facts the bytes assert, which is worth more than reading one string twice.
+  const splitterContract = new ethers.Contract(
+    splitterAddress,
+    ['function creator() view returns (address)', 'function treasury() view returns (address)',
+     'function token() view returns (address)', 'function escrow() view returns (address)'],
+    provider
+  );
+  let splitterBindings = null as null | { creator: string; treasury: string; token: string; escrow?: string };
+  try {
+    splitterBindings = {
+      creator: await splitterContract.creator(),
+      treasury: await splitterContract.treasury(),
+      token: await splitterContract.token(),
+      ...(selected.feeModel === 'escrow-credit' ? { escrow: await splitterContract.escrow() } : {}),
+    };
+  } catch {
+    splitterBindings = null;
+  }
+
   const splitterVerdict = verifyDeployedSplitter({
     receiptStatus: 1,
     contractAddress: splitterAddress,
     deployedCode,
     deployment: selected,
+    expectedCreator: treasury,
+    expectedTreasury: treasury,
+    expectedTokenPlaceholder: ethers.ZeroAddress,
+    expectedEscrow: selected.feeEscrow,
+    bindings: splitterBindings,
   });
 
   if (!splitterVerdict.ok) {

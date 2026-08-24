@@ -175,21 +175,49 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
    * used with complete confidence. Omitted entirely rather than defaulted when the rolling
    * figure is unavailable -- a missing block refuses, an invented one admits.
    */
-  const spend = deps.rollingSpendLast24hWei
-    ? {
-        window: 'rolling-24h' as const,
-        rolling24hWei: deps.rollingSpendLast24hWei().toString(),
-        capWei: deps.dailyCapWei.toString(),
-        currentUtcDayWei: deps.spentTodayWei().toString(),
-        chainId: deps.expectedChainId,
-        deploymentId: deps.deploymentId,
-        factory: deps.deploymentFactory,
-        treasury: deps.treasuryAddress,
-        publicLaunchEnabled: deps.publicLaunchEnabled,
-        generatedAt: new Date().toISOString(),
-      }
-    : undefined;
+  /**
+   * Built only AFTER the chain has been read, and from what it answered.
+   *
+   * This was assembled before the RPC call and took chainId from `expectedChainId` -- the
+   * configured value, not the observed one. So a backend connected to the wrong chain
+   * published an envelope naming the chain it was supposed to be on, and a second spender
+   * binding against it would pass. The separate `rpc: down` check said so elsewhere, but a
+   * consumer reading the typed block never saw that.
+   *
+   * Omitted entirely when the chain cannot be read or disagrees. Absent refuses; a
+   * confidently wrong value admits.
+   */
+  let observedChainId: number | null = null;
+  try {
+    observedChainId = await within(deps.getChainId(), timeoutMs, 'chain id');
+  } catch {
+    observedChainId = null;
+  }
 
+  const spend =
+    deps.rollingSpendLast24hWei && observedChainId === deps.expectedChainId
+      ? {
+          window: 'rolling-24h' as const,
+          rolling24hWei: deps.rollingSpendLast24hWei().toString(),
+          capWei: deps.dailyCapWei.toString(),
+          currentUtcDayWei: deps.spentTodayWei().toString(),
+          // Observed, not configured.
+          chainId: observedChainId,
+          deploymentId: deps.deploymentId,
+          factory: deps.deploymentFactory,
+          treasury: deps.treasuryAddress,
+          publicLaunchEnabled: deps.publicLaunchEnabled,
+          generatedAt: new Date().toISOString(),
+        }
+      : undefined;
+
+  /**
+   * Ponsr's own gate, restored.
+   *
+   * A slice-based edit that inserted the spend envelope swallowed this check along with
+   * the code it replaced, and the suite caught it — the one place in this whole rollout
+   * where a destructive edit was noticed by something other than a reviewer.
+   */
   checks.push({
     name: 'public-launches',
     state: deps.publicLaunchEnabled ? 'ok' : 'degraded',
