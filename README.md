@@ -101,13 +101,25 @@ Blockscout with an open API:
 curl "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"
 ```
 
-### One security finding is open
+### The security finding that was open is now closed
 
-The Turnkey policy allows the bot key to sign a **contract creation with no constraint on
+The Turnkey policy allowed the bot key to sign a **contract creation with no constraint on
 value** — needed for the splitter, but a creation's value lands in the contract being created
-and the sender writes that contract. One transaction can empty the hot wallet while every
-destination-only check still reports green. See `docs/TURNKEY-CREATION-AUTHORITY.md`. It is
-**open**, it is an operator action, and the backend should not run 24/7 until it is closed.
+and the sender writes that contract. One transaction could empty the hot wallet while every
+destination-only check still reported green.
+
+**Closed 2026-08-22.** Policy `b647cc07-…` now binds `eth.tx.value == 0` on the creation
+clause and the broad `897d432e-…` was removed. A signed probe measured the funded creation
+`denied` where it had been `ALLOWED` the day before, with the zero-value splitter deploy
+still `ALLOWED`. Nothing was broadcast.
+
+**One residual is accepted, not fixed:** initcode is not bound, so any *zero-value* contract
+can still be deployed. That costs gas, never treasury — a zero-value creation has nothing to
+carry away. Do not read it as initcode being restricted.
+
+Closing this did not deploy anything: the running backend still predates the migration,
+`PONS_FACTORY_VERSION` is unflipped, and no canary has been run. Details in
+`docs/TURNKEY-CREATION-AUTHORITY.md`.
 
 ## Then: `BUILD-STATUS.md`
 

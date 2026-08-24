@@ -104,10 +104,101 @@ describe('no document calls the whitelist a blocker', () => {
   }
 });
 
-describe('the real open item is still named', () => {
-  it('the creation-authority finding is documented as OPEN', () => {
-    const text = fs.readFileSync(path.join(ROOT, 'docs/TURNKEY-CREATION-AUTHORITY.md'), 'utf8');
-    expect(text).toMatch(/Status:\s*OPEN/i);
+describe('the creation-authority finding is recorded as closed, and honestly', () => {
+  const FINDING = path.join(ROOT, 'docs/TURNKEY-CREATION-AUTHORITY.md');
+
+  /**
+   * This guard used to require `Status: OPEN`.
+   *
+   * That was right while the finding was live: it stopped the most dangerous item in the
+   * repository being quietly dropped. But a guard that pins a status is only ever correct
+   * until the status changes, and on 2026-08-22 the finding was closed — at which point
+   * the guard began enforcing a statement that was no longer true, and CI went green
+   * doing it. A test that keeps a document honest can become the reason it is wrong.
+   *
+   * So it now pins CLOSED, and the three assertions below make the closure hard to
+   * misrepresent in either direction: it cannot silently revert to OPEN, it must carry
+   * the evidence that closed it, and it must not be inflated into protection it does not
+   * provide.
+   */
+  it('is marked CLOSED with a date', () => {
+    expect(claims('docs/TURNKEY-CREATION-AUTHORITY.md')).toMatch(/Status:\s*CLOSED\s*[—-]\s*\d{4}-\d{2}-\d{2}/i);
+  });
+
+  it('does not silently return to OPEN', () => {
+    // Historical blocks are stripped, so the record of the OPEN period survives while a
+    // live OPEN claim fails. Reopening is a deliberate edit to this test, not a slip.
+    expect(claims('docs/TURNKEY-CREATION-AUTHORITY.md')).not.toMatch(/Status:\s*OPEN/i);
+  });
+
+  it('names the policy that closed it and the one that was removed', () => {
+    const text = claims('docs/TURNKEY-CREATION-AUTHORITY.md');
+    expect(text).toMatch(/b647cc07-a7fe-4941-914c-2c1032392f80/);
+    expect(text).toMatch(/897d432e-16f4-4a5e-b16e-42c365508ec6/);
+  });
+
+  it('keeps the OPEN period as historical evidence rather than deleting it', () => {
+    // The guards elsewhere in this repository only make sense if the finding was once
+    // live. Erasing that leaves them looking arbitrary, and the next person removes them.
+    const raw = fs.readFileSync(FINDING, 'utf8');
+    expect(raw).toMatch(/<!--\s*historical\s*-->/);
+    expect(raw).toMatch(/Status:\s*OPEN/i);
+  });
+
+  /**
+   * The residual is the part most likely to be overstated next.
+   *
+   * Option A binds `eth.tx.value`, not initcode. A zero-value deploy of arbitrary code is
+   * still possible — it costs gas and cannot carry treasury value. Describing that as
+   * initcode being bound, restricted or protected would claim a control nobody built.
+   */
+  it('records the residual in the terms that are actually true', () => {
+    const text = claims('docs/TURNKEY-CREATION-AUTHORITY.md');
+    expect(text).toMatch(/initcode is not bound|initcode is still unbound/i);
+    expect(text).toMatch(/zero-value/i);
+    expect(text).toMatch(/gas,? (not|never) treasury/i);
+  });
+
+  /**
+   * Phrasings that can only be claims, never prohibitions.
+   *
+   * The first version of this guard forbade "initcode is bound" across every document and
+   * failed immediately — on the sentence in the finding itself that forbids saying it. A
+   * regex cannot tell a rule from its own statement, so matching the bare phrase catches
+   * the warning as readily as the lie.
+   *
+   * These patterns are narrower and, being narrower, are not airtight: a sufficiently
+   * inventive overstatement will slip past. The positive assertions above are the real
+   * guarantee; this is a catch for the specific sentences somebody would reach for first.
+   */
+  it('never inflates the residual into a control that was not built', () => {
+    for (const rel of DOCS) {
+      const t = claims(rel);
+      expect(t).not.toMatch(/initcode (binding|is bound) is (enforced|in place|active)/i);
+      expect(t).not.toMatch(/all contract creations? (is|are) denied/i);
+      expect(t).not.toMatch(/creation is (fully|now) (bound|constrained|locked)/i);
+    }
+  });
+
+  /**
+   * Closing the finding says nothing about the rollout.
+   *
+   * Asserted positively on the one document that must carry the caveat, rather than by
+   * forbidding a string across every document: `TURNKEY_POLICY_CONFIRMED=true` appears
+   * legitimately in docs/DEPLOY.md as part of a command template and in two files quoting
+   * the verifier's own output. Forbidding the string flagged all three.
+   */
+  it('states plainly what the closure did not do', () => {
+    const text = claims('docs/TURNKEY-CREATION-AUTHORITY.md');
+    expect(text).toMatch(/TURNKEY_POLICY_CONFIRMED[^.]{0,60}\bnot\b/i);
+    expect(text).toMatch(/no canary has been run/i);
+    expect(text).toMatch(/has \*\*not\*\* been flipped|not been flipped/i);
+  });
+
+  it('no document claims a canary has completed', () => {
+    for (const rel of DOCS) {
+      expect(claims(rel)).not.toMatch(/canary (has )?(completed|succeeded|passed)/i);
+    }
   });
 
   it('no document claims a leaked bot key cannot reach the treasury', () => {

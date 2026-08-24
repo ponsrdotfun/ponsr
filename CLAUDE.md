@@ -119,8 +119,13 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   with no constraint on value. Measured 2026-08-21: Turnkey signs a creation carrying
   1 ETH. A creation's value lands in the contract being created and the sender writes
   that contract, so one transaction empties the hot wallet while every destination-only
-  check still reports green. See `docs/TURNKEY-CREATION-AUTHORITY.md`. **Open, and an
-  operator action.**
+  check still reported green. **CLOSED 2026-08-22** by policy
+  `b647cc07-a7fe-4941-914c-2c1032392f80`, which binds `eth.tx.value == 0` on the creation
+  clause; the broad `897d432e-…` was deleted after it was in place. A signed probe measured
+  the funded creation **denied**, the zero-value splitter deploy still ALLOWED, and both
+  factories ALLOWED. Nothing broadcast. **Residual, accepted:** initcode is not bound, so a
+  zero-value deploy of arbitrary code remains possible — gas, never treasury. See
+  `docs/TURNKEY-CREATION-AUTHORITY.md`.
   `scripts/turnkey-allow-v2-factory.ts` is named per deployment so it cannot collide with the
   older, still-present rule for the superseded factory.
 
@@ -224,9 +229,12 @@ Still blocked on the owner:
    Two consequences, and they point in opposite directions. The running bot cannot launch
    anything, because it believes the launchpad is shut — so the stale deploy is currently
    acting as a brake. But it still holds the Turnkey bot key in a live process, and the
-   creation-authority finding above is open, so the hot wallet (0.0260 ETH at last read) is
-   reachable by anyone who obtains that key. **Close the Turnkey finding before deploying,
-   not after** — deploying first removes the brake while leaving the exposure.
+   creation-authority finding above is now closed, so a leaked bot key can no longer attach
+   treasury funds to a contract creation. That removes the reason to keep the deploy
+   blocked, but not the reason to sequence it carefully: deploying is the migration
+   cut-over, because production still runs `PONS_FACTORY_VERSION=v2`, which on this code
+   means the CURRENT factory, where `canLaunch(treasury)` is true. The deploy is what makes
+   real launches possible, so it belongs with the canary plan rather than on its own.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 
