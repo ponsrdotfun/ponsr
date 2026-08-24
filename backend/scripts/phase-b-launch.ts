@@ -43,9 +43,10 @@ import { confirmCanaryLaunch } from '../src/canaryConfirmation';
 import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
 import { resolveCanaryPair } from '../src/canaryPreflight';
 import { CanaryJournal } from '../src/canaryJournal';
-import { admitCanarySpend, parseBotSpentWei } from '../src/canarySpend';
+import { admitCanarySpend, readBotRollingSpend } from '../src/canarySpend';
 import { decideCanaryPhase } from '../src/canaryReporting';
 import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
+import { pinnedTreasuryAddress, assertSignerMatchesPin, assertRawKeyNotOnMainnet } from '../src/canarySignerBoundary';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
 
@@ -92,10 +93,18 @@ async function main() {
   //
   // RAW_KEY=1 forces the old behaviour, for the case where the raw wallet is
   // deliberately the subject.
-  const signer = process.env.RAW_KEY === '1'
-    ? new RawKeyTreasurySigner(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider)
-    : createTreasurySigner(provider);
-  const treasury = await signer.address();
+  /**
+   * The address from configuration, not from a key.
+   *
+   * This constructed a signer here and awaited signer.address(), two hundred lines before
+   * the EXECUTE gate, to obtain a public address. A rehearsal that requires a credential
+   * cannot be run by anyone who does not hold one -- and the completion report went on to
+   * call it a "keyless dry run", which it was not.
+   *
+   * The signer is built after the gate, and checked against this pin before it can spend.
+   */
+  const treasury = pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string });
+  assertRawKeyNotOnMainnet(network.chainId, process.env.RAW_KEY === '1');
 
   console.log('Chain');
   line('rpc', config.RPC_URL);
@@ -109,7 +118,9 @@ async function main() {
 
   console.log('Treasury');
   const balance = await getBalanceWei(provider, treasury);
-  line('signer', process.env.RAW_KEY === '1' ? 'raw key (forced)' : 'from config (Turnkey in production)');
+  // Says what is actually true of a dry run: the address came from configuration and no
+  // credential has been loaded. The signer is built after the EXECUTE gate, or not at all.
+  line('address source', EXECUTE ? 'pinned config, signer verified against it' : 'pinned config (no signer loaded)');
   line('address', treasury);
   line('balance', `${formatEth(balance)} ETH`);
   console.log();
@@ -216,9 +227,10 @@ async function main() {
   if (BOT_STATUS_URL) {
     try {
       const res = await fetch(BOT_STATUS_URL);
-      const body: any = await res.json();
-      const cap = (body?.checks ?? []).find((c: any) => c.name === 'daily-cap');
-      botSpent = cap ? parseBotSpentWei(String(cap.detail ?? '')) : null;
+      // Typed field, and its window is verified. The previous version parsed the
+      // human-readable daily-cap sentence, which is a UTC CALENDAR DAY figure while the
+      // breaker admits against a rolling 24 hours -- a different budget, read confidently.
+      botSpent = readBotRollingSpend(await res.json(), config.DAILY_SPEND_CAP_WEI);
     } catch {
       botSpent = null;
     }
@@ -307,6 +319,15 @@ async function main() {
 
   // --- Execute ---
   console.log('1/2  Deploying FeeSplitter (creator == treasury == this wallet)...');
+  /**
+   * Only now, past the gate, does a credential enter the process -- and the first thing
+   * asked of it is whether it is the account every preflight reading above was about.
+   */
+  const signer = process.env.RAW_KEY === '1'
+    ? new RawKeyTreasurySigner(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider)
+    : createTreasurySigner(provider);
+  assertSignerMatchesPin(await signer.address(), treasury);
+
   // The provider is not optional here in spirit: without it `deploySplitter` skips its
   // own identity check, and the splitter is the first artifact that cannot be undone.
   // Both checks again, with nothing between them and the first durable artifact.
@@ -323,6 +344,16 @@ async function main() {
     }
   }
 
+  /**
+   * The splitter deployment is journalled too, and this is the row that was missing.
+   *
+   * `deploySplitter` broadcasts and waits internally, so the first version of this script
+   * journalled only the launch -- by which point a permanent contract had already been
+   * created and inspected with no durable record at all. A crash inside that call lost the
+   * hash, and a rerun would happily deploy a second splitter because the journal held no
+   * unresolved row to refuse on.
+   */
+  let splitterRowId = -1;
   const { splitterAddress, deployTxHash } = await deploySplitter(
     signer,
     treasury,
@@ -333,7 +364,28 @@ async function main() {
     // under rollback or an injected target the identity, readiness and calldata followed
     // `selected` while the splitter's IMMUTABLE escrow followed something else. The
     // escrow is the one that cannot be repaired afterwards.
-    selected
+    selected,
+    {
+      onPlanned: (initcode) => {
+        splitterRowId = journal.prepare({
+          runId: RUN_ID,
+          op: 'splitter_deploy',
+          deploymentId: selected.id,
+          chainId: selected.chainId,
+          to: '',
+          value: 0n,
+          calldata: initcode,
+        });
+      },
+      onSent: (hash) => journal.bindHash(splitterRowId, hash),
+      // status null stays `broadcast`: a receipt nobody saw is not a revert.
+      onReceipt: (r) => {
+        journal.recordReceipt(splitterRowId, { status: r.status });
+        if (r.status === 1 && r.contractAddress) {
+          journal.markConfirmed(splitterRowId, { token: null, splitterAddress: r.contractAddress });
+        }
+      },
+    }
   );
   line('splitter', splitterAddress);
   line('tx', deployTxHash);

@@ -31,10 +31,22 @@ export interface StatusCheck {
   detail: string;
 }
 
+/** Typed, machine-readable spend. See rollingSpendLast24hWei for why it names its window. */
+export interface StatusSpend {
+  window: 'rolling-24h';
+  /** Decimal wei string. The window the circuit breaker actually admits against. */
+  rolling24hWei: string;
+  capWei: string;
+  /** UTC calendar day, published separately so nothing mistakes it for the breaker's window. */
+  currentUtcDayWei: string;
+}
+
 export interface StatusReport {
   state: CheckState;
   at: string;
   checks: StatusCheck[];
+  /** Absent when the rolling figure is unavailable. Absent refuses; invented would admit. */
+  spend?: StatusSpend;
 }
 
 export interface StatusDeps {
@@ -67,6 +79,16 @@ export interface StatusDeps {
   parserRoute: string;
   alertsRoute: string;
   crossCheckHours: number;
+  /**
+   * The ROLLING 24-hour total, from the same query the circuit breaker admits against.
+   *
+   * Separate from spentTodayWei, which is a UTC calendar day. They agree for most of the
+   * day and diverge exactly when it is expensive: at 00:01 UTC the calendar figure resets
+   * while the breaker still counts the previous day. A comment in index.ts claimed the
+   * calendar figure was "the same window the circuit breaker counts". It was not, and any
+   * second spender reading it could be told it had a full cap of headroom.
+   */
+  rollingSpendLast24hWei?: () => bigint;
   /** Ponsr's own gate. A healthy upstream factory is not public availability. */
   publicLaunchEnabled: boolean;
   /** Which factory launches are built for. v1 prices every launch in ETH. */
@@ -127,6 +149,22 @@ function eth(wei: bigint, dp = 4): string {
 
 export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<StatusReport> {
   const checks: StatusCheck[] = [];
+  /**
+   * Machine-readable, and it names its own window.
+   *
+   * Another process deciding whether it may spend cannot safely parse a sentence written
+   * for a human: the string cannot say which window it means, so the wrong number gets
+   * used with complete confidence. Omitted entirely rather than defaulted when the rolling
+   * figure is unavailable -- a missing block refuses, an invented one admits.
+   */
+  const spend = deps.rollingSpendLast24hWei
+    ? {
+        window: 'rolling-24h' as const,
+        rolling24hWei: deps.rollingSpendLast24hWei().toString(),
+        capWei: deps.dailyCapWei.toString(),
+        currentUtcDayWei: deps.spentTodayWei().toString(),
+      }
+    : undefined;
 
   checks.push({
     name: 'public-launches',
@@ -337,7 +375,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     }
   }
 
-  return { state: worst(checks), at: new Date().toISOString(), checks };
+  return { state: worst(checks), at: new Date().toISOString(), checks, ...(spend ? { spend } : {}) };
 }
 
 /** 200 unless something is actually down, so an uptime monitor can watch this.

@@ -82,10 +82,19 @@ describe('the canary never announces success before reconciliation', () => {
     expect([LANDED_BANNER, RECONCILED_BANNER, INCIDENT_BANNER]).not.toContain(r.banner);
   });
 
-  it('never reports landed or success when there is no receipt at all', () => {
+  /**
+   * This test asserted `phase === 'reverted'` for a null receipt, and was green.
+   *
+   * It was encoding the defect. No receipt proves neither a revert nor an absence: the
+   * transaction may have landed while the RPC failed to answer. Calling it reverted made
+   * the row terminal, which dropped it out of `unresolved()`, which unblocked a retry of a
+   * possibly-landed permanent launch. See canaryAmbiguity.test.ts.
+   */
+  it('reports no receipt as unknown, never as reverted', () => {
     const r = decideCanaryPhase({ receiptStatus: null, txHash: '0xabc', confirmation: null });
-    expect(r.phase).toBe('reverted');
+    expect(r.phase).toBe('unknown');
     expect(r.final).toBe(false);
+    expect(r.evidence.txHash).toBe('0xabc');
   });
 
   /**

@@ -26,8 +26,18 @@ export const LANDED_BANNER = '=== TRANSACTION LANDED — RECONCILING ===';
 export const RECONCILED_BANNER = '=== LAUNCHED AND RECONCILED ===';
 export const INCIDENT_BANNER = '=== INCIDENT: LANDED ON CHAIN, NOT RECONCILED ===';
 export const REVERTED_BANNER = '=== LAUNCH REVERTED — NOTHING WAS LAUNCHED ===';
+/**
+ * No receipt is not a revert.
+ *
+ * This case used to render as REVERTED. `sent.wait()` can return null and an RPC can fail
+ * to answer; the transaction may have landed regardless. Telling the operator "nothing was
+ * launched" there is not merely imprecise -- it is the sentence that makes retrying a
+ * permanent, already-paid-for launch look reasonable.
+ */
+export const UNKNOWN_BANNER =
+  '=== UNKNOWN: BROADCAST, NO RECEIPT SEEN — DO NOT RETRY ===';
 
-export type CanaryPhase = 'landed' | 'reconciled' | 'incident' | 'reverted';
+export type CanaryPhase = 'landed' | 'reconciled' | 'incident' | 'reverted' | 'unknown';
 
 export interface CanaryConfirmationSummary {
   ok: boolean;
@@ -72,10 +82,14 @@ export function decideCanaryPhase(input: CanaryPhaseInput): CanaryPhaseResult {
     ...(input.outgoing ? { outgoing: input.outgoing } : {}),
   };
 
+  if (input.receiptStatus === null) {
+    // Broadcast, outcome unseen. Distinct from a revert in the only way that matters: a
+    // revert is a fact, and this is the absence of one. The hash is the whole handle on
+    // it, and the instruction is read-only recovery -- never a resend.
+    return { phase: 'unknown', banner: UNKNOWN_BANNER, final: false, evidence };
+  }
+
   if (input.receiptStatus !== 1) {
-    // Includes null: a receipt that never arrived is not a landed transaction, and must
-    // not be reported as one. Whether it is genuinely absent or merely unobserved is a
-    // question for the journal, not for a banner.
     return { phase: 'reverted', banner: REVERTED_BANNER, final: false, evidence };
   }
 

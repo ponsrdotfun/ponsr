@@ -133,7 +133,27 @@ describe('the splitter follows the selected deployment, not the default', () => 
       .split(/\r?\n/)
       .filter((l: string) => !l.trim().startsWith('//'))
       .join('\n');
-    // Six arguments, ending in the selected deployment. Five means the default.
-    expect(code).toMatch(/deploySplitter\([\s\S]{0,240}provider,[\s\S]{0,60}selected\s*\)/);
+    // `selected` must be passed. Omitting it falls back to module-global selection, so
+    // under rollback the identity, readiness and calldata follow `selected` while the
+    // splitter's IMMUTABLE escrow follows something else -- the one that cannot be repaired.
+    //
+    // It used to require `selected` be the LAST argument, which broke the moment journal
+    // hooks were added after it. A positional assertion protects a position; this protects
+    // the argument.
+    // Read the argument list rather than matching across it.
+    //
+    // This began as one long-range regex requiring `selected` to sit a bounded distance
+    // after `provider` AND be the last argument. Journal hooks after `selected` broke it,
+    // and the replacement carried a literal BACKSPACE byte where a word boundary was
+    // intended -- written by a Python heredoc that ate the escape, and invisible in every
+    // terminal that displayed the line. The same class of defect as the NUL byte that
+    // once made a policy digest disagree with itself.
+    //
+    // A sentinel over source text should be simple enough that it cannot hide a byte.
+    // The executable coverage is in canaryRecoverAll.test.ts.
+    const open = code.indexOf('deploySplitter(');
+    const args = code.slice(open + 'deploySplitter('.length, code.indexOf('{', open));
+    expect(args).toContain('provider');
+    expect(args).toContain('selected');
   });
 });

@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ethers } from 'ethers';
 import { CanaryJournal } from '../src/canaryJournal';
-import { recoverCanaryIncidents, CanaryRecoveryDeps } from '../src/canaryRecovery';
+import { recoverCanary, CanaryRecoveryDeps } from '../src/canaryRecovery';
 import { executableDeployment } from '../src/deployments';
 import { PONS_V2_CURRENT_ABI, buildCurrentV2LaunchCalldata, launchSalt } from '../src/ponsV2CurrentEncoder';
 
@@ -86,15 +86,16 @@ describe('canary incident recovery reads, and only reads', () => {
 
   const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)] }),
+    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null }),
     readLaunchRecord: async () => record(),
+    readCode: async () => '0x',
     treasuryAddress: TREASURY,
     ...over,
   });
 
   it('promotes an incident to confirmed when everything now agrees', async () => {
     const { j, id } = journalWithIncident(file);
-    const results = await recoverCanaryIncidents(j, deps());
+    const results = await recoverCanary(j, deps());
     expect(results).toHaveLength(1);
     expect(results[0].confirmed).toBe(true);
     expect(j.byId(id)!.state).toBe('confirmed');
@@ -104,7 +105,7 @@ describe('canary incident recovery reads, and only reads', () => {
 
   it('leaves the incident open when the factory record still disagrees', async () => {
     const { j, id } = journalWithIncident(file);
-    const results = await recoverCanaryIncidents(
+    const results = await recoverCanary(
       j,
       deps({ readLaunchRecord: async () => record({ creatorFeeRecipient: '0xdead000000000000000000000000000000000000' }) })
     );
@@ -116,7 +117,7 @@ describe('canary incident recovery reads, and only reads', () => {
   /** A landed transaction is never downgraded to ordinary failure. */
   it('never turns a landed launch into a failure, however unreadable it is', async () => {
     const { j, id } = journalWithIncident(file);
-    await recoverCanaryIncidents(j, deps({ readLaunchRecord: async () => { throw new Error('RPC down'); } }));
+    await recoverCanary(j, deps({ readLaunchRecord: async () => { throw new Error('RPC down'); } }));
     const row = j.byId(id)!;
     expect(row.state).toBe('confirmed_incident');
     expect(row.state).not.toBe('receipt_reverted');
@@ -128,9 +129,9 @@ describe('canary incident recovery reads, and only reads', () => {
   it('cannot be confirmed by a matching event emitted from a foreign address', async () => {
     const { j, id } = journalWithIncident(file);
     const foreign = '0x000000000000000000000000000000000000beef';
-    const results = await recoverCanaryIncidents(
+    const results = await recoverCanary(
       j,
-      deps({ readReceipt: async () => ({ status: 1, logs: [launchedLog(foreign)] }) })
+      deps({ readReceipt: async () => ({ status: 1, logs: [launchedLog(foreign)], contractAddress: null }) })
     );
     expect(results[0].confirmed).toBe(false);
     expect(j.byId(id)!.state).toBe('confirmed_incident');
@@ -139,9 +140,9 @@ describe('canary incident recovery reads, and only reads', () => {
 
   it('is idempotent: a second pass confirms nothing new and writes no second row', async () => {
     const { j, id } = journalWithIncident(file);
-    await recoverCanaryIncidents(j, deps());
+    await recoverCanary(j, deps());
     const after = j.byId(id)!.updatedAt;
-    const second = await recoverCanaryIncidents(j, deps());
+    const second = await recoverCanary(j, deps());
     expect(second).toHaveLength(0); // already confirmed, so no longer an open incident
     expect(j.byId(id)!.updatedAt).toBe(after);
     j.close();
@@ -150,8 +151,8 @@ describe('canary incident recovery reads, and only reads', () => {
   it('records no additional spend on a repeated recovery pass', async () => {
     const { j, id } = journalWithIncident(file);
     j.recordFee(id, FEE);
-    await recoverCanaryIncidents(j, deps());
-    await recoverCanaryIncidents(j, deps());
+    await recoverCanary(j, deps());
+    await recoverCanary(j, deps());
     expect(j.recordedFeeTotalWei()).toBe(FEE);
     j.close();
   });
@@ -173,7 +174,7 @@ describe('canary incident recovery reads, and only reads', () => {
 
   it('reports a receipt that cannot be fetched as still unresolved, not as reverted', async () => {
     const { j, id } = journalWithIncident(file);
-    const results = await recoverCanaryIncidents(j, deps({ readReceipt: async () => null }));
+    const results = await recoverCanary(j, deps({ readReceipt: async () => null }));
     expect(results[0].confirmed).toBe(false);
     expect(results[0].problems.join(' ')).toMatch(/receipt/i);
     expect(j.byId(id)!.state).toBe('confirmed_incident');

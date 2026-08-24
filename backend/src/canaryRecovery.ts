@@ -1,3 +1,4 @@
+import { ethers } from 'ethers';
 import { CanaryJournal, CanaryRow } from './canaryJournal';
 import { PonsDeployment } from './deployments';
 import {
@@ -8,31 +9,24 @@ import {
 import { decodeCurrentV2Launch } from './ponsV2CurrentEncoder';
 
 /**
- * Reconciling a canary launch that landed while nobody was watching.
+ * Advancing a canary run that was interrupted, using reads alone.
  *
- * When the receipt succeeded but reconciliation was unavailable or disagreed,
- * `phase-b-launch.ts` printed `ABORTING:` and exited 1. That is ordinary failure language
- * for a transaction that is on chain and paid for, and it points the reader at the one
- * action that must never be taken next: running it again. The deterministic salt would
- * make that second attempt revert, after paying gas, with `PoolAlreadyExists` -- which
- * reads like an unrelated second fault to whoever is holding the terminal by then.
+ * The first version handled exactly one state -- `confirmed_incident`, and only for
+ * `token_launch`. Everything else the journal can hold (prepared, broadcast,
+ * receipt_success, and any splitter row at all) had no path forward, while the script
+ * refuses to start whenever anything is unresolved.
  *
- * SHARED WITH PRODUCTION, DELIBERATELY
- * ------------------------------------
- * The reconciliation itself is `extractLaunchFromReceipt` and `verifyLaunchConfirmation`,
- * the same functions the bot uses and the same ones already under test. Only the store
- * differs: this reads the operator's canary journal rather than the production database,
- * so nothing here needs the Fly volume or production credentials. Writing a second,
- * canary-shaped verifier would have produced a weaker check that drifts from the real one,
- * and the two would disagree exactly when it mattered.
+ * So the journal preserved evidence perfectly and then wedged the operator permanently,
+ * and the message it printed -- "recover it read-only" -- named no command, because none
+ * existed. Evidence nobody can act on is a slower way of having none.
  *
  * READ-ONLY BY CONSTRUCTION
  * -------------------------
- * `CanaryRecoveryDeps` carries a receipt reader and a factory-record reader. There is no
- * signer, no send callback, no key and no Turnkey handle -- not as a convention anybody
- * has to remember, but because there is no parameter through which a broadcast could be
- * requested. A recovery path able to send is a recovery path able to launch a second
- * permanent token while trying to work out what happened to the first.
+ * `CanaryRecoveryDeps` carries four readers and an address. There is no signer, no send
+ * callback, no key and no Turnkey handle -- not as a rule to remember, but because there
+ * is no parameter through which a broadcast could be requested. A recovery path able to
+ * send is a recovery path able to create a second permanent token while establishing what
+ * happened to the first.
  */
 
 export interface CanaryRecoveryDeps {
@@ -40,42 +34,64 @@ export interface CanaryRecoveryDeps {
   readReceipt: (txHash: string) => Promise<{
     status: number | null;
     logs: readonly { address?: string; topics: readonly string[]; data: string }[];
+    contractAddress: string | null;
   } | null>;
   readLaunchRecord: (
     deployment: PonsDeployment,
     token: string
   ) => Promise<FactoryLaunchRecord | null>;
+  /** Deployed runtime code, for proving a landed splitter is actually a splitter. */
+  readCode: (address: string) => Promise<string>;
   treasuryAddress: string;
 }
 
 export interface CanaryRecoveryResult {
   id: number;
+  op: CanaryRow['op'];
   txHash: string | null;
   confirmed: boolean;
   problems: string[];
 }
 
-/** Only launches. A splitter deployment has no factory record to reconcile against. */
-function openLaunchIncidents(journal: CanaryJournal): CanaryRow[] {
-  return journal
-    .unresolved()
-    .filter((r) => r.state === 'confirmed_incident' && r.op === 'token_launch');
+/** Selectors a deployed FeeSplitterV2 must expose. A stale build cannot fake these. */
+const REQUIRED_SELECTORS = ['splitERC20(address)', 'claimAndSplit(address)'].map((sig) =>
+  ethers.id(sig).slice(2, 10)
+);
+
+/**
+ * Everything still open. Terminal rows are skipped entirely -- not read, not re-verified --
+ * so a second pass makes no chain calls and cannot double-count anything.
+ */
+function open(journal: CanaryJournal): CanaryRow[] {
+  return journal.unresolved();
 }
 
-export async function recoverCanaryIncidents(
+export async function recoverCanary(
   journal: CanaryJournal,
   deps: CanaryRecoveryDeps
 ): Promise<CanaryRecoveryResult[]> {
   const results: CanaryRecoveryResult[] = [];
 
-  for (const row of openLaunchIncidents(journal)) {
+  for (const row of open(journal)) {
     const problems: string[] = [];
     const selected = deps.resolveDeployment(row.deploymentId);
 
     if (!selected) {
       problems.push(`unknown recorded deployment ${row.deploymentId}`);
     } else if (!row.txHash) {
-      problems.push('no transaction hash was ever bound to this row');
+      /**
+       * Prepared, never bound. The intent exists and nothing proves what became of it.
+       *
+       * Deliberately NOT classified. Calling it reverted would unblock a resend of a
+       * launch that may have landed; calling it safe to resend would do the same thing
+       * with more confidence. It stays open until a person decides, which is the correct
+       * amount of automation for an ambiguity about a permanent artifact.
+       */
+      problems.push(
+        'the transaction hash was never bound: the intent is recorded but nothing here ' +
+          'proves whether it was broadcast. Do not resend. Search the explorer for a ' +
+          'transaction from the treasury matching this exact destination, value and calldata.'
+      );
     } else {
       let receipt: Awaited<ReturnType<CanaryRecoveryDeps['readReceipt']>> = null;
       try {
@@ -84,51 +100,113 @@ export async function recoverCanaryIncidents(
         problems.push(`receipt could not be read: ${(err as Error)?.message ?? err}`);
       }
 
-      if (!receipt) {
-        // Unfetchable is not reverted. The transaction may be perfectly fine and the RPC
-        // merely unreachable; recording it as reverted would erase a landed launch.
-        problems.push('the receipt could not be fetched, so this remains unresolved');
+      if (!receipt || receipt.status === null) {
+        // Unfetchable is not reverted. The row stays exactly where it is, hash intact.
+        problems.push(
+          'the receipt could not be read, so this stays ambiguous. The transaction may have ' +
+            'landed. Retry the lookup rather than the transaction.'
+        );
       } else if (receipt.status !== 1) {
-        problems.push(`the receipt reports status ${receipt.status}`);
+        journal.recordReceipt(row.id, { status: 0 });
+        results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: ['reverted on chain'] });
+        continue;
       } else {
-        // Scoped to the selected factory: a log with the same signature from any other
-        // address proves nothing about our launch.
-        const found = extractLaunchFromReceipt(receipt.logs, selected);
-        if (!found) {
-          problems.push('the receipt carries no launch event from the selected factory');
-        } else {
-          let record: FactoryLaunchRecord | null = null;
-          try {
-            record = await deps.readLaunchRecord(selected, found.token);
-          } catch (err) {
-            problems.push(`the factory record is unavailable: ${(err as Error)?.message ?? err}`);
-          }
+        journal.recordReceipt(row.id, { status: 1 });
+        const verdict =
+          row.op === 'splitter_deploy'
+            ? await verifySplitter(row, receipt, deps)
+            : await verifyLaunch(row, receipt, selected, deps);
 
-          if (record) {
-            const verdict = verifyLaunchConfirmation({
-              receipt: found,
-              sent: decodeCurrentV2Launch(row.calldata, selected),
-              record,
-              splitterAddress: row.splitterAddress ?? '',
-              treasuryAddress: deps.treasuryAddress,
-            });
-            if (verdict.ok) {
-              // Conditional update inside the journal: a second pass finds the row already
-              // confirmed and no longer open, so it cannot be promoted or counted twice.
-              journal.markConfirmedFromIncident(row.id, { token: found.token });
-              results.push({ id: row.id, txHash: row.txHash, confirmed: true, problems: [] });
-              continue;
-            }
-            problems.push(...verdict.problems);
-          }
+        if (verdict.ok) {
+          journal.markConfirmedAnyState(row.id, { token: verdict.token, splitterAddress: verdict.splitter });
+          results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: true, problems: [] });
+          continue;
         }
+        problems.push(...verdict.problems);
+        journal.markIncidentAnyState(row.id, { problems, token: verdict.token });
+        results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems });
+        continue;
       }
     }
 
-    // Still an incident. The row is left exactly as it was -- landed, hash intact, evidence
-    // preserved -- because everything about it is still true and none of it is failure.
-    results.push({ id: row.id, txHash: row.txHash, confirmed: false, problems });
+    // Still open, and the reason is written down rather than only printed. A reason that
+    // exists solely on a terminal somebody has closed is not a record of anything.
+    journal.recordProblems(row.id, problems);
+    results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems });
   }
 
   return results;
+}
+
+/**
+ * A landed splitter counts only if the thing at that address IS a splitter.
+ *
+ * A receipt proves a contract was created. It says nothing about what the contract is, and
+ * this project has already deployed the wrong splitter once -- a stale artifact whose fees
+ * are stranded forever. So the runtime code is read and searched for the selectors the
+ * interface requires, which is the one check a stale build cannot pass.
+ */
+async function verifySplitter(
+  row: CanaryRow,
+  receipt: { contractAddress: string | null },
+  deps: CanaryRecoveryDeps
+): Promise<{ ok: boolean; problems: string[]; token: string | null; splitter?: string }> {
+  const problems: string[] = [];
+  const address = receipt.contractAddress;
+  if (!address) {
+    return {
+      ok: false,
+      token: null,
+      problems: ['the receipt carries no contract address, so nothing proves what was created'],
+    };
+  }
+
+  let code = '';
+  try {
+    code = await deps.readCode(address);
+  } catch (err) {
+    return { ok: false, token: null, problems: [`could not read code at ${address}: ${(err as Error)?.message ?? err}`] };
+  }
+
+  const stripped = code.toLowerCase();
+  for (const selector of REQUIRED_SELECTORS) {
+    if (!stripped.includes(selector)) {
+      problems.push(`deployed code at ${address} does not expose selector 0x${selector}`);
+    }
+  }
+  if (problems.length > 0) return { ok: false, token: null, problems };
+
+  return { ok: true, problems: [], token: null, splitter: address };
+}
+
+/** The launch verifier, shared with production rather than reimplemented. */
+async function verifyLaunch(
+  row: CanaryRow,
+  receipt: { logs: readonly { address?: string; topics: readonly string[]; data: string }[] },
+  selected: PonsDeployment,
+  deps: CanaryRecoveryDeps
+): Promise<{ ok: boolean; problems: string[]; token: string | null; splitter?: string }> {
+  const found = extractLaunchFromReceipt(receipt.logs, selected);
+  if (!found) {
+    return { ok: false, token: null, problems: ['the receipt carries no launch event from the selected factory'] };
+  }
+
+  let record: FactoryLaunchRecord | null = null;
+  try {
+    record = await deps.readLaunchRecord(selected, found.token);
+  } catch (err) {
+    return { ok: false, token: found.token, problems: [`the factory record is unavailable: ${(err as Error)?.message ?? err}`] };
+  }
+  if (!record) {
+    return { ok: false, token: found.token, problems: ['the factory has no record of this token'] };
+  }
+
+  const verdict = verifyLaunchConfirmation({
+    receipt: found,
+    sent: decodeCurrentV2Launch(row.calldata, selected),
+    record,
+    splitterAddress: row.splitterAddress ?? '',
+    treasuryAddress: deps.treasuryAddress,
+  });
+  return { ok: verdict.ok, problems: verdict.problems, token: found.token };
 }
