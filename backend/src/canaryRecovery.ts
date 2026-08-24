@@ -211,6 +211,8 @@ async function verifySplitter(
     expectedTokenPlaceholder: '0x0000000000000000000000000000000000000000',
     expectedEscrow: selected.feeEscrow,
     bindings,
+    // Authority path: the contract must agree, not merely fail to disagree.
+    requireBindings: true,
   });
   return { ok: verdict.ok, problems: verdict.problems, token: null, splitter: verdict.splitterAddress };
 }

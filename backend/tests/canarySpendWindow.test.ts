@@ -176,3 +176,69 @@ describe('the spend envelope is evidence, not configuration', () => {
     expect(r.spend!.publicLaunchEnabled).toBe(true);
   });
 });
+
+/**
+ * One request, one observed chain.
+ *
+ * The envelope read the chain and the rpc check read it again. Two reads can disagree — a
+ * provider failing over between them produces a single response carrying a spend envelope
+ * bound to 4663 while `rpc` reports down for a different chain. The canary consumes the
+ * envelope on its own, so one self-contradicting response could still admit.
+ */
+describe('the chain is observed once per report', () => {
+  const counting = (answers: number[]) => {
+    let calls = 0;
+    return {
+      deps: {
+        ...base,
+        expectedChainId: 4663,
+        getChainId: async () => {
+          const v = answers[Math.min(calls, answers.length - 1)];
+          calls += 1;
+          return v;
+        },
+        getBlockNumber: async () => 1,
+        rollingSpendLast24hWei: () => 1_000_000_000_000_000n,
+        deploymentId: 'pons-v2-current-7ed',
+        deploymentFactory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
+        treasuryAddress: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+        publicLaunchEnabled: false,
+      } as unknown as StatusDeps,
+      calls: () => calls,
+    };
+  };
+
+  it('calls getChainId exactly once', async () => {
+    const c = counting([4663]);
+    await buildStatus(c.deps);
+    expect(c.calls()).toBe(1);
+  });
+
+  /**
+   * The regression. With two reads, the first answer built an admissible envelope and the
+   * second produced `rpc: down` — a report that contradicts itself and still admits.
+   */
+  it('cannot emit an admissible envelope alongside an rpc-down check', async () => {
+    const c = counting([4663, 1]);
+    const r = await buildStatus(c.deps);
+    const rpc = r.checks.find((x) => x.name === 'rpc')!;
+    if (rpc.state === 'down') expect(r.spend).toBeUndefined();
+    else expect(r.spend!.chainId).toBe(4663);
+  });
+
+  it('omits the envelope and reports rpc down from the same failed observation', async () => {
+    const deps = {
+      ...base,
+      expectedChainId: 4663,
+      getChainId: async () => {
+        throw new Error('RPC unavailable');
+      },
+      getBlockNumber: async () => 1,
+      rollingSpendLast24hWei: () => 1n,
+      publicLaunchEnabled: false,
+    } as unknown as StatusDeps;
+    const r = await buildStatus(deps);
+    expect(r.spend).toBeUndefined();
+    expect(r.checks.find((x) => x.name === 'rpc')!.state).toBe('down');
+  });
+});

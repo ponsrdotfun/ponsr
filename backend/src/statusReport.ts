@@ -187,12 +187,28 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
    * Omitted entirely when the chain cannot be read or disagrees. Absent refuses; a
    * confidently wrong value admits.
    */
-  let observedChainId: number | null = null;
+  /**
+   * ONE observation, used by everything below it.
+   *
+   * The envelope read the chain, and the rpc check read it again. Two reads in one response
+   * can disagree -- a provider that fails over between them produces a report carrying a
+   * spend envelope bound to 4663 while `rpc` says down for a different chain. A consumer
+   * reads the envelope on its own, so a single self-contradicting response could still
+   * admit a launch. One request, one observed truth.
+   */
+  let observed: { chainId: number; block: number } | null = null;
+  let observedError: unknown = null;
   try {
-    observedChainId = await within(deps.getChainId(), timeoutMs, 'chain id');
-  } catch {
-    observedChainId = null;
+    const [chainId, block] = await within(
+      Promise.all([deps.getChainId(), deps.getBlockNumber()]),
+      timeoutMs,
+      'RPC'
+    );
+    observed = { chainId, block };
+  } catch (err) {
+    observedError = err;
   }
+  const observedChainId = observed?.chainId ?? null;
 
   const spend =
     deps.rollingSpendLast24hWei && observedChainId === deps.expectedChainId
@@ -230,23 +246,16 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   // they still run, because "the RPC is down" and "the RPC is down AND the cap is
   // nearly spent" are different mornings.
   let feeWei: bigint | null = null;
-  try {
-    const [chainId, block] = await within(
-      Promise.all([deps.getChainId(), deps.getBlockNumber()]),
-      timeoutMs,
-      'RPC'
-    );
-    if (chainId !== deps.expectedChainId) {
-      checks.push({
-        name: 'rpc',
-        state: 'down',
-        detail: `connected to chain ${chainId}, expected ${deps.expectedChainId} -- this RPC is not Robinhood Chain`,
-      });
-    } else {
-      checks.push({ name: 'rpc', state: 'ok', detail: `chain ${chainId}, block ${block}` });
-    }
-  } catch (err) {
-    checks.push({ name: 'rpc', state: 'down', detail: reason(err) });
+  if (!observed) {
+    checks.push({ name: 'rpc', state: 'down', detail: reason(observedError) });
+  } else if (observed.chainId !== deps.expectedChainId) {
+    checks.push({
+      name: 'rpc',
+      state: 'down',
+      detail: `connected to chain ${observed.chainId}, expected ${deps.expectedChainId} -- this RPC is not Robinhood Chain`,
+    });
+  } else {
+    checks.push({ name: 'rpc', state: 'ok', detail: `chain ${observed.chainId}, block ${observed.block}` });
   }
 
   try {
