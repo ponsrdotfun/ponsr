@@ -12,6 +12,7 @@ happened.
 
 | gate | how | abort if |
 |---|---|---|
+| Read path is alive | `curl -s https://ponsr-backend.fly.dev/status` | `mention-sweep` must be **ok** and `read-credits` must not be `down`. A bot that cannot read mentions is absent, not degraded, and every other row here can be green while this is the only one that matters. Measured -89 credits on 2026-08-24, deaf for days, with nothing on the page saying so. |
 | Turnkey creation authority **(signer-active)** | `npm run signer:probe-creation` | case 2 must be **denied**, case 1 **ALLOWED**. Closed 2026-08-22 by `b647cc07-…`; re-run to confirm it still holds. Case 3 stays ALLOWED as an accepted residual — see [TURNKEY-CREATION-AUTHORITY.md](TURNKEY-CREATION-AUTHORITY.md). |
 | Policy verified for the rollout target **(signer-active)** | `npm run signer:verify-policy -- --target-deployment=pons-v2-current-7ed` | anything other than **PASSED** |
 | Artifacts reproduce | `node scripts/verify-artifacts-reproducible.js` | **NOT REPRODUCIBLE** |

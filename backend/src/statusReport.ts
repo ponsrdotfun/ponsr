@@ -73,6 +73,20 @@ export interface StatusDeps {
    *  to discover. Reported because "AAPL is not approved" and "the bot never
    *  managed to read the approved set" produce the same refusal to a user. */
   listPairAssets?: () => Promise<string[]>;
+  /**
+   * Live health of the mention sweep -- when it last SUCCEEDED, not whether it is configured.
+   *
+   * The distinction is the whole reason this exists. On 2026-08-24 this page reported
+   * `mention-crosscheck = ok` while the sweep had been failing every two minutes for days
+   * with `402 Credits is not enough`. That check asked whether a cross-check interval was
+   * set, and an interval cannot go wrong in the way that mattered. Nothing here could tell
+   * "polling and finding nothing" from "not polling at all".
+   */
+  sweepHealth?: () => { lastSuccessAt: string | null; consecutiveFailures: number; lastError: string | null };
+  /** Prepaid balance at the read provider, when it exposes one. The call is free. */
+  readCredits?: () => Promise<{ credits: number; bonus: number } | null>;
+  /** How stale a last-success may get before the sweep is reported degraded. */
+  sweepStaleAfterMs?: number;
 }
 
 const RANK: Record<CheckState, number> = { ok: 0, degraded: 1, down: 2 };
@@ -250,6 +264,68 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
         ? `every ${deps.crossCheckHours}h against X's own timeline`
         : 'off -- a mention search that silently stops indexing would look like a quiet day',
   });
+
+  /**
+   * Is the bot actually hearing anything?
+   *
+   * Reported as `down`, not `degraded`, when the sweep has been failing: a bot that cannot
+   * read mentions is not a degraded bot, it is an absent one. Every other check on this page
+   * can be green while this is the only thing that matters.
+   */
+  if (deps.sweepHealth) {
+    const h = deps.sweepHealth();
+    const staleAfter = deps.sweepStaleAfterMs ?? 15 * 60 * 1000;
+    const ageMs = h.lastSuccessAt ? Date.now() - new Date(h.lastSuccessAt).getTime() : null;
+    const mins = (ms: number) => `${Math.floor(ms / 60000)}m`;
+
+    if (h.consecutiveFailures > 0 || (ageMs !== null && ageMs > staleAfter)) {
+      checks.push({
+        name: 'mention-sweep',
+        state: 'down',
+        detail:
+          `${h.consecutiveFailures} consecutive failure(s); last success ` +
+          (ageMs === null ? 'never' : `${mins(ageMs)} ago`) +
+          (h.lastError ? ` -- ${h.lastError.slice(0, 110)}` : ''),
+      });
+    } else if (ageMs === null) {
+      // Not a pass. A sweep that has never succeeded has proven nothing about itself.
+      checks.push({
+        name: 'mention-sweep',
+        state: 'degraded',
+        detail: 'no successful poll yet since boot -- nothing has been heard',
+      });
+    } else {
+      checks.push({ name: 'mention-sweep', state: 'ok', detail: `last success ${mins(ageMs)} ago` });
+    }
+  }
+
+  /**
+   * The read provider's prepaid balance, read for free.
+   *
+   * Zero is not the floor: twitterapi.io was measured at -89 while still answering this
+   * endpoint 200. So a threshold at zero reports healthy on an account that is already
+   * overdrawn and refusing every data call.
+   */
+  if (deps.readCredits) {
+    try {
+      const c = await within(deps.readCredits(), timeoutMs, 'read credits');
+      if (c === null) {
+        checks.push({ name: 'read-credits', state: 'ok', detail: 'provider reports no balance' });
+      } else {
+        const total = c.credits + c.bonus;
+        checks.push({
+          name: 'read-credits',
+          state: total <= 0 ? 'down' : total < 1000 ? 'degraded' : 'ok',
+          detail:
+            `${c.credits} credits` +
+            (c.bonus ? ` + ${c.bonus} bonus` : '') +
+            (total <= 0 ? ' -- EXHAUSTED, every mention read is refused' : total < 1000 ? ' -- running low' : ''),
+        });
+      }
+    } catch (err) {
+      checks.push({ name: 'read-credits', state: 'degraded', detail: `could not read: ${reason(err)}` });
+    }
+  }
 
   return { state: worst(checks), at: new Date().toISOString(), checks };
 }
