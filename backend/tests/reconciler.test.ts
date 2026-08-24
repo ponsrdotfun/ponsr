@@ -157,6 +157,27 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
     expect(treasurySigner.sentTransactions).toHaveLength(2);
   });
 
+  it('counts paused mentions as suppressed, not recovered, without touching the launch path', async () => {
+    const now = new Date('2026-08-01T12:00:00Z');
+    const m = mention('paused_1', new Date(now.getTime() - 10_000));
+    xClient.recentMentions = [m];
+    deps.publicLaunchEnabled = false;
+    deps.parser = { parse: async () => { throw new Error('parser must not be called while paused'); } };
+    deps.walletResolver = { resolve: async () => { throw new Error('wallet must not be called while paused'); } } as any;
+    deps.getLiveFeeWei = async () => { throw new Error('chain must not be called while paused'); };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await reconcileOnce(deps, DEFAULT_RECONCILER_OPTIONS, now);
+
+    expect(result.suppressedPaused).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.watermarkAdvanced).toBe(true);
+    expect(db.isTweetProcessed(m.tweetId)).toBe(true);
+    expect(treasurySigner.sentTransactions).toHaveLength(0);
+    expect(warn.mock.calls.flat().join(' ')).not.toMatch(/recovered/i);
+  });
+
   it('CRITICAL: never double-spends on a mention the webhook already handled', async () => {
     const now = new Date('2026-08-01T12:00:00Z');
     const m = mention('already_1', new Date(now.getTime() - 5 * 60 * 1000));

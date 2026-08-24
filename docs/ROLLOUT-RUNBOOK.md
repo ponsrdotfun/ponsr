@@ -198,8 +198,9 @@ Abort criteria, any one of them:
 - the splitter deploys but the launch reverts → **stop**, do not retry. A retry deploys a
   second splitter and pays a second fee. Record the splitter address; it is not lost,
   and `collect-and-split-v2.ts` can still reach it;
-- the launch confirms but `/status` still reports the old deployment → config and code
-  disagree; roll back the flag.
+- the launch confirms but `/status` reports anything except the current deployment → stop
+  public launching and restore the exact recorded image. Do not change factory selection
+  while reconciling a transaction that already landed.
 
 ## 5. Reconcile the fees
 
@@ -312,6 +313,8 @@ Record these BEFORE §2, while the current state is still the good one:
 fly releases --json | jq -r '.[0] | "RELEASE=\(.Version)  IMAGE=\(.ImageRef)"' \
   | tee ./rollback-target.txt
 git rev-parse HEAD | tee -a ./rollback-target.txt        # the website commit to revert to
+printf '%s\n' 'ROLLBACK_EXPECTED_DEPLOYMENT=pons-v2-superseded-a5a' \
+  | tee -a ./rollback-target.txt
 ```
 
 | what | how | owner |
@@ -322,12 +325,20 @@ git rev-parse HEAD | tee -a ./rollback-target.txt        # the website commit to
 | database | restore from `backup-manifest-$STAMP.json` — ordered procedure below | operator |
 | website | `git revert -m 1 <merge commit>` then push; Netlify republishes from `main` | operator |
 
-After a code rollback, prove it went back rather than assuming:
+The captured stale image interprets the production value `PONS_FACTORY_VERSION=v2` as
+`pons-v2-superseded-a5a`; it does **not** report a named deployment check. After restoring it,
+prove the old image/config tuple is the one running rather than falsely expecting `pons-v1`:
 
 ```bash
-curl -s https://<backend>/status | jq -e '.checks[] | select(.name=="deployment")
-  | select(.detail | test("pons-v1"))'
+grep -Fx 'ROLLBACK_EXPECTED_DEPLOYMENT=pons-v2-superseded-a5a' ./rollback-target.txt
+curl -s https://<backend>/health | jq -e '.status == "ok"'
+curl -s https://<backend>/status \
+  | jq -e '[.checks[] | select(.name=="deployment")] | length == 0'
 ```
+
+The absent deployment check is accepted only for this exact recorded rollback image. It is
+not evidence that an unknown runtime is safe, and it is why rollback is containment rather
+than completion: keep `PUBLIC_LAUNCH_ENABLED=false` and investigate before any new launch.
 
 "Deploy the previous release" is not an executable instruction. An image digest and a
 release number are.

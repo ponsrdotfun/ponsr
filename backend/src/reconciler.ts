@@ -41,6 +41,9 @@ export const DEFAULT_RECONCILER_OPTIONS: ReconcilerOptions = {
 export interface ReconcileResult {
   polled: number;
   recovered: number;
+  /** Mentions deliberately consumed while Ponsr public launching is paused. They are
+   *  neither recovered nor failed: no parse, reply, launch, or spend occurred. */
+  suppressedPaused: number;
   alreadyHandled: number;
   failed: number;
   /** Left unchanged when the poll itself failed, so the next run retries the
@@ -63,6 +66,7 @@ export async function reconcileOnce(
   const result: ReconcileResult = {
     polled: 0,
     recovered: 0,
+    suppressedPaused: 0,
     alreadyHandled: 0,
     failed: 0,
     watermarkAdvanced: false,
@@ -104,7 +108,12 @@ export async function reconcileOnce(
       // which released the claim so the mention survives -- but nothing about it was
       // read, so calling it recovered would report a success that did not happen and
       // hide a bot that cannot process anything at all.
-      else if (outcome.kind === 'rejected' && outcome.reason === 'PARSER_UNAVAILABLE') {
+      else if (outcome.kind === 'rejected' && outcome.reason === 'PUBLIC_LAUNCH_PAUSED') {
+        // Deliberately consumed so enabling later cannot replay a backlog into launches.
+        // Nothing was parsed, answered, launched, signed, or spent, so this is suppression,
+        // not recovery and not failure.
+        result.suppressedPaused++;
+      } else if (outcome.kind === 'rejected' && outcome.reason === 'PARSER_UNAVAILABLE') {
         result.failed++;
       } else result.recovered++;
     } catch (err: any) {

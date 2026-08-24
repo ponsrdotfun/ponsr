@@ -97,8 +97,10 @@ describe('rollback names something immutable', () => {
     expect(text).toMatch(/git revert -m 1/);
   });
 
-  it('checks deployment identity after rolling back', () => {
-    expect(shell).toMatch(/select\(\.name=="deployment"\)[\s\S]{0,120}pons-v1/);
+  it('binds rollback verification to the recorded stale-image/config tuple', () => {
+    expect(shell).toMatch(/ROLLBACK_EXPECTED_DEPLOYMENT=pons-v2-superseded-a5a/);
+    expect(shell).toMatch(/select\(\.name=="deployment"\)\]\s*\|\s*length == 0/);
+    expect(shell).not.toMatch(/select\(\.name=="deployment"\)[\s\S]{0,120}pons-v1/);
   });
 });
 
