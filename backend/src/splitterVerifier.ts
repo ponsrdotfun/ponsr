@@ -5,27 +5,36 @@ import { splitterArtifactFor } from './splitterDeployer';
 /**
  * One verifier for a deployed splitter, shared by the direct path and by recovery.
  *
- * Two things went wrong that this exists to prevent.
+ * WHY A PLAIN BYTE COMPARISON CANNOT WORK
+ * ---------------------------------------
+ * `creator`, `treasury`, `token` and `escrow` are Solidity immutables. The compiler emits
+ * `deployedBytecode` with ZEROS at their reference offsets, and the constructor patches
+ * the real values in as the contract is created. So `eth_getCode` on a perfectly correct
+ * splitter never equals the artifact template: measured here, 14 runs of 20 bytes across
+ * the four addresses.
  *
- * ORDER. The direct path marked the journal row `confirmed` from the receipt alone --
- * status 1 plus a contract address -- and only afterwards read the deployed code. A stale
- * or wrong splitter was therefore persisted as terminal before anything checked what it
- * was, and if the later check failed and exited, `unresolved()` was clean and a rerun could
- * proceed past a permanent invalid contract. That is the 2026-08-04 wrong-splitter loss
- * again, wearing a green journal.
+ * The first version of this file compared the two directly and would have rejected every
+ * real deployment. Worse, the test that covered it passed the artifact template AS the
+ * deployed code, so it could not possibly have caught that -- the fixture WAS the expected
+ * value. The operational consequence would have been the first authorised canary spending
+ * gas on a splitter, having it refused, and wedging: recovery calls the same verifier.
  *
- * DRIFT. Recovery grew its own selector check while the script kept a different one
- * inline. Two verifiers for one question disagree eventually, and the disagreement surfaces
- * on the day somebody is relying on them.
- *
- * WHY SELECTOR PRESENCE IS NOT ENOUGH
- * -----------------------------------
- * A four-byte string can appear inside unrelated bytecode by coincidence or by
- * construction. The strong check is the compiled artifact's own runtime bytecode, which is
- * what `compile-all.js` produces and what the deployment registry pins. Selector presence
- * is kept as a secondary signal because it produces the clearer message when a stale build
- * is the actual cause -- which it has been, once, expensively.
+ * WHY THE OFFSETS ARE NOT SIMPLY IGNORED
+ * --------------------------------------
+ * Masking them would make the comparison pass for a splitter carrying an attacker's
+ * recipients or a foreign escrow -- the exact bytes that decide where money goes. So every
+ * non-immutable byte must match the artifact exactly, AND every immutable slot must equal
+ * the value it was supposed to be constructed with. The bytes are then confirmed a second
+ * time by reading the contract's own public getters, which is independent evidence rather
+ * than a second look at the same string.
  */
+
+export interface SplitterBindings {
+  creator: string;
+  treasury: string;
+  token: string;
+  escrow?: string;
+}
 
 export interface SplitterEvidence {
   /** Receipt status. null means no receipt was seen, which is not a failure to verify. */
@@ -34,6 +43,13 @@ export interface SplitterEvidence {
   /** Deployed runtime bytecode at that address. */
   deployedCode: string;
   deployment: PonsDeployment;
+  /** What construction was supposed to bind. */
+  expectedCreator: string;
+  expectedTreasury: string;
+  expectedTokenPlaceholder: string;
+  expectedEscrow: string;
+  /** The contract's own view of its bindings, read independently of the bytes. */
+  bindings?: SplitterBindings | null;
 }
 
 export interface SplitterVerdict {
@@ -61,15 +77,10 @@ function requiredSelectors(deployment: PonsDeployment): Array<{ sig: string; why
   ];
 }
 
-/** Runtime bytecode as the compiler produced it, for exact comparison. */
-function expectedRuntime(deployment: PonsDeployment): string | null {
-  try {
-    const artifact = splitterArtifactFor(deployment) as { deployedBytecode?: string; runtimeBytecode?: string };
-    const raw = artifact.deployedBytecode ?? artifact.runtimeBytecode;
-    return typeof raw === 'string' && raw.length > 2 ? raw.toLowerCase() : null;
-  } catch {
-    return null;
-  }
+interface Artifact {
+  deployedBytecode?: string;
+  immutableReferences?: Record<string, Array<{ start: number; length: number }>>;
+  immutableNames?: Record<string, string>;
 }
 
 /**
@@ -86,6 +97,11 @@ function withoutMetadata(code: string): string {
   const declared = parseInt(c.slice(-4), 16);
   const cut = c.length - 4 - declared * 2;
   return cut > 0 ? c.slice(0, cut) : c;
+}
+
+/** A 32-byte word holding a right-aligned address, as the constructor writes it. */
+function addressWord(addr: string): string {
+  return ethers.zeroPadValue(ethers.getAddress(addr), 32).slice(2).toLowerCase();
 }
 
 export function verifyDeployedSplitter(evidence: SplitterEvidence): SplitterVerdict {
@@ -107,34 +123,111 @@ export function verifyDeployedSplitter(evidence: SplitterEvidence): SplitterVerd
     return { ok: false, problems: ['the receipt carries no contract address, so nothing proves what was created'] };
   }
 
-  const code = withoutMetadata(evidence.deployedCode);
-  if (code.length === 0) {
+  const actual = withoutMetadata(evidence.deployedCode);
+  if (actual.length === 0) {
     return {
       ok: false,
       problems: [`there is no code at ${evidence.contractAddress}: the address holds an empty account`],
     };
   }
 
-  // Primary: the compiled artifact's own runtime, metadata aside.
-  const expected = expectedRuntime(evidence.deployment);
-  if (expected) {
-    if (withoutMetadata(expected) !== code) {
-      problems.push(
-        `deployed runtime at ${evidence.contractAddress} does not match the artifact for ` +
-          `${evidence.deployment.id}. A splitter that is not the compiled one may take fees it cannot pay out.`
-      );
+  const artifact = splitterArtifactFor(evidence.deployment) as Artifact;
+  const template = artifact.deployedBytecode ? withoutMetadata(artifact.deployedBytecode) : null;
+  const refs = artifact.immutableReferences;
+  const names = artifact.immutableNames;
+
+  // Fail closed. Without the offsets there is no way to tell a constructor-patched byte
+  // from a tampered one, and guessing in either direction is worse than refusing.
+  if (!template || !refs || !names) {
+    return {
+      ok: false,
+      problems: [
+        `the artifact for ${evidence.deployment.id} carries no runtime bytecode or immutable ` +
+          'references, so a deployed contract cannot be verified exactly. Run `node compile-all.js`.',
+      ],
+    };
+  }
+
+  if (actual.length !== template.length) {
+    return {
+      ok: false,
+      problems: [
+        `deployed runtime at ${evidence.contractAddress} is ${actual.length / 2} bytes; the ` +
+          `${evidence.deployment.id} artifact is ${template.length / 2}. Different code entirely.`,
+      ],
+    };
+  }
+
+  const wanted: Record<string, string> = {
+    creator: evidence.expectedCreator,
+    treasury: evidence.expectedTreasury,
+    token: evidence.expectedTokenPlaceholder,
+    escrow: evidence.expectedEscrow,
+  };
+
+  // Every immutable slot must hold the value it was supposed to be constructed with.
+  const immutableSpans: Array<[number, number]> = [];
+  for (const [id, sites] of Object.entries(refs)) {
+    const name = names[id];
+    const expectedAddr = name ? wanted[name] : undefined;
+    for (const site of sites) {
+      const from = site.start * 2;
+      const to = from + site.length * 2;
+      immutableSpans.push([from, to]);
+      if (!name || expectedAddr === undefined) {
+        problems.push(`immutable reference id ${id} at byte ${site.start} has no known name to bind`);
+        continue;
+      }
+      const found = actual.slice(from, to);
+      if (found !== addressWord(expectedAddr)) {
+        problems.push(
+          `immutable \`${name}\` at byte ${site.start} is 0x${found.slice(24)}, expected ` +
+            `${ethers.getAddress(expectedAddr)}. That is where this splitter sends money.`
+        );
+      }
     }
-  } else {
+  }
+
+  // Every byte outside those spans must match the compiled artifact exactly.
+  const inImmutable = new Array(actual.length).fill(false);
+  for (const [from, to] of immutableSpans) for (let i = from; i < to; i += 1) inImmutable[i] = true;
+  let firstDiff = -1;
+  for (let i = 0; i < actual.length; i += 1) {
+    if (!inImmutable[i] && actual[i] !== template[i]) {
+      firstDiff = i;
+      break;
+    }
+  }
+  if (firstDiff >= 0) {
     problems.push(
-      `no runtime bytecode is recorded for ${evidence.deployment.id}, so the deployed contract ` +
-        'can only be checked by interface. Treat this as weaker evidence, not as a pass.'
+      `deployed runtime differs from the ${evidence.deployment.id} artifact at byte ` +
+        `${Math.floor(firstDiff / 2)}, outside any immutable. The logic is not the compiled logic.`
     );
   }
 
-  // Secondary: the interface, which names the actual consequence when a stale build is the cause.
+  // Interface, as a secondary signal that names the likely cause when a stale build is it.
   for (const { sig, why } of requiredSelectors(evidence.deployment)) {
     const selector = ethers.id(sig).slice(2, 10);
-    if (!code.includes(selector)) problems.push(`deployed code has no ${sig} — ${why}`);
+    if (!actual.includes(selector)) problems.push(`deployed code has no ${sig} — ${why}`);
+  }
+
+  /**
+   * The contract's own answer, which is evidence of a different kind.
+   *
+   * Reading the getters tests the same facts through the EVM rather than through a string
+   * this process assembled. Optional because a caller may have no provider, and its
+   * absence is reported rather than treated as agreement.
+   */
+  if (evidence.bindings) {
+    const b = evidence.bindings;
+    const same = (a: string | undefined, e: string) =>
+      typeof a === 'string' && a.toLowerCase() === e.toLowerCase();
+    if (!same(b.creator, evidence.expectedCreator)) problems.push(`creator() reports ${b.creator}, expected ${evidence.expectedCreator}`);
+    if (!same(b.treasury, evidence.expectedTreasury)) problems.push(`treasury() reports ${b.treasury}, expected ${evidence.expectedTreasury}`);
+    if (!same(b.token, evidence.expectedTokenPlaceholder)) problems.push(`token() reports ${b.token}, expected ${evidence.expectedTokenPlaceholder}`);
+    if (evidence.deployment.feeModel === 'escrow-credit') {
+      if (!same(b.escrow ?? '', evidence.expectedEscrow)) problems.push(`escrow() reports ${b.escrow}, expected ${evidence.expectedEscrow}`);
+    }
   }
 
   return problems.length === 0

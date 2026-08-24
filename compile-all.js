@@ -50,7 +50,19 @@ const input = {
   },
   settings: {
     outputSelection: {
-      '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] },
+      '*': {
+        '*': [
+          'abi',
+          'evm.bytecode.object',
+          'evm.deployedBytecode.object',
+          'evm.deployedBytecode.immutableReferences',
+        ],
+        // Source-level output, so it nests under the file wildcard rather than sitting
+        // beside it. Requested solely to learn which immutable each numeric reference id
+        // belongs to: solc keys immutableReferences by AST node id, and an offset with no
+        // name cannot be bound to the value it should hold.
+        '': ['ast'],
+      },
     },
     optimizer: { enabled: true, runs: 200 },
   },
@@ -89,6 +101,26 @@ if (hasError) {
 }
 
 const artifacts = {};
+/**
+ * AST node id -> immutable variable name, across every compiled source.
+ *
+ * solc keys `immutableReferences` by numeric AST id. An offset with no name cannot be
+ * bound to the value it should hold, and an unbound offset can only be masked -- which
+ * would let a splitter carrying an attacker's recipients pass an "exact" comparison.
+ */
+const immutableNames = {};
+for (const source of Object.values(output.sources ?? {})) {
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (node.nodeType === 'VariableDeclaration' && node.mutability === 'immutable' && node.name) {
+      immutableNames[String(node.id)] = node.name;
+    }
+    for (const v of Object.values(node)) if (v && typeof v === 'object') walk(v);
+  };
+  walk(source.ast);
+}
+
 for (const [file, contracts] of Object.entries(output.contracts)) {
   for (const [name, contract] of Object.entries(contracts)) {
     artifacts[name] = {
@@ -104,6 +136,23 @@ for (const [file, contracts] of Object.entries(output.contracts)) {
        * instead of merely plausible.
        */
       deployedBytecode: '0x' + contract.evm.deployedBytecode.object,
+      /**
+       * Where construction patches the runtime.
+       *
+       * Solidity immutables are written into the runtime by the constructor, so
+       * `deployedBytecode.object` carries zeros at those offsets and can never equal what
+       * eth_getCode returns for a correctly deployed contract. Comparing the two directly
+       * rejects every real splitter -- measured: 14 runs of 20 bytes, the four address
+       * immutables at their several reference sites.
+       *
+       * Recording the offsets is what makes an EXACT comparison possible rather than
+       * abandoning one: every non-immutable byte must match, and every immutable slot must
+       * equal the value it was supposed to be constructed with. Masking those positions
+       * instead would let a splitter with an attacker's recipients pass.
+       */
+      immutableReferences: contract.evm.deployedBytecode.immutableReferences ?? {},
+      /** Numeric AST id -> declared name, so each offset can be bound to a value. */
+      immutableNames,
     };
   }
 }

@@ -30,7 +30,16 @@ import { assertDeploymentIdentity } from './deploymentIdentity';
  */
 export function splitterArtifactFor(
   deployment: PonsDeployment = executableDeployment()
-): { abi: any; bytecode: string; deployedBytecode?: string; name: string } {
+): {
+  abi: any;
+  bytecode: string;
+  deployedBytecode?: string;
+  /** Where the constructor patches values into the runtime. See splitterVerifier.ts. */
+  immutableReferences?: Record<string, Array<{ start: number; length: number }>>;
+  /** AST node id -> declared name, so each offset can be bound to an expected value. */
+  immutableNames?: Record<string, string>;
+  name: string;
+} {
   // From the deployment's FEE MODEL, not from `config.PONS_FACTORY_VERSION`.
   //
   // The flag answers "which factory does this bot launch through by default". This
@@ -56,7 +65,14 @@ export function splitterArtifactFor(
   // deployed splitter's identity checkable rather than merely plausible. Optional so an
   // artifact compiled before it was emitted still loads, and the verifier says so instead
   // of treating its absence as a pass.
-  return { abi: art.abi, bytecode: art.bytecode, deployedBytecode: art.deployedBytecode, name };
+  return {
+    abi: art.abi,
+    bytecode: art.bytecode,
+    deployedBytecode: art.deployedBytecode,
+    immutableReferences: art.immutableReferences,
+    immutableNames: art.immutableNames,
+    name,
+  };
 }
 
 /**

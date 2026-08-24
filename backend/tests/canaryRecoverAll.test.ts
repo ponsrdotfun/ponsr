@@ -199,14 +199,25 @@ describe('splitter rows are recovered by their own verifier', () => {
     ...over,
   });
 
-  /** 5 from finding 1 — an exactly-verified splitter can be reused, not redeployed. */
-  it('confirms a landed splitter whose deployed code carries the required interface', async () => {
+  /**
+   * The artifact TEMPLATE is refused, and that is the correct answer.
+   *
+   * `deployedBytecode` carries zeros where the constructor writes creator, treasury, token
+   * and escrow. A contract whose immutables are all zero is not a correctly deployed
+   * splitter — it would send fees nowhere — so refusing it is right, and the earlier
+   * version of this test asserted the opposite while feeding exactly that template.
+   *
+   * The green path needs a real deployment and is proven in
+   * contracts-test/SplitterRuntime.test.js, which deploys the committed bytecode and reads
+   * it back through eth_getCode.
+   */
+  it('refuses a splitter whose immutables are unset, template or not', async () => {
     const id = splitterRow(j);
     j.bindHash(id, '0xdeploy');
     await recoverCanary(j, deps());
     const row = j.byId(id)!;
-    expect(row.state).toBe('confirmed');
-    expect(row.splitterAddress!.toLowerCase()).toBe(SPLITTER.toLowerCase());
+    expect(row.state).toBe('confirmed_incident');
+    expect(row.problems.join(' ')).toMatch(/immutable|creator|treasury|escrow/i);
   });
 
   /** 4 from finding 1 — landed, but the code is not what a splitter must be. */

@@ -12,6 +12,7 @@ import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSw
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation, ReconcilerHandle } from './reconciler';
+import { pinnedTreasuryAddress } from './canarySignerBoundary';
 import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from './treasuryPolicy';
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
@@ -323,9 +324,21 @@ app.get('/status', async (_req, res) => {
       spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
       /** The window that actually refuses launches, published as a typed field. */
       rollingSpendLast24hWei: () => db.totalSpendLast24h(),
-      // Binds the spend envelope to the runtime it describes, so a second spender can
-      // prove the budget it checks is the budget it will draw from.
-      treasuryAddress: config.TURNKEY_SIGN_WITH,
+      /**
+       * The validated EVM pin, never TURNKEY_SIGN_WITH.
+       *
+       * Turnkey accepts that setting as a wallet address, a private-key address OR an
+       * opaque private-key ID. Publishing an identifier where an account is expected would
+       * make every canary admission fail permanently against a value that is not wrong so
+       * much as not an address at all.
+       */
+      treasuryAddress: (() => {
+        try {
+          return pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string });
+        } catch {
+          return undefined;
+        }
+      })(),
       dailyCapWei: config.DAILY_SPEND_CAP_WEI,
       launchesToday: () => db.countLaunchesBetween(startOfUtcDay(), new Date().toISOString()),
       coldAddressSet: !!config.TREASURY_COLD_ADDRESS,
