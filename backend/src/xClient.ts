@@ -45,12 +45,27 @@ export interface XClient {
    *  network conditions, and without a poll to fall back on a dropped delivery
    *  loses that user's launch request permanently and silently. */
   getRecentMentions(sinceIso: string): Promise<InboundMention[]>;
+  /**
+   * The read provider's remaining prepaid balance, if it exposes one.
+   *
+   * Optional because it is provider-specific: the whole point of this interface is that
+   * twitterapi.io can be swapped out, and a replacement may bill differently or not
+   * prepay at all. A provider that cannot answer returns null rather than zero -- "no
+   * balance to report" and "no balance left" must never collapse into the same reading.
+   *
+   * Worth having because the balance endpoint is FREE. On 2026-08-24 it answered 200 with
+   * `recharge_credits: -89` while every data call was refusing with 402, so the bot could
+   * have been watching its own wallet the entire time it was going deaf, at no cost.
+   */
+  getReadCredits?(): Promise<{ credits: number; bonus: number } | null>;
 }
 
 /** The read half -- high volume, no account exposure. */
 export interface XReader {
   getAccountSignals(xUserId: string, xHandle?: string): Promise<AccountSignals>;
   getRecentMentions(sinceIso: string): Promise<InboundMention[]>;
+  /** See XClient.getReadCredits. Optional: not every provider prepays. */
+  getReadCredits?(): Promise<{ credits: number; bonus: number } | null>;
 }
 
 /** The write half -- low volume, and the half that can get an account suspended. */
@@ -73,6 +88,9 @@ export class SplitXClient implements XClient {
   }
   getRecentMentions(sinceIso: string) {
     return this.reader.getRecentMentions(sinceIso);
+  }
+  getReadCredits() {
+    return this.reader.getReadCredits ? this.reader.getReadCredits() : Promise.resolve(null);
   }
   postReply(inReplyToTweetId: string, text: string) {
     return this.writer.postReply(inReplyToTweetId, text);
@@ -176,6 +194,30 @@ export class TwitterApiIoReader implements XReader {
       accountCreatedAt: new Date(createdAt).toISOString(),
       followerCount: Number(followers),
     };
+  }
+
+  /**
+   * Remaining prepaid balance. FREE -- this endpoint answers while data calls are refusing.
+   *
+   * Verified 2026-08-24: `/oapi/my/info` returned 200 with `recharge_credits: -89` at the
+   * same moment `/twitter/user/info` returned 402 `Credits is not enough`. The balance can
+   * go NEGATIVE, so a caller checking `credits === 0` would miss an already-overdrawn
+   * account entirely.
+   *
+   * Returns null rather than throwing when the shape is unrecognised: a monitoring read
+   * must never be the thing that breaks the process it monitors.
+   */
+  async getReadCredits(): Promise<{ credits: number; bonus: number } | null> {
+    this.assertConfigured();
+    try {
+      const body = await this.get('/oapi/my/info');
+      const credits = Number(body?.recharge_credits);
+      if (!Number.isFinite(credits)) return null;
+      const bonus = Number(body?.total_bonus_credits);
+      return { credits, bonus: Number.isFinite(bonus) ? bonus : 0 };
+    } catch {
+      return null;
+    }
   }
 
   async getRecentMentions(sinceIso: string): Promise<InboundMention[]> {

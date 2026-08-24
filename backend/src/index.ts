@@ -11,7 +11,7 @@ import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
-import { startReconciliation } from './reconciler';
+import { startReconciliation, ReconcilerHandle } from './reconciler';
 import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from './treasuryPolicy';
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
@@ -325,6 +325,12 @@ app.get('/status', async (_req, res) => {
       deploymentId: launchTarget.deployment?.id,
       deploymentFactory: launchTarget.deployment?.factory,
       listPairAssets: pairAssets ? async () => (await pairAssets.list()).map((a) => a.symbol) : undefined,
+      // Whether the bot is actually HEARING anything, not whether polling is configured.
+      // Undefined until the sweep starts below; this callback runs per request, long after.
+      sweepHealth: () => (reconciler ? reconciler.health() : { lastSuccessAt: null, consecutiveFailures: 0, lastError: null }),
+      // Free at twitterapi.io, and it answers while data calls are being refused.
+      readCredits: () => (deps.xClient as { getReadCredits?: () => Promise<{ credits: number; bonus: number } | null> }).getReadCredits?.() ?? Promise.resolve(null),
+      sweepStaleAfterMs: Math.max(config.MENTION_POLL_SECONDS * 3, 900) * 1000,
     });
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {
@@ -346,7 +352,7 @@ function startOfUtcDay(): string {
  * nothing here. Watch the logs: repeated recoveries mean the webhook itself is
  * unhealthy and worth investigating rather than quietly relying on this.
  */
-const reconciler = startReconciliation(deps, config.MENTION_POLL_SECONDS / 60, undefined, notifier);
+const reconciler: ReconcilerHandle = startReconciliation(deps, config.MENTION_POLL_SECONDS / 60, undefined, notifier);
 
 /**
  * Part 5 mitigation #7. Two distinct jobs, and both are needed:

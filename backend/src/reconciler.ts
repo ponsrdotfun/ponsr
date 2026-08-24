@@ -135,7 +135,28 @@ export async function reconcileOnce(
   return result;
 }
 
+/**
+ * What the sweep's health looks like from outside.
+ *
+ * Exists because `/status` reported `mention-crosscheck = ok` while the sweep had been
+ * failing every two minutes for days. That check read CONFIGURATION -- is a cross-check
+ * interval set -- and configuration cannot go wrong in the way that mattered. A status page
+ * that cannot distinguish "polling and finding nothing" from "not polling at all" says
+ * nothing on the day it is needed, because a dead read path and a quiet afternoon look
+ * identical from the outside.
+ */
+export interface SweepHealth {
+  /** ISO timestamp of the last poll that completed without error, or null if none has. */
+  lastSuccessAt: string | null;
+  /** Consecutive failures since the last success. Zero when healthy. */
+  consecutiveFailures: number;
+  /** The last error, truncated, so the status page can name the cause rather than the symptom. */
+  lastError: string | null;
+}
+
 export interface ReconcilerHandle {
+  /** Live sweep health. See SweepHealth. */
+  health(): SweepHealth;
   stop(): void;
 }
 
@@ -151,6 +172,20 @@ export interface ReconcilerHandle {
  */
 const FAILURES_BEFORE_ALERT = 3;
 
+/**
+ * How often to say it again while the sweep is still failing.
+ *
+ * Alerting once per incident is correct for something that gets noticed. This did not get
+ * noticed: on 2026-08-24 the production sweep had been answering `402 Credits is not
+ * enough` every two minutes across the whole retained log window, and the only alert had
+ * fired days earlier and scrolled out of the operator's Telegram.
+ *
+ * One line, once, days ago, is indistinguishable from no line at all. So the alert repeats
+ * while the condition persists -- rarely enough not to become noise, often enough that a
+ * deaf bot cannot stay quietly deaf.
+ */
+const REALERT_AFTER_FAILURES = 60;
+
 export function startReconciliation(
   deps: OrchestratorDeps,
   intervalMinutes = 5,
@@ -164,10 +199,17 @@ export function startReconciliation(
   // somebody asking why the bot ignored them.
   let consecutiveFailures = 0;
   let alerted = false;
+  let lastSuccessAt: string | null = null;
+  let lastError: string | null = null;
 
   const onFailure = async (reason: string) => {
     consecutiveFailures += 1;
-    if (consecutiveFailures < FAILURES_BEFORE_ALERT || alerted || !notifier) return;
+    lastError = reason.slice(0, 300);
+    if (consecutiveFailures < FAILURES_BEFORE_ALERT || !notifier) return;
+    // First crossing, then again every REALERT_AFTER_FAILURES. An incident that outlives
+    // the operator's scrollback has to speak up more than once.
+    const sinceFirst = consecutiveFailures - FAILURES_BEFORE_ALERT;
+    if (alerted && sinceFirst % REALERT_AFTER_FAILURES !== 0) return;
     alerted = true;
     await notifier.send({
       kind: 'MENTION_SWEEP_FAILING',
@@ -176,7 +218,12 @@ export function startReconciliation(
         `The mention sweep has failed ${consecutiveFailures} times in a row. The bot is not ` +
         'seeing mentions and nobody is being answered. Check twitterapi.io credit first -- ' +
         'an exhausted balance looks exactly like this.',
-      detail: { consecutiveFailures, lastError: reason.slice(0, 300) },
+      detail: {
+        consecutiveFailures,
+        lastError: reason.slice(0, 300),
+        lastSuccessAt,
+        repeated: sinceFirst > 0,
+      },
       at: new Date().toISOString(),
     });
   };
@@ -185,6 +232,8 @@ export function startReconciliation(
     const wasAlerted = alerted;
     consecutiveFailures = 0;
     alerted = false;
+    lastError = null;
+    lastSuccessAt = new Date().toISOString();
     if (!wasAlerted || !notifier) return;
     await notifier.send({
       kind: 'MENTION_SWEEP_RECOVERED',
@@ -223,6 +272,7 @@ export function startReconciliation(
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 
   return {
+    health: () => ({ lastSuccessAt, consecutiveFailures, lastError }),
     stop() {
       clearInterval(timer);
     },

@@ -310,13 +310,52 @@ describe('startReconciliation failure alerting', () => {
     handle.stop();
   });
 
-  it('alerts only once while it stays broken', async () => {
+  it('does not repeat the alert every tick while it stays broken', async () => {
     jest.useFakeTimers();
     const notifier = new MockNotifier();
     const handle = startReconciliation(failingDeps(), 1 / 60, DEFAULT_RECONCILER_OPTIONS, notifier);
 
     await jest.advanceTimersByTimeAsync(10000);
     expect(notifier.sent.filter((a) => a.kind === 'MENTION_SWEEP_FAILING')).toHaveLength(1);
+
+    handle.stop();
+  });
+
+  /**
+   * But it must speak again eventually, and this is why.
+   *
+   * Alerting exactly once per incident is correct for something that gets noticed. On
+   * 2026-08-24 production had been failing every two minutes for days with `402 Credits is
+   * not enough`, and the single alert had fired days earlier and scrolled out of the
+   * operator's Telegram. One line, once, days ago, is indistinguishable from no line at all.
+   */
+  it('says it again after enough consecutive failures, so a deaf bot cannot stay quiet', async () => {
+    jest.useFakeTimers();
+    const notifier = new MockNotifier();
+    const handle = startReconciliation(failingDeps(), 1 / 60, DEFAULT_RECONCILER_OPTIONS, notifier);
+
+    // 3rd failure alerts; the next is due 60 failures later.
+    await jest.advanceTimersByTimeAsync(62_000);
+    expect(notifier.sent.filter((a) => a.kind === 'MENTION_SWEEP_FAILING')).toHaveLength(1);
+
+    await jest.advanceTimersByTimeAsync(2_000);
+    const repeats = notifier.sent.filter((a) => a.kind === 'MENTION_SWEEP_FAILING');
+    expect(repeats).toHaveLength(2);
+    expect((repeats[1].detail as { repeated?: boolean })?.repeated).toBe(true);
+
+    handle.stop();
+  });
+
+  /** The status page reads this. If it stayed empty, /status could not see the outage. */
+  it('exposes live health rather than only logging it', async () => {
+    jest.useFakeTimers();
+    const handle = startReconciliation(failingDeps(), 1 / 60, DEFAULT_RECONCILER_OPTIONS);
+
+    expect(handle.health().lastSuccessAt).toBeNull();
+    await jest.advanceTimersByTimeAsync(3000);
+    const h = handle.health();
+    expect(h.consecutiveFailures).toBeGreaterThanOrEqual(3);
+    expect(h.lastError).toMatch(/402/);
 
     handle.stop();
   });
