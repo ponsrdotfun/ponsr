@@ -22,20 +22,23 @@
 > live service; the backend runs on Fly as `ponsr-backend` (`iad`,
 > `min_machines_running = 1`), health check passing.
 >
-> **What is deployed is not what is in this repository.** The running image was last updated
-> 2026-08-19; the deployment registry landed 2026-08-20 and `main` is 56 commits ahead of it.
-> Production is therefore still reading the **superseded** factory and saying so in public —
-> its own `/status` reports *"pons has switched launching off and this treasury is not
-> whitelisted -- no launch can succeed"*, which is the pre-migration belief this repository
-> has since retracted.
+> **What is deployed IS what is in this repository (2026-08-24).** Release **v31** runs commit
+> `7856dd2`, image `sha256:48982e50…`; rollback target is the exact digest `sha256:37f2755c…`
+> (v30). `/status` serves the typed `spend` envelope — `rolling-24h`, chain 4663,
+> `pons-v2-current-7ed`, treasury pinned to the hot wallet, `publicLaunchEnabled: false`.
+> Overall `degraded` is correct: `public-launches` is the only non-ok check and must stay
+> paused. Evidence in `PONSR-DEPLOY-PAUSED-REPORT.txt`.
 >
-> That stale deploy is currently acting as a brake: the running bot refuses every launch
-> because it thinks the launchpad is shut. It was never a safety measure — the same process
-> holds the Turnkey bot key — but the creation-authority finding below is now **closed**, so
-> the reason to keep the deploy blocked has gone. What remains is a sequencing question:
-> deploying IS the migration cut-over, because production still carries
-> `PONS_FACTORY_VERSION=v2`, which on this code means the CURRENT factory where
-> `canLaunch(treasury)` is true. The deploy belongs with the canary plan, not on its own.
+> **Public launching is off, and that is now a decision rather than an accident.** The
+> paragraph replaced here said the stale deploy was acting as a brake because the running bot
+> believed the launchpad was shut. It no longer believes that: `canLaunch(treasury)` is true
+> against the current factory. What holds launches back is Ponsr's own gate,
+> `PUBLIC_LAUNCH_ENABLED=false`, which is explicitly set rather than merely absent.
+>
+> Read `/status` before describing what production believes. Production had already been
+> migrated in v30 hours before the paused deploy and nothing here recorded it, so four
+> consecutive review reports told an external reviewer the opposite. Each was true when
+> written.
 >
 > What remains is not code — see `docs/action-checklist.md`.
 >

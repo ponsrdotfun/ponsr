@@ -136,8 +136,10 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   to fix a policy that was correct. A failure to ask is not a denial, and the run now reports
   INCONCLUSIVE rather than inventing a verdict.
 
-  Production config, the deployed backend, and the public availability claim are all unchanged.
-  `PONS_FACTORY_VERSION` has **not** been flipped.
+  **Superseded 2026-08-24: production now runs this migration.** The paragraph that stood here
+  said production config and the deployed backend were unchanged. That is no longer true — see
+  "Production, as actually deployed" below. `PONS_FACTORY_VERSION` is `v2`, which on this code
+  means the CURRENT factory.
 
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
@@ -219,22 +221,45 @@ Still blocked on the owner:
    and `auto_stop_machines = false`, health check passing. This entry sat here as an open
    blocker while the thing it describes was already serving `/status` on the public internet.
 
-   What is actually open is the opposite problem: **the deployed image predates the
-   migration.** It was last updated 2026-08-19; the deployment registry landed 2026-08-20,
-   and `main` is now 56 commits ahead of what is running. Production therefore still reads
-   the *superseded* factory, and its own `/status` says so —
-   `"pons has switched launching off and this treasury is not whitelisted -- no launch can
-   succeed"`. That is the pre-migration belief, live, in front of anyone who looks.
+   **The stale-deploy problem that stood here is CLOSED (2026-08-24).** See "Production, as
+   actually deployed" below. Everything this entry used to say — that the image predated the
+   migration, that `/status` advertised the pre-migration belief, that the deploy was still
+   to be sequenced with the canary plan — is history now, and is kept only in
+   `PONSR-DEPLOY-PAUSED-REPORT.txt`.
 
-   Two consequences, and they point in opposite directions. The running bot cannot launch
-   anything, because it believes the launchpad is shut — so the stale deploy is currently
-   acting as a brake. But it still holds the Turnkey bot key in a live process, and the
-   creation-authority finding above is now closed, so a leaked bot key can no longer attach
-   treasury funds to a contract creation. That removes the reason to keep the deploy
-   blocked, but not the reason to sequence it carefully: deploying is the migration
-   cut-over, because production still runs `PONS_FACTORY_VERSION=v2`, which on this code
-   means the CURRENT factory, where `canLaunch(treasury)` is true. The deploy is what makes
-   real launches possible, so it belongs with the canary plan rather than on its own.
+### Production, as actually deployed (2026-08-24)
+
+`ponsr-backend` on Fly runs **commit `7856dd2`, release v31**, image
+`sha256:48982e5044369aa35724a15a06178012c8d368cac96710b424f3945acc18fa3c`. One machine
+(`867634bee0e048`, `iad`), volume `vol_r1j1nwjzdx6p7q3r` attached. Rollback target is the
+exact previous digest, `sha256:37f2755c26949ed9d2fb249070838b89ea09f033a5c29750ede4105f37f8bd8a`
+(v30) — name the digest, never "the previous release".
+
+Live `/status` serves the typed `spend` envelope: `rolling-24h`, chain 4663,
+`pons-v2-current-7ed`, factory `0x7eD598…EC7e`, treasury pinned to the hot wallet,
+`publicLaunchEnabled: false`. Overall `degraded` is CORRECT — `public-launches` is the only
+non-ok check and it must stay paused.
+
+Three booleans are now set explicitly rather than inherited, because the runtime parses them
+strictly (see below): `TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`,
+`REPLY_INCLUDE_LINK=false`. Two of those names did not previously exist as secrets at all.
+
+**Two lessons from this deploy, both about documents rather than code.**
+
+Production had already been migrated to the current factory in release v30, hours before the
+paused deploy, and nothing in this repository recorded it. Four consecutive review reports
+told an external reviewer that production ran the *superseded* factory. Each was true when
+written. Before describing what production believes, read `/status` — this file is a summary
+of the past, not an observation of the present.
+
+And **`z.coerce.boolean()` is never the right parser for an environment variable.** It is
+JavaScript truthiness, so `"false"` and `"0"` both parse as **true**. It was applied to
+`TURNKEY_POLICY_CONFIRMED`, the one setting whose entire job is to let somebody say "I have
+NOT verified the signer policy", and to `REPLY_INCLUDE_LINK`, where declining a 13× per-reply
+cost opted into it. Both now use `parseAcknowledgement` — tolerant about shape, strict about
+meaning — and a test fails if any schema field returns to the coercion. Production refuses to
+start unless the acknowledgement is exactly `true`, so a clean boot is itself evidence the
+value was accepted.
 
 The email to `contact@ponsfamily.com` no longer blocks anything.
 
