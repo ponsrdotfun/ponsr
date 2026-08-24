@@ -90,6 +90,7 @@ function realTarget(): LaunchTarget {
 function depsWithLogs(db: Db, logs: unknown[], replies: string[]) {
   return {
     db,
+    publicLaunchEnabled: true,
     parser: {
       parse: async () => ({
         isLaunchIntent: true,

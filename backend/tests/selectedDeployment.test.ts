@@ -121,6 +121,7 @@ describe('handleMention verifies the SELECTED deployment', () => {
   function depsFor(db: any, deployment: any, seen: any[]) {
     return {
       db,
+      publicLaunchEnabled: true,
       parser: {
         parse: async () => ({
           isLaunchIntent: true, confidence: 'high',

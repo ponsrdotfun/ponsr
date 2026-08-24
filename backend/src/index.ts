@@ -168,6 +168,7 @@ if (pairAssets) {
 }
 
 const deps = {
+  publicLaunchEnabled: config.PUBLIC_LAUNCH_ENABLED,
   pairAssets,
   launchTarget,
   db,
@@ -319,6 +320,7 @@ app.get('/status', async (_req, res) => {
       parserRoute: config.ANTHROPIC_API_KEY ? 'Anthropic (direct)' : 'OpenRouter',
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
+      publicLaunchEnabled: config.PUBLIC_LAUNCH_ENABLED,
       factoryVersion: config.PONS_FACTORY_VERSION,
       deploymentId: launchTarget.deployment?.id,
       deploymentFactory: launchTarget.deployment?.factory,

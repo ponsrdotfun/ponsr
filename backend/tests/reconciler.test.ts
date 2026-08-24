@@ -95,6 +95,7 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
     treasurySigner = new FakeTreasurySigner();
     deps = {
       db,
+      publicLaunchEnabled: true,
       parser: new MockParser(new Map([['launch Moon Coin MOON', GOOD_INTENT]])),
       walletResolver: new MockWalletResolver(db),
       xClient,

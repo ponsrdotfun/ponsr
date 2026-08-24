@@ -24,6 +24,7 @@ function deps(over: Partial<StatusDeps> = {}): StatusDeps {
     parserRoute: 'OpenRouter',
     alertsRoute: 'Telegram',
     crossCheckHours: 6,
+    publicLaunchEnabled: true,
     factoryVersion: 'v1',
     deploymentId: 'pons-v2-current-7ed',
     deploymentFactory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
@@ -80,6 +81,14 @@ describe('buildStatus', () => {
     const r = await buildStatus(deps({ getChainId: async () => 1 }));
     expect(find(r, 'rpc').state).toBe('down');
     expect(find(r, 'rpc').detail).toContain('expected 4663');
+  });
+
+  it('reports Ponsr public launching paused independently of an open upstream factory', async () => {
+    const r = await buildStatus(deps({ publicLaunchEnabled: false }));
+    expect(find(r, 'public-launches').state).toBe('degraded');
+    expect(find(r, 'public-launches').detail).toMatch(/before parsing.*signing.*broadcast/i);
+    expect(find(r, 'launchpad').state).toBe('ok');
+    expect(r.state).toBe('degraded');
   });
 
   it('flags a launchpad pons has switched off', async () => {

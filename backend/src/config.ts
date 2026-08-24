@@ -111,6 +111,15 @@ const ConfigSchema = z.object({
    * right now, so neither works until pons acts either way.
    */
   PONS_FACTORY_VERSION: z.enum(['v1', 'v2']).default('v1'),
+  /**
+   * Ponsr's own public-launch gate. This is independent of pons's factory gate:
+   * deploys, migrations, and operator canaries must not silently make user-triggered
+   * launches live. Enabling it is a separate post-canary operator decision.
+   */
+  PUBLIC_LAUNCH_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   /** Ceiling on authenticated webhook deliveries per minute. Guards the parser's
    *  prepaid balance, not the treasury -- the daily spend cap already bounds that. */
   WEBHOOK_MAX_PER_MINUTE: z.coerce.number().default(30),

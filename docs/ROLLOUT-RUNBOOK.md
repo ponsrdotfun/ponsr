@@ -113,31 +113,41 @@ Do not start the application between rehearsal and a restore decision.
 **Evidence status:** unit/build tests exercise the CLI and concurrent-writer fixture; this Fly
 maintenance ceremony is **not LIVE-tested** by this repository work.
 
-## 2. Order: code before config
+## 2. Fence public launching before the deploy
 
-Deploy the new code with `PONS_FACTORY_VERSION` **still `v1`**, and confirm the process
-is healthy, before flipping anything.
+Production already carries `PONS_FACTORY_VERSION=v2`. The stale running image interprets that
+as the superseded factory; current `main` interprets it as `pons-v2-current-7ed`, where the
+public gate is open. **Deploying is therefore the migration cut-over.** The old instruction to
+deploy under v1 and flip afterwards is not the state that exists and must not be followed.
 
-The reverse order produces the state this migration exists to prevent: config naming a
-factory the deployed code does not know how to encode for.
+Set Ponsr's independent gate first. The stale image does not read this setting, so its existing
+behaviour is unchanged; current code reads it before the paid parser, wallet creation, chain
+reads, splitter deployment, signing, or broadcast.
 
 ```bash
-git checkout main && git merge --no-ff migrate/pons-v2-current
-git push origin main          # publishes the WEBSITE too — see §6
+fly secrets set PUBLIC_LAUNCH_ENABLED=false
+fly secrets list | grep -E '^(PUBLIC_LAUNCH_ENABLED|PONS_FACTORY_VERSION|TURNKEY_POLICY_CONFIRMED)'
+```
+
+Abort unless all three names are present, the signer-active probes in §0 passed for the current
+deployment, and `TURNKEY_POLICY_CONFIRMED` has been set deliberately. Secret values are not
+shown by Fly; the post-deploy status check below proves how the running process interpreted the
+public-launch gate.
+
+## 3. Deploy current code while public launching remains paused
+
+Record the rollback image in §Rollback first, then:
+
+```bash
+git checkout main
+git pull --ff-only origin main
 fly deploy
 ```
 
-**Mixed state is refused, not tolerated.** With v1 config and v2 code the bot builds v1
-calldata for the v1 factory and verifies the v1 deployment — coherent, because the target
-carries its own deployment. Nothing silently spans two.
+`git push` is not a rollout command here: PR #1 and the documentation closures are already on
+`main`, and an unrelated push also publishes the website. Deploy the exact reviewed commit.
 
-## 3. Flip the version
-
-```bash
-fly secrets set PONS_FACTORY_VERSION=v2
-```
-
-Then, within five minutes:
+Within five minutes:
 
 ```bash
 curl -s https://<backend>/status | jq
@@ -151,15 +161,19 @@ curl -s https://<backend>/status   | jq -e '.checks[] | select(.name=="deploymen
            | select(.detail | test("0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"; "i"))'
 
 curl -s https://<backend>/status   | jq -e '.checks[] | select(.name=="launchpad") | select(.state=="ok")'
+
+curl -s https://<backend>/status   | jq -e '.checks[] | select(.name=="public-launches")
+           | select(.state=="degraded") | select(.detail | test("paused by Ponsr"))'
 ```
 
-Both must exit 0. `jq -e` exits non-zero when nothing matches, so an absent check fails
-rather than passing quietly — which matters here more than usual, since a missing
-`deployment` check is exactly what an older build would produce.
+All three must exit 0. The overall status is deliberately `degraded` while Ponsr's gate is
+paused; that is containment working, not an outage. `jq -e` exits non-zero when nothing
+matches, so an absent check fails rather than passing quietly.
 
-**Abort and set `PONS_FACTORY_VERSION=v1` if** `/status` reports any other deployment id,
-the launchpad check is down, or the deployment check is missing. No launch has happened
-yet at this point, so a rollback here costs nothing.
+**Abort and roll back the exact image recorded below** if `/status` reports any other deployment,
+the upstream launchpad is not ready, the Ponsr pause check is absent/not paused, or the machine
+is unstable. Do not compensate by enabling public launches. No launch has happened yet, so
+rollback remains reversible.
 
 ## 4. Canary: one self-dealt launch
 
@@ -234,16 +248,16 @@ appear in user-facing copy.
 
 ## 6. The website
 
-`git push origin main` in §2 **already published it** — Netlify auto-deploys from `main`
-with no manual step. Two consequences:
+The migration and documentation changes are already on `main`, so Netlify has already handled
+the website independently of this Fly deployment. There is no website command in this rollout.
 
 - the board reads both V2 deployments, so historical launches stay visible;
-- the pause notice now asks the **current** factory. Before this branch it asked the
-  superseded one and told every visitor *"pons has new launches switched off
-  platform-wide"* — untrue, and a claim about somebody else's product.
+- the pause notice asks the **current** factory. Before the migration it asked the superseded
+  one and made a platform-wide claim from the wrong contract.
 
-There is no separate website deploy step, and no way to ship the backend without shipping
-the site. If they must be staged apart, merge the website change on its own commit first.
+A future push to `main` publishes the website automatically; `fly deploy` does not. Keep those
+two release surfaces separate rather than manufacturing an unrelated push during a backend
+cut-over.
 
 ## 6b. Remove retired secrets
 
@@ -268,10 +282,25 @@ grep -nE '^(PONS_V2_FACTORY_ADDRESS|PONS_V2_FEE_ESCROW_ADDRESS|PONS_V2_APPROVALS
 `fly secrets unset` restarts the app, so do it in the same window as another restart
 rather than on its own. Confirm afterwards that `fly secrets list` no longer names them.
 
-## 7. Public launching
+## 7. Public launching — separate, post-canary decision
 
-Still off, and not part of this runbook. Enabling it is a separate decision that requires
-the canary to have completed §4 and §5 cleanly.
+Still off after deployment. Enabling it requires §4 and §5 to have completed cleanly, the
+canary launch and fee receipt to reconcile, `/status` to name the current deployment, and no
+unresolved incident.
+
+```bash
+fly secrets set PUBLIC_LAUNCH_ENABLED=true
+curl -s https://<backend>/status | jq -e '.checks[] | select(.name=="public-launches")
+         | select(.state=="ok") | select(.detail | test("explicit Ponsr operator"))'
+```
+
+That secret change restarts the app. Verify one machine, one volume, a fresh `/health`, the
+current deployment check, zero restart loop, and the daily spend ledger before announcing
+availability. To pause without changing factory selection:
+
+```bash
+fly secrets set PUBLIC_LAUNCH_ENABLED=false
+```
 
 ---
 
@@ -287,7 +316,8 @@ git rev-parse HEAD | tee -a ./rollback-target.txt        # the website commit to
 
 | what | how | owner |
 |---|---|---|
-| config only | `fly secrets set PONS_FACTORY_VERSION=v1` | operator, no approval needed |
+| contain public launches | `fly secrets set PUBLIC_LAUNCH_ENABLED=false` | operator; do this first |
+| deployment selection | do not change during incident response; restore the exact image below | operator |
 | code | `fly deploy --image <IMAGE from rollback-target.txt>` — never "the previous release", which is not a thing you can type | operator |
 | database | restore from `backup-manifest-$STAMP.json` — ordered procedure below | operator |
 | website | `git revert -m 1 <merge commit>` then push; Netlify republishes from `main` | operator |

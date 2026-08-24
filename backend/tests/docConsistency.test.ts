@@ -104,6 +104,29 @@ describe('no document calls the whitelist a blocker', () => {
   }
 });
 
+describe('the migration cannot silently enable public launching', () => {
+  const source = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+  it('defaults the independent Ponsr gate off with exact string parsing', () => {
+    const text = source('backend/src/config.ts');
+    expect(text).toMatch(/PUBLIC_LAUNCH_ENABLED:[\s\S]{0,160}enum\(\['true', 'false'\]\)[\s\S]{0,160}default\('false'\)/);
+    expect(text).not.toMatch(/PUBLIC_LAUNCH_ENABLED:\s*z\.coerce\.boolean/);
+  });
+
+  it('checks the pause before the paid parser in the mention path', () => {
+    const text = source('backend/src/orchestrator.ts');
+    expect(text.indexOf("reason: 'PUBLIC_LAUNCH_PAUSED'")).toBeGreaterThan(-1);
+    expect(text.indexOf("reason: 'PUBLIC_LAUNCH_PAUSED'")).toBeLessThan(text.indexOf('deps.parser.parse'));
+  });
+
+  it('records the actual production sequence instead of a stale v1-first rollout', () => {
+    const text = claims('docs/ROLLOUT-RUNBOOK.md');
+    expect(text).toMatch(/Production already carries `PONS_FACTORY_VERSION=v2`/);
+    expect(text).toMatch(/fly secrets set PUBLIC_LAUNCH_ENABLED=false/);
+    expect(text).not.toMatch(/Deploy the new code with `PONS_FACTORY_VERSION` \*\*still `v1`/);
+  });
+});
+
 describe('the creation-authority finding is recorded as closed, and honestly', () => {
   const FINDING = path.join(ROOT, 'docs/TURNKEY-CREATION-AUTHORITY.md');
 

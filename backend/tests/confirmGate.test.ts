@@ -97,6 +97,7 @@ interface Scenario {
 function deps(db: Db, sc: Scenario, replies: string[]) {
   return {
     db,
+    publicLaunchEnabled: true,
     parser: {
       parse: async () => ({
         isLaunchIntent: true,

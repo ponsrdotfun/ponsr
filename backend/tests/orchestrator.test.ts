@@ -145,6 +145,38 @@ describe('handleMention -- full pipeline integration', () => {
     db.close();
   });
 
+  it('PUBLIC_LAUNCH_ENABLED=false stops before parser, wallet, chain, signer, and reply', async () => {
+    const mention = makeMention();
+    let parsed = 0;
+    const parser = { parse: async () => { parsed += 1; return HIGH_CONFIDENCE_MOON; } };
+    const wallet = new MockWalletResolver(db);
+    let walletCalls = 0;
+    const originalResolve = wallet.resolve.bind(wallet);
+    (wallet as any).resolve = async (id: string, handle: string) => { walletCalls += 1; return originalResolve(id, handle); };
+    let chainCalls = 0;
+
+    const outcome = await handleMention(mention, {
+      db,
+      publicLaunchEnabled: false,
+      parser,
+      walletResolver: wallet,
+      xClient,
+      treasurySigner,
+      provider: {} as any,
+      getLiveFeeWei: async () => { chainCalls += 1; return LIVE_FEE; },
+      getTreasuryBalanceWei: async () => { chainCalls += 1; return FUNDED_TREASURY; },
+      getLaunchReadiness: async () => { chainCalls += 1; return { canLaunch: true, launchConfigUsable: true }; },
+    });
+
+    expect(outcome).toEqual({ kind: 'rejected', reason: 'PUBLIC_LAUNCH_PAUSED' });
+    expect(parsed).toBe(0);
+    expect(walletCalls).toBe(0);
+    expect(chainCalls).toBe(0);
+    expect(treasurySigner.sentTransactions).toHaveLength(0);
+    expect(xClient.sentReplies).toHaveLength(0);
+    expect(db.claimTweetForProcessing(mention.tweetId)).toBe(false);
+  });
+
   /**
    * Every test in this file injects `verifyIdentity: async () => {}`, which is honest --
    * they are testing orchestration, not chain identity -- but it means nothing here
@@ -167,6 +199,7 @@ describe('handleMention -- full pipeline integration', () => {
 
     await handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser,
       walletResolver: new MockWalletResolver(db),
       xClient,
@@ -190,6 +223,7 @@ describe('handleMention -- full pipeline integration', () => {
 
     const outcome = await handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser,
       walletResolver: new MockWalletResolver(db),
       xClient,
@@ -220,6 +254,7 @@ describe('handleMention -- full pipeline integration', () => {
 
     const outcome = await handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser,
       walletResolver,
       xClient,
@@ -253,8 +288,8 @@ describe('handleMention -- full pipeline integration', () => {
     ]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention1, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
-    await handleMention(mention2, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention1, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention2, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const user = db.getUser('user_1');
     expect(user).not.toBeNull();
@@ -271,7 +306,7 @@ describe('handleMention -- full pipeline integration', () => {
       },
     };
     const walletResolver = new MockWalletResolver(db);
-    const deps = { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
+    const deps = { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
 
     const first = await handleMention(mention, deps);
     const second = await handleMention(mention, deps);
@@ -289,7 +324,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(0); // silent, per composeRejectionReply
@@ -303,7 +338,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -321,7 +356,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const launchTx = treasurySigner.sentTransactions.find((t) => t.to === config.PONS_FACTORY_ADDRESS);
     const iface = new ethers.Interface(PONS_FACTORY_ABI);
@@ -341,7 +376,7 @@ describe('handleMention -- full pipeline integration', () => {
     const parser = new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('onchain_failure');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -368,6 +403,7 @@ describe('a failed reply must not rewrite a successful launch', () => {
       mention,
       d: {
         db,
+        publicLaunchEnabled: true,
         parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
         walletResolver: new MockWalletResolver(db),
         xClient,
@@ -458,6 +494,7 @@ describe("X's 7-day crypto-address rule", () => {
     return handleMention(mention, {
       ...extra,
       db,
+      publicLaunchEnabled: true,
       parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
       walletResolver: new MockWalletResolver(db),
       xClient,
@@ -646,6 +683,7 @@ describe('launching paired against an approved asset', () => {
     const intent = { ...HIGH_CONFIDENCE_MOON, pairWith };
     return handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser: new MockParser(new Map([[mention.text, intent]])),
       walletResolver: new MockWalletResolver(db),
       xClient,
@@ -749,6 +787,7 @@ describe('when the parser cannot be reached', () => {
     const mention = makeMention();
     return handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser: { parse: async () => { throw new Error('402 insufficient credits'); } },
       walletResolver: new MockWalletResolver(db),
       xClient,
@@ -775,6 +814,7 @@ describe('when the parser cannot be reached', () => {
     const mention = makeMention();
     const outcome = await handleMention(mention, {
       db,
+      publicLaunchEnabled: true,
       parser: new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]])),
       walletResolver: new MockWalletResolver(db),
       xClient,

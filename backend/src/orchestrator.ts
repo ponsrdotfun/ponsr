@@ -63,6 +63,12 @@ export interface OrchestratorDeps {
     dexConfigUsable?: boolean;
     reason?: string;
   }>;
+  /**
+   * Ponsr's own public-launch switch. Required so every caller must choose; omission
+   * cannot become an accidental fail-open path. False stops before paid parsing,
+   * wallet creation, chain reads, splitter deployment, signing, or broadcast.
+   */
+  publicLaunchEnabled: boolean;
   /** Part 5 mitigation #5. Optional so existing callers keep working, but a
    *  production deployment must pass one -- the guards below stop an attack
    *  silently otherwise, and nobody learns it happened. */
@@ -200,6 +206,15 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   const claimed = deps.db.claimTweetForProcessing(mention.tweetId);
   if (!claimed) {
     return { kind: 'duplicate' };
+  }
+
+  // Ponsr's gate, independent of pons's factory permission. Production passes this
+  // explicitly from config and defaults it off. Keep the atomic claim so a paused
+  // backlog is not replayed as a launch storm when the operator later enables public
+  // launching. Stop before the paid parser, wallet creation, chain reads, splitter,
+  // signer, or reply writer; at this point we do not even know this is a launch intent.
+  if (!deps.publicLaunchEnabled) {
+    return { kind: 'rejected', reason: 'PUBLIC_LAUNCH_PAUSED' };
   }
 
   // --- Step 1 continued: parse intent ---

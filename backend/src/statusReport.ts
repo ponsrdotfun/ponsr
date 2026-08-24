@@ -67,6 +67,8 @@ export interface StatusDeps {
   parserRoute: string;
   alertsRoute: string;
   crossCheckHours: number;
+  /** Ponsr's own gate. A healthy upstream factory is not public availability. */
+  publicLaunchEnabled: boolean;
   /** Which factory launches are built for. v1 prices every launch in ETH. */
   factoryVersion: 'v1' | 'v2';
   /** Symbols a launch can be paired against. Absent on v1, where there is nothing
@@ -111,6 +113,14 @@ function eth(wei: bigint, dp = 4): string {
 
 export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<StatusReport> {
   const checks: StatusCheck[] = [];
+
+  checks.push({
+    name: 'public-launches',
+    state: deps.publicLaunchEnabled ? 'ok' : 'degraded',
+    detail: deps.publicLaunchEnabled
+      ? 'enabled by explicit Ponsr operator configuration'
+      : 'paused by Ponsr; mentions stop before parsing, wallet creation, signing, or broadcast',
+  });
 
   // The chain, first: every check below it is meaningless if this one fails, but
   // they still run, because "the RPC is down" and "the RPC is down AND the cap is
