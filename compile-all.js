@@ -50,7 +50,7 @@ const input = {
   },
   settings: {
     outputSelection: {
-      '*': { '*': ['abi', 'evm.bytecode.object'] },
+      '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] },
     },
     optimizer: { enabled: true, runs: 200 },
   },
@@ -94,6 +94,16 @@ for (const [file, contracts] of Object.entries(output.contracts)) {
     artifacts[name] = {
       abi: contract.abi,
       bytecode: '0x' + contract.evm.bytecode.object,
+      /**
+       * Runtime bytecode — what actually ends up AT the address.
+       *
+       * Creation bytecode alone cannot verify a deployed contract: it is the constructor
+       * plus the runtime, and only the runtime survives. Without this an operator could
+       * check a deployed splitter by looking for four-byte selectors, which any bytecode
+       * can contain by accident or on purpose. Recording it makes identity checkable
+       * instead of merely plausible.
+       */
+      deployedBytecode: '0x' + contract.evm.deployedBytecode.object,
     };
   }
 }

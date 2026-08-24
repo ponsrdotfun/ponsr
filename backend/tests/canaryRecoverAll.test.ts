@@ -5,6 +5,7 @@ import { ethers } from 'ethers';
 import { CanaryJournal } from '../src/canaryJournal';
 import { recoverCanary, CanaryRecoveryDeps } from '../src/canaryRecovery';
 import { executableDeployment } from '../src/deployments';
+import { splitterArtifactFor } from '../src/splitterDeployer';
 import { PONS_V2_CURRENT_ABI, buildCurrentV2LaunchCalldata, launchSalt } from '../src/ponsV2CurrentEncoder';
 
 /**
@@ -53,8 +54,15 @@ const record = () => ({
   creatorFeeRecipient: SPLITTER, pairToken: NATIVE, exists: true,
 });
 
-/** Runtime code carrying the selectors the splitter must expose. */
-const GOOD_CODE = '0x60806040' + ethers.id('splitERC20(address)').slice(2, 10) + ethers.id('claimAndSplit(address)').slice(2, 10);
+/**
+ * The REAL compiled runtime, not a hand-made blob carrying the right selectors.
+ *
+ * This fixture used to be `'0x60806040' + splitERC20 + claimAndSplit`, and it passed the
+ * old selector-only check. The shared verifier refuses it, correctly: four bytes can sit
+ * inside unrelated bytecode by accident or by construction, and "contains the selector" is
+ * not "is the splitter". The fixture was proving the weak check worked.
+ */
+const GOOD_CODE = (splitterArtifactFor(D) as { deployedBytecode?: string }).deployedBytecode as string;
 
 function launchRow(j: CanaryJournal) {
   return j.prepare({
@@ -231,5 +239,97 @@ describe('splitter rows are recovered by their own verifier', () => {
     j.bindHash(id, '0xdeploy');
     j.recordReceipt(id, { status: 1 });
     expect(() => j.recordFee(id, FEE)).toThrow(/token_launch/i);
+  });
+});
+
+/**
+ * A landed launch consumed the fee, whoever noticed and whenever.
+ *
+ * Ordinary execution recorded the fee right after receipt success. Recovery could advance a
+ * broadcast or receipt_success row all the way to confirmed and never call recordFee at
+ * all — so this sequence spent real money and freed the budget:
+ *
+ *   1. the launch receipt lands;
+ *   2. the process dies after recordReceipt and before recordFee;
+ *   3. recover:canary verifies and confirms;
+ *   4. feeRecordedWei stays null;
+ *   5. the rolling total omits a fee that was genuinely paid.
+ *
+ * Exactly-once accounting has to survive the crash, not just the happy path.
+ */
+describe('recovery records the launch fee exactly once', () => {
+  let dir: string;
+  let file: string;
+  let j: CanaryJournal;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-recover-fee-'));
+    file = path.join(dir, 'canary.sqlite');
+    j = new CanaryJournal(file, { allowEphemeral: true });
+  });
+  afterEach(() => {
+    j.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
+    resolveDeployment: (id) => (id === D.id ? D : null),
+    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null }),
+    readLaunchRecord: async () => record(),
+    readCode: async () => '0x',
+    treasuryAddress: TREASURY,
+    ...over,
+  });
+
+  it('fills the fee when a crash left it unrecorded', async () => {
+    const id = launchRow(j);
+    j.bindHash(id, '0xabc');
+    j.recordReceipt(id, { status: 1 });   // crashed here: fee never recorded
+    expect(j.byId(id)!.feeRecordedWei).toBeNull();
+
+    await recoverCanary(j, deps());
+    expect(j.byId(id)!.state).toBe('confirmed');
+    expect(j.byId(id)!.feeRecordedWei).toBe(FEE);
+    expect(j.recordedFeeTotalWei()).toBe(FEE);
+  });
+
+  it('records the fee on a landed launch that does not reconcile', async () => {
+    const id = launchRow(j);
+    j.bindHash(id, '0xabc');
+    await recoverCanary(j, deps({ readLaunchRecord: async () => null }));
+    expect(j.byId(id)!.state).toBe('confirmed_incident');
+    // The fee was spent whether or not anybody can say what was launched.
+    expect(j.byId(id)!.feeRecordedWei).toBe(FEE);
+  });
+
+  it('adds nothing on a second recovery pass', async () => {
+    const id = launchRow(j);
+    j.bindHash(id, '0xabc');
+    await recoverCanary(j, deps());
+    await recoverCanary(j, deps());
+    expect(j.recordedFeeTotalWei()).toBe(FEE);
+  });
+
+  it('records no fee for a reverted launch', async () => {
+    const id = launchRow(j);
+    j.bindHash(id, '0xabc');
+    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null }) }));
+    expect(j.byId(id)!.feeRecordedWei).toBeNull();
+    expect(j.recordedFeeTotalWei()).toBe(0n);
+  });
+
+  it('records no fee while the receipt is still unknown', async () => {
+    const id = launchRow(j);
+    j.bindHash(id, '0xabc');
+    await recoverCanary(j, deps({ readReceipt: async () => null }));
+    expect(j.byId(id)!.feeRecordedWei).toBeNull();
+  });
+
+  /** A splitter costs gas, never the protocol fee. */
+  it('records no launch fee against a recovered splitter', async () => {
+    const id = splitterRow(j);
+    j.bindHash(id, '0xdeploy');
+    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER }) }));
+    expect(j.byId(id)!.feeRecordedWei).toBeNull();
+    expect(j.recordedFeeTotalWei()).toBe(0n);
   });
 });

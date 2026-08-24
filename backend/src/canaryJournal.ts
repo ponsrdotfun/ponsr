@@ -145,6 +145,21 @@ export class CanaryJournal {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS canary_tx_run ON canary_tx(run_id, op);
+      /**
+       * At most ONE live row per (run, operation), enforced by the schema.
+       *
+       * The checks in prepare() and the INSERT were separate statements, so two operator
+       * processes could both observe an empty unresolved set, both insert, and both go on
+       * to broadcast something irreversible. A transaction narrows that window; a partial
+       * unique index closes it, because the second INSERT cannot exist regardless of who
+       * read what and when.
+       *
+       * Partial, on non-terminal states only: a run legitimately accumulates settled rows
+       * over its lifetime, and a completed launch must not block the next operation.
+       */
+      CREATE UNIQUE INDEX IF NOT EXISTS canary_tx_one_live
+        ON canary_tx(run_id, op)
+        WHERE state NOT IN ('confirmed','receipt_reverted');
     `);
 
     /**
@@ -202,6 +217,19 @@ export class CanaryJournal {
    * would make the retry revert, but only after paying gas to discover it.
    */
   prepare(p: PreparedCanary): number {
+    /**
+     * BEGIN IMMEDIATE takes the write lock before the first read.
+     *
+     * Without it the open/completed checks and the INSERT are separate statements, and two
+     * concurrent operator processes can interleave between them: both see nothing open,
+     * both insert, both reach an irreversible broadcast. The partial unique index makes the
+     * second INSERT impossible even so; this makes it fail early and legibly rather than as
+     * a constraint violation halfway through.
+     */
+    return this.db.transaction(() => this.prepareLocked(p)).immediate();
+  }
+
+  private prepareLocked(p: PreparedCanary): number {
     const open = this.unresolved();
     if (open.length > 0) {
       const o = open[0];

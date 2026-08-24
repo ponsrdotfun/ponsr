@@ -30,7 +30,7 @@ import { assertDeploymentIdentity } from './deploymentIdentity';
  */
 export function splitterArtifactFor(
   deployment: PonsDeployment = executableDeployment()
-): { abi: any; bytecode: string; name: string } {
+): { abi: any; bytecode: string; deployedBytecode?: string; name: string } {
   // From the deployment's FEE MODEL, not from `config.PONS_FACTORY_VERSION`.
   //
   // The flag answers "which factory does this bot launch through by default". This
@@ -52,7 +52,11 @@ export function splitterArtifactFor(
       `feeSplitterArtifact.json has no ${name}. Run \`node compile-all.js\` from the repo root.`
     );
   }
-  return { abi: art.abi, bytecode: art.bytecode, name };
+  // deployedBytecode is what actually ends up AT the address, and is what makes a
+  // deployed splitter's identity checkable rather than merely plausible. Optional so an
+  // artifact compiled before it was emitted still loads, and the verifier says so instead
+  // of treating its absence as a pass.
+  return { abi: art.abi, bytecode: art.bytecode, deployedBytecode: art.deployedBytecode, name };
 }
 
 /**
@@ -191,13 +195,38 @@ export async function deploySplitter(
   // of them. Confirmed live by scripts/turnkey-verify-policy.ts, which asserts contract
   // creation ALLOWED alongside an arbitrary destination denied -- without that exception
   // a launch would half-complete, splitter deployed and paid for, token never created.
+  /**
+   * The lifecycle, actually invoked.
+   *
+   * These three calls were declared in the signature and wired at the call site, and never
+   * appeared here. A parameter existed, callbacks existed, and nothing connected them --
+   * so the caller's journal recorded nothing, a crash after broadcast still lost the hash,
+   * and a rerun could deploy a second permanent contract. Every test covering it built
+   * journal rows by hand and never entered this function.
+   *
+   * Awaited, not fired and forgotten. The whole point is that the record exists BEFORE the
+   * irreversible step, so a hook that fails must stop the lifecycle rather than be stepped
+   * over: an unrecorded broadcast is exactly the state this is meant to prevent.
+   */
+  await hooks?.onPlanned?.(deployTx.data as string);
+
   const sent = await signer.sendTransaction({
     to: '',
     data: deployTx.data as string,
     value: 0n,
   });
 
+  // Before the receipt is awaited. That gap is the window nothing could see.
+  await hooks?.onSent?.(sent.hash);
+
   const receipt = await sent.wait();
+  // Fires for every outcome including a missing receipt, because `status: null` is how the
+  // caller keeps an ambiguous row blocking instead of recording a revert that never happened.
+  await hooks?.onReceipt?.({
+    status: receipt ? Number(receipt.status) : null,
+    contractAddress: receipt?.contractAddress ?? null,
+  });
+
   if (!receipt || !receipt.contractAddress) {
     throw new Error('Splitter deployment did not produce a contract address -- check receipt status.');
   }
