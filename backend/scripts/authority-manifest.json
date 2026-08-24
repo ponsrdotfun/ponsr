@@ -123,6 +123,17 @@
       "defaultMode": "read-only"
     },
     {
+      "script": "recover-canary.ts",
+      "authority": "read-only",
+      "effects": [
+        "reads the canary journal and the chain to advance interrupted rows",
+        "constructs no signer and cannot broadcast: recoverCanary takes readers only",
+        "writes only to the operator's local journal, never to production"
+      ],
+      "defaultMode": "read-only",
+      "explicitGate": null
+    },
+    {
       "script": "run-eval.ts",
       "authority": "read-only",
       "effects": [

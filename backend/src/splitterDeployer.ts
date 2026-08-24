@@ -134,7 +134,23 @@ export async function deploySplitter(
   provider?: ethers.Provider,
   /** The deployment this splitter is being built for. Defaults to the executable one;
    *  the orchestrator passes the SELECTED target's, which can differ under rollback. */
-  deployment: PonsDeployment = executableDeployment()
+  deployment: PonsDeployment = executableDeployment(),
+  /**
+   * Lifecycle hooks, because this function broadcasts internally.
+   *
+   * A caller needing a durable record of an irreversible action cannot obtain one from
+   * outside a function that sends AND waits before it returns: a crash anywhere in here
+   * loses the hash entirely, and the canary journal was blind to exactly this. The canary
+   * journals through these. Production passes none and behaves exactly as before.
+   */
+  hooks?: {
+    /** Exact initcode, before anything can be broadcast. */
+    onPlanned?: (initcode: string) => void | Promise<void>;
+    /** The hash, the instant send returns and before the receipt is awaited. */
+    onSent?: (txHash: string) => void | Promise<void>;
+    /** `status: null` means no receipt was seen — which is not a revert. */
+    onReceipt?: (r: { status: number | null; contractAddress: string | null }) => void | Promise<void>;
+  }
 ): Promise<SplitterDeployResult> {
   if (provider) {
     // Throws rather than returning a flag: after this function returns there is already

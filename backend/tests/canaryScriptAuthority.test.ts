@@ -50,11 +50,20 @@ describe('success language is ordered behind the verdict', () => {
     expect(CODE).toMatch(/decideCanaryPhase\(/);
   });
 
-  it('marks the row confirmed only where the verdict was green', () => {
-    const incident = CODE.indexOf('journal.markIncident(');
-    const confirmed = CODE.indexOf('journal.markConfirmed(');
-    expect(incident).toBeGreaterThan(-1);
-    expect(confirmed).toBeGreaterThan(incident);
+  /**
+   * Scoped to the LAUNCH, because the splitter legitimately confirms earlier.
+   *
+   * This compared the first `markConfirmed` against the first `markIncident` across the
+   * whole file, and broke the moment the splitter deployment was journalled -- its confirm
+   * runs long before the launch has a verdict at all. A file-wide position was never the
+   * property; the property is that the LAUNCH row is confirmed only after its own
+   * reconciliation. The executable version lives in canaryReporting.test.ts.
+   */
+  it('confirms the launch row only after its reconciliation branch', () => {
+    const launchIncident = CODE.indexOf('journal.markIncident(launchRowId');
+    const launchConfirmed = CODE.indexOf('journal.markConfirmed(launchRowId');
+    expect(launchIncident).toBeGreaterThan(-1);
+    expect(launchConfirmed).toBeGreaterThan(launchIncident);
   });
 });
 

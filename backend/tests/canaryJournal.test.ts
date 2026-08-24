@@ -173,3 +173,93 @@ describe('the canary journal records intent before it can be acted on', () => {
     expect(() => new CanaryJournal('/app/canary.sqlite')).toThrow(/ephemeral|durable/i);
   });
 });
+
+/**
+ * Journals written before the fee clock existed.
+ *
+ * `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so adding
+ * `fee_recorded_at` to the schema left every earlier journal without it. The next run
+ * failed with "no such column" and the canary refused to start — correct behaviour for an
+ * unreadable journal, and a migration gap all the same.
+ */
+describe('an older journal is migrated rather than rejected', () => {
+  it('adds the fee clock to a table that predates it, keeping the rows', () => {
+    const { dir, file } = tmpJournal();
+    const Database = require('better-sqlite3');
+    // A journal exactly as the previous version wrote it: no fee_recorded_at.
+    const legacy = new Database(file);
+    legacy.exec(`
+      CREATE TABLE canary_tx (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, op TEXT NOT NULL,
+        deployment_id TEXT NOT NULL, chain_id INTEGER NOT NULL, to_address TEXT NOT NULL,
+        value_wei TEXT NOT NULL, calldata TEXT NOT NULL, token_name TEXT, token_symbol TEXT,
+        salt TEXT, pair_token TEXT, splitter_address TEXT, state TEXT NOT NULL,
+        tx_hash TEXT, token TEXT, problems TEXT NOT NULL DEFAULT '[]',
+        fee_recorded_wei TEXT, prepared_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO canary_tx (run_id, op, deployment_id, chain_id, to_address, value_wei,
+        calldata, state, fee_recorded_wei, prepared_at, updated_at)
+      VALUES ('old','token_launch','pons-v2-current-7ed',4663,'0xf','500000000000000',
+        '0xf35abbcf','confirmed','500000000000000','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z');
+    `);
+    legacy.close();
+
+    const j = new CanaryJournal(file, { allowEphemeral: true });
+    expect(j.byId(1)!.feeRecordedWei).toBe(500_000_000_000_000n);
+    // Unknown, and left unknown. Inventing a timestamp would place real money in a window
+    // it may not belong to.
+    expect(j.byId(1)!.feeRecordedAt).toBeNull();
+    j.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('counts a fee with no recorded time IN the window, which can only refuse', () => {
+    const { dir, file } = tmpJournal();
+    const Database = require('better-sqlite3');
+    const legacy = new Database(file);
+    legacy.exec(`
+      CREATE TABLE canary_tx (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, op TEXT NOT NULL,
+        deployment_id TEXT NOT NULL, chain_id INTEGER NOT NULL, to_address TEXT NOT NULL,
+        value_wei TEXT NOT NULL, calldata TEXT NOT NULL, token_name TEXT, token_symbol TEXT,
+        salt TEXT, pair_token TEXT, splitter_address TEXT, state TEXT NOT NULL,
+        tx_hash TEXT, token TEXT, problems TEXT NOT NULL DEFAULT '[]',
+        fee_recorded_wei TEXT, prepared_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO canary_tx (run_id, op, deployment_id, chain_id, to_address, value_wei,
+        calldata, state, fee_recorded_wei, prepared_at, updated_at)
+      VALUES ('old','token_launch','pons-v2-current-7ed',4663,'0xf','500000000000000',
+        '0xf35abbcf','confirmed','500000000000000','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z');
+    `);
+    legacy.close();
+
+    const j = new CanaryJournal(file, { allowEphemeral: true });
+    const cutoff = new Date(Date.now() - 24 * 3600_000).toISOString();
+    expect(j.recordedFeeTotalWei(cutoff)).toBe(500_000_000_000_000n);
+    j.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** The fee clock does not move when a later transition rewrites updated_at. */
+  it('does not move the fee out of its window when an incident is recovered later', () => {
+    const { dir, file } = tmpJournal();
+    const j = new CanaryJournal(file, { allowEphemeral: true });
+    const id = j.prepare(prepared());
+    j.bindHash(id, '0xabc');
+    j.recordReceipt(id, { status: 1 });
+    j.recordFee(id, 500_000_000_000_000n);
+    const at = j.byId(id)!.feeRecordedAt;
+
+    j.markIncidentAnyState(id, { problems: ['later'], token: null });
+    j.markConfirmedAnyState(id, { token: '0xtoken' });
+
+    // The only assertion that matters: two later transitions rewrote updated_at, and the
+    // fee clock did not move. A companion check that updated_at had CHANGED was removed —
+    // both timestamps are ISO milliseconds and the operations land in the same
+    // millisecond, so it failed on speed rather than on behaviour.
+    expect(j.byId(id)!.feeRecordedAt).toBe(at);
+    expect(j.byId(id)!.state).toBe('confirmed');
+    j.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

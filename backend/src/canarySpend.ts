@@ -108,3 +108,33 @@ export function parseBotSpentWei(detail: string): bigint | null {
   const padded = (frac + '0'.repeat(18)).slice(0, 18);
   return BigInt(whole) * 10n ** 18n + BigInt(padded);
 }
+
+/**
+ * Reads the bot's ROLLING 24-hour spend from its status report.
+ *
+ * Replaces a regex over a human-readable sentence. That string was produced from a UTC
+ * calendar-day total while `validator.ts` admits against `db.totalSpendLast24h()`, so the
+ * canary was checking a different budget from the one that actually refuses launches --
+ * and a sentence cannot say which window it means, so the mistake was invisible.
+ *
+ * Every refusal below returns null, never zero. An unreadable ledger must refuse; a zero
+ * would admit.
+ */
+export function readBotRollingSpend(report: unknown, expectedCapWei?: bigint): bigint | null {
+  const spend = (report as { spend?: Record<string, unknown> } | null)?.spend;
+  if (!spend || typeof spend !== 'object') return null;
+  // The window must be named, and named correctly. An unlabelled figure is exactly the
+  // thing that went wrong: right shape, wrong meaning.
+  if (spend.window !== 'rolling-24h') return null;
+
+  const raw = spend.rolling24hWei;
+  if (typeof raw !== 'string' || !/^[0-9]+$/.test(raw)) return null;
+
+  if (expectedCapWei !== undefined) {
+    const cap = spend.capWei;
+    // Disagreement about the cap means the two are not measuring one budget, and admitting
+    // against a ceiling nobody shares is worse than refusing.
+    if (typeof cap !== 'string' || !/^[0-9]+$/.test(cap) || BigInt(cap) !== expectedCapWei) return null;
+  }
+  return BigInt(raw);
+}

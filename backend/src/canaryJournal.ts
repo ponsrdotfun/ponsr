@@ -69,6 +69,8 @@ export interface CanaryRow extends PreparedCanary {
   token: string | null;
   problems: string[];
   feeRecordedWei: bigint | null;
+  /** Immutable. Written once with the fee; never moved by a later update. */
+  feeRecordedAt: string | null;
   preparedAt: string;
   updatedAt: string;
 }
@@ -138,11 +140,30 @@ export class CanaryJournal {
         token TEXT,
         problems TEXT NOT NULL DEFAULT '[]',
         fee_recorded_wei TEXT,
+        fee_recorded_at TEXT,
         prepared_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS canary_tx_run ON canary_tx(run_id, op);
     `);
+
+    /**
+     * Migration for journals created before the fee clock existed.
+     *
+     * CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so an
+     * operator's journal from an earlier run had no `fee_recorded_at` and every read of it
+     * failed with "no such column" -- which surfaced, correctly, as the canary refusing to
+     * start at all.
+     *
+     * Old rows keep NULL. That is honest: their fee was recorded at a time nothing wrote
+     * down, and inventing one would place real money in a window it may not belong to.
+     * `recordedFeeTotalWei` handles that explicitly rather than letting NULL silently drop
+     * out of a comparison.
+     */
+    const columns = (this.db.pragma('table_info(canary_tx)') as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.includes('fee_recorded_at')) {
+      this.db.exec('ALTER TABLE canary_tx ADD COLUMN fee_recorded_at TEXT');
+    }
   }
 
   private row(r: any): CanaryRow {
@@ -165,6 +186,7 @@ export class CanaryJournal {
       token: r.token ?? null,
       problems: JSON.parse(r.problems),
       feeRecordedWei: r.fee_recorded_wei === null ? null : BigInt(r.fee_recorded_wei),
+      feeRecordedAt: r.fee_recorded_at ?? null,
       preparedAt: r.prepared_at,
       updatedAt: r.updated_at,
     };
@@ -225,24 +247,82 @@ export class CanaryJournal {
       .run(txHash, new Date().toISOString(), id);
   }
 
-  /** Conditional on the current state, so a second recovery pass changes nothing. */
-  recordReceipt(id: number, receipt: { status: number }): void {
+  /**
+   * Records a receipt, and refuses to invent one.
+   *
+   * `status: null` means no receipt was obtained -- `sent.wait()` can return null, and an
+   * RPC can simply fail to answer. That is NOT a revert. The first version of this method
+   * took `{ status: number }` and the caller passed `receipt ? status : 0`, so a missing
+   * receipt became terminal `receipt_reverted`, which dropped the row out of
+   * `unresolved()`, which unblocked the next run -- reintroducing, one line below the
+   * journal call, the exact failure the journal exists to prevent.
+   *
+   * A launch may have landed while the RPC blinked. Absence of evidence is not evidence of
+   * absence, and this is the place that distinction has to be mechanical.
+   */
+  recordReceipt(id: number, receipt: { status: number | null }): void {
+    if (receipt.status === null) return; // still `broadcast`: hash held, still blocking.
     const next: CanaryState = receipt.status === 1 ? 'receipt_success' : 'receipt_reverted';
-    this.db
+    const info = this.db
       .prepare(
         `UPDATE canary_tx SET state = ?, updated_at = ?
          WHERE id = ? AND state IN ('prepared','broadcast')`
       )
       .run(next, new Date().toISOString(), id);
+    if (info.changes === 0) {
+      const row = this.byId(id);
+      // Terminal rows are legitimately unchanged on a repeat pass; anything else is a
+      // transition that silently did not happen, which used to continue as if it had.
+      if (!row || !['receipt_success', 'receipt_reverted', 'confirmed', 'confirmed_incident'].includes(row.state)) {
+        throw new Error(`recordReceipt(${id}) changed no row; state is ${row?.state ?? 'missing'}`);
+      }
+    }
   }
 
-  markConfirmed(id: number, r: { token: string | null }): void {
+  /** Records the reason a row is still open, so it survives the terminal it was printed on. */
+  recordProblems(id: number, problems: string[]): void {
+    this.db
+      .prepare('UPDATE canary_tx SET problems = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(problems), new Date().toISOString(), id);
+  }
+
+  /**
+   * Confirms from ANY non-terminal state.
+   *
+   * Recovery can arrive at a row sitting in prepared, broadcast, receipt_success or
+   * confirmed_incident. The narrower markConfirmed only accepted receipt_success, which is
+   * why a crash at any other point wedged the run permanently. Still conditional -- a row
+   * already terminal is left alone, so repeated passes change nothing.
+   */
+  markConfirmedAnyState(id: number, r: { token: string | null; splitterAddress?: string }): void {
     this.db
       .prepare(
-        `UPDATE canary_tx SET state = 'confirmed', token = ?, updated_at = ?
+        `UPDATE canary_tx SET state = 'confirmed', token = COALESCE(?, token),
+           splitter_address = COALESCE(?, splitter_address), problems = '[]', updated_at = ?
+         WHERE id = ? AND state NOT IN ('confirmed','receipt_reverted')`
+      )
+      .run(r.token, r.splitterAddress ?? null, new Date().toISOString(), id);
+  }
+
+  /** As above, for the landed-but-unreconciled outcome. */
+  markIncidentAnyState(id: number, r: { problems: string[]; token: string | null }): void {
+    this.db
+      .prepare(
+        `UPDATE canary_tx SET state = 'confirmed_incident', token = COALESCE(?, token),
+           problems = ?, updated_at = ?
+         WHERE id = ? AND state NOT IN ('confirmed','receipt_reverted')`
+      )
+      .run(r.token, JSON.stringify(r.problems), new Date().toISOString(), id);
+  }
+
+  markConfirmed(id: number, r: { token: string | null; splitterAddress?: string }): void {
+    this.db
+      .prepare(
+        `UPDATE canary_tx SET state = 'confirmed', token = ?,
+           splitter_address = COALESCE(?, splitter_address), updated_at = ?
          WHERE id = ? AND state = 'receipt_success'`
       )
-      .run(r.token, new Date().toISOString(), id);
+      .run(r.token, r.splitterAddress ?? null, new Date().toISOString(), id);
   }
 
   /**
@@ -278,9 +358,26 @@ export class CanaryJournal {
    * double-count. See canarySpend.ts for why the accounting matters.
    */
   recordFee(id: number, wei: bigint): boolean {
+    const row = this.byId(id);
+    if (!row) throw new Error(`recordFee(${id}): no such row`);
+    if (row.op !== 'token_launch') {
+      throw new Error(`recordFee(${id}): only a token_launch consumes the launch fee, not ${row.op}`);
+    }
+    // A landed launch spent the fee whether or not it reconciled. Anything else did not:
+    // an ambiguous receipt has not been shown to have landed, and a revert consumed gas.
+    if (!['receipt_success', 'confirmed', 'confirmed_incident'].includes(row.state)) {
+      throw new Error(`recordFee(${id}): state ${row.state} has not been shown to have landed`);
+    }
+    if (wei !== row.value) {
+      throw new Error(`recordFee(${id}): ${wei} does not match the journalled value ${row.value}`);
+    }
+    const now = new Date().toISOString();
     const info = this.db
-      .prepare(`UPDATE canary_tx SET fee_recorded_wei = ?, updated_at = ? WHERE id = ? AND fee_recorded_wei IS NULL`)
-      .run(wei.toString(), new Date().toISOString(), id);
+      .prepare(
+        `UPDATE canary_tx SET fee_recorded_wei = ?, fee_recorded_at = ?, updated_at = ?
+         WHERE id = ? AND fee_recorded_wei IS NULL`
+      )
+      .run(wei.toString(), now, now, id);
     return info.changes > 0;
   }
 
@@ -295,11 +392,28 @@ export class CanaryJournal {
     return r ? this.row(r) : null;
   }
 
-  /** Total fee already recorded by this journal, for the daily-cap arithmetic. */
+  /**
+   * Total fee recorded, filtered on the IMMUTABLE fee timestamp.
+   *
+   * It filtered on `updated_at`, which every later transition rewrites. Recovering a
+   * week-old incident therefore dragged its fee back into the current 24-hour window and
+   * could refuse launches the cap actually permits. Fails safe financially, but the
+   * accounting was not canonical, and an accounting clock that moves is not a clock.
+   */
   recordedFeeTotalWei(sinceIso?: string): bigint {
     const rows = (
       sinceIso
-        ? this.db.prepare('SELECT fee_recorded_wei FROM canary_tx WHERE fee_recorded_wei IS NOT NULL AND updated_at >= ?').all(sinceIso)
+        ? // NULL fee_recorded_at means a row written before the fee clock existed. Counted
+          // IN, deliberately: it overstates the window and can only refuse a launch the cap
+          // would allow. Excluding it would understate real spending, which is the direction
+          // that costs money.
+          this.db
+            .prepare(
+              `SELECT fee_recorded_wei FROM canary_tx
+               WHERE fee_recorded_wei IS NOT NULL
+                 AND (fee_recorded_at IS NULL OR fee_recorded_at >= ?)`
+            )
+            .all(sinceIso)
         : this.db.prepare('SELECT fee_recorded_wei FROM canary_tx WHERE fee_recorded_wei IS NOT NULL').all()
     ) as Array<{ fee_recorded_wei: string }>;
     return rows.reduce((acc, r) => acc + BigInt(r.fee_recorded_wei), 0n);

@@ -311,9 +311,18 @@ app.get('/status', async (_req, res) => {
           detail: r.reason ? `${r.reason}` : r.detail,
         };
       },
-      // The same window the circuit breaker counts, so the page cannot disagree
-      // with the thing actually refusing launches.
+      /**
+       * The UTC CALENDAR DAY, for the human-facing line only.
+       *
+       * This comment used to claim it was "the same window the circuit breaker counts".
+       * It is not: validator.ts admits against db.totalSpendLast24h(), a ROLLING window.
+       * The two agree for most of the day and diverge exactly when it is expensive --
+       * at 00:01 UTC this figure resets while the breaker still counts the previous day.
+       * A second spender reading this number could be told it had a full cap of headroom.
+       */
       spentTodayWei: () => db.totalSpendBetween(startOfUtcDay(), new Date().toISOString()),
+      /** The window that actually refuses launches, published as a typed field. */
+      rollingSpendLast24hWei: () => db.totalSpendLast24h(),
       dailyCapWei: config.DAILY_SPEND_CAP_WEI,
       launchesToday: () => db.countLaunchesBetween(startOfUtcDay(), new Date().toISOString()),
       coldAddressSet: !!config.TREASURY_COLD_ADDRESS,

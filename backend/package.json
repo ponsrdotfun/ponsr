@@ -17,7 +17,8 @@
     "signer:verify-policy": "tsx scripts/turnkey-verify-policy.ts",
     "signer:probe-creation": "tsx scripts/turnkey-probe-creation.ts",
     "verify:policy": "node -e \"console.error('renamed: this SIGNS. use npm run signer:verify-policy'); process.exit(1)\"",
-    "probe:creation": "node -e \"console.error('renamed: this SIGNS. use npm run signer:probe-creation'); process.exit(1)\""
+    "probe:creation": "node -e \"console.error('renamed: this SIGNS. use npm run signer:probe-creation'); process.exit(1)\"",
+    "recover:canary": "tsx scripts/recover-canary.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
