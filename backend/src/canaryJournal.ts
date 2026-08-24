@@ -115,6 +115,84 @@ export interface CanaryRow extends PreparedCanary {
  */
 const EPHEMERAL_PREFIXES = ['/app', '/tmp', '/var/tmp', '/run'];
 
+/**
+ * The journal holds raw signed transactions. Anyone who can read it can broadcast them.
+ *
+ * That is not a theoretical concern about a database of metadata: `raw_tx` is a complete,
+ * already-signed transaction. No key is needed to send it, from any machine. A journal
+ * created under the ordinary umask is mode 0644 -- world readable -- so every local account
+ * could spend the treasury's launch fee and create permanent artifacts in its name.
+ *
+ * SQLite in WAL mode writes two sidecars, `-wal` and `-shm`, and pages containing raw
+ * transactions live in the WAL before they are checkpointed. Securing only the main database
+ * would leave the newest rows -- the ones most likely to be unresolved and therefore most
+ * useful to an attacker -- readable beside it.
+ *
+ * Fails closed. If owner-only access cannot be established and verified, the journal refuses
+ * to open, because the alternative is writing broadcastable authority into a file this code
+ * has just discovered it cannot protect.
+ */
+function secureJournalFiles(dbPath: string): void {
+  const targets = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+
+  if (process.platform === 'win32') {
+    /**
+     * Windows does not implement POSIX mode bits; `fs.chmod` there only toggles the read-only
+     * flag, and `fs.stat().mode` reports a synthesised 0666 regardless of the real ACL. So a
+     * mode check on Windows is not evidence of anything, and pretending otherwise would be a
+     * green tick over an unenforced control.
+     *
+     * `icacls` is the real mechanism: inheritance is removed so the parent directory's ACEs
+     * cannot re-grant access, and exactly one grant is left for the current user.
+     */
+    const { execFileSync } = require('child_process') as typeof import('child_process');
+    const user = process.env.USERNAME
+      ? `${process.env.USERDOMAIN ?? ''}${process.env.USERDOMAIN ? '\\' : ''}${process.env.USERNAME}`
+      : null;
+    if (!user) {
+      throw new Error(
+        'cannot determine the current Windows user, so owner-only access to the canary ' +
+          'journal cannot be established. Refusing to store raw signed transactions.'
+      );
+    }
+    for (const t of targets) {
+      if (!fs.existsSync(t)) continue;
+      try {
+        execFileSync('icacls', [t, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'pipe' });
+      } catch (e) {
+        throw new Error(
+          `failed to restrict ${path.basename(t)} to the current user: ${(e as Error).message}. ` +
+            'The canary journal holds broadcast-ready transactions and will not be opened ' +
+            'without owner-only access.'
+        );
+      }
+      // Verified by reading the ACL back, not by trusting the call above to have worked.
+      const acl = execFileSync('icacls', [t], { encoding: 'utf8', stdio: 'pipe' });
+      const exposed = /\b(Everyone|BUILTIN\\Users|Users:|AUTHENTICATED USERS)\b/i.test(acl);
+      if (exposed) {
+        throw new Error(
+          `${path.basename(t)} is still readable beyond its owner after restriction. Refusing ` +
+            'to store raw signed transactions.'
+        );
+      }
+    }
+    return;
+  }
+
+  for (const t of targets) {
+    if (!fs.existsSync(t)) continue;
+    fs.chmodSync(t, 0o600);
+    const mode = fs.statSync(t).mode & 0o777;
+    if (mode & 0o077) {
+      throw new Error(
+        `${path.basename(t)} is mode ${mode.toString(8)} after being restricted to 0600. The ` +
+          'canary journal holds broadcast-ready transactions and will not be opened while it ' +
+          'is readable by anyone but its owner.'
+      );
+    }
+  }
+}
+
 export class CanaryJournal {
   private db: Database.Database;
 
@@ -146,8 +224,9 @@ export class CanaryJournal {
           'an absent journal reads as "nothing was attempted".'
       );
     }
-    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
     this.db = new Database(resolved);
+    secureJournalFiles(resolved);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.exec(`
@@ -366,6 +445,17 @@ export class CanaryJournal {
    * talking about, and every later reconciliation would be about a different object.
    */
   recordSigned(id: number, identity: SignedIdentity): void {
+    /**
+     * Re-secured at the moment broadcastable authority enters the file.
+     *
+     * SQLite creates `-wal` and `-shm` lazily, on first write, so the pass at open time can
+     * run before they exist. This is the one write that puts a complete signed transaction on
+     * disk, which makes it the right place to insist the sidecars are locked down too. It
+     * throws rather than proceeding: writing raw bytes into a world-readable WAL is the
+     * failure being prevented.
+     */
+    secureJournalFiles(path.resolve(this.file));
+
     const row = this.byId(id);
     if (!row) throw new Error(`canary row ${id} does not exist`);
     if (row.state !== 'prepared') {

@@ -417,10 +417,23 @@ describe('the canary threads one selected deployment', () => {
     expect(code).toMatch(/const selected = target\.deployment/);
   });
 
+  /**
+   * The dry-run path calls these through the `*Fn` bindings, which resolve to the real
+   * implementations unless bounded read-only substitutes were supplied for a dry run (and
+   * they are dropped entirely under --execute). The property being guarded is unchanged: the
+   * SELECTED deployment is what identity, readiness and fee are asked about, never a global.
+   */
   it('passes the selected deployment to identity, readiness and fee', () => {
-    expect(code).toMatch(/assertDeploymentIdentity\(\s*selected/);
-    expect(code).toMatch(/getLaunchReadiness\([\s\S]{0,200}selected/);
-    expect(code).toMatch(/getLiveFeeWei\(provider,\s*selected\)/);
+    expect(code).toMatch(/assertIdentityFn\(selected, provider\)/);
+    expect(code).toMatch(/readReadinessFn\([\s\S]{0,200}selected/);
+    expect(code).toMatch(/readFeeFn\(provider,\s*selected\)/);
+    // The executing path keeps the real identity check, by name.
+    expect(code).toMatch(/await assertDeploymentIdentity\(selected, provider\)/);
+  });
+
+  /** A substitute must never be reachable from a run that spends money. */
+  it('drops dry-run substitutes under --execute', () => {
+    expect(code).toMatch(/const sub: DryRunOverrides = EXECUTE \? \{\} : overrides;/);
   });
 
   it('scans pair approvals against the selected deployment', () => {

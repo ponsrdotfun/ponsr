@@ -33,6 +33,7 @@ const INTENT = {
   to: DEPLOYMENT.factory,
   data: '0xf35abbcf' + '22'.repeat(32),
   value: 500_000_000_000_000n,
+  ceilings: { maxValueWei: 2_000_000_000_000_000n, maxGasCostWei: 2_000_000_000_000_000n },
 };
 
 async function signedRow(journal: CanaryJournal, nonce = 3) {
