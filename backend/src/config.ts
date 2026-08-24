@@ -93,8 +93,12 @@ const ConfigSchema = z.object({
    * Defaults to off so the cost is opted into rather than discovered. Turning it on is
    * perfectly reasonable -- driving traffic to the board may well be worth $18.50 a month --
    * but it should be a decision someone made.
+   *
+   * Parsed like the acknowledgement gate, and for the same reason: under
+   * `z.coerce.boolean()` an operator writing `REPLY_INCLUDE_LINK=false` turned the expensive
+   * option ON. A default nobody can decline is not a default.
    */
-  REPLY_INCLUDE_LINK: z.coerce.boolean().default(false),
+  REPLY_INCLUDE_LINK: z.preprocess(parseAcknowledgement, z.boolean()),
   /** Base URL used when REPLY_INCLUDE_LINK is on. */
   SITE_BASE_URL: z.string().default('https://ponsr.fun'),
   BOT_X_HANDLE: z.string().default('ponsrdotfun'), // x.com/ponsrdotfun
@@ -193,8 +197,12 @@ const ConfigSchema = z.object({
   TREASURY_ADDRESS: z.string().optional(),
   /** Operator's acknowledgement that the signing policy exists. Production refuses to
    *  start without it, because an unpolicied Turnkey key is indistinguishable from a
-   *  correctly-policied one until it is abused. */
-  TURNKEY_POLICY_CONFIRMED: z.coerce.boolean().default(false),
+   *  correctly-policied one until it is abused.
+   *
+   *  Parsed by `parseAcknowledgement`, never by `z.coerce.boolean()` — see that function's
+   *  comment. An absent variable reaches the preprocessor as undefined and comes back false,
+   *  so the refusal is the default without needing a separate `.default()`. */
+  TURNKEY_POLICY_CONFIRMED: z.preprocess(parseAcknowledgement, z.boolean()),
 
   // -- Treasury signer (Part 5/10: Turnkey, scoped to launchToken() only) --
   TREASURY_SIGNER_PRIVATE_KEY: z.string().optional(), // testnet-only raw key; Turnkey in prod
@@ -232,7 +240,18 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
-export const config: Config = ConfigSchema.parse(process.env);
+/**
+ * The same parse the exported config uses, against an arbitrary environment.
+ *
+ * Exported so tests can assert what the SCHEMA produces rather than what a helper returns.
+ * The distinction is not academic: `TURNKEY_POLICY_CONFIRMED` once had a correct parser and a
+ * broken schema declaration, with a full green suite covering the parser nothing called.
+ */
+export function parseConfig(env: NodeJS.ProcessEnv): Config {
+  return ConfigSchema.parse(env);
+}
+
+export const config: Config = parseConfig(process.env);
 
 /** Throws with a clear, actionable message if a required-for-this-operation secret is
  * missing, instead of letting a downstream SDK throw an opaque error. */
