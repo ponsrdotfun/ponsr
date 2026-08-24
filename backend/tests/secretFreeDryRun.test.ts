@@ -55,6 +55,18 @@ const TEST_TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
 /** Set explicitly rather than left to default, so the envelope and the canary agree. */
 const STATUS_CAP_WEI = '10000000000000000'; // 0.01 ETH
 
+/** Journal directories created outside the OS temp tree, removed when the suite ends. */
+const journalDirs: string[] = [];
+afterAll(() => {
+  for (const d of journalDirs) {
+    try {
+      fs.rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* a leftover test directory is not worth failing a run over */
+    }
+  }
+});
+
 interface ProbeReport {
   opened: string[];
   loaded: string[];
@@ -180,6 +192,18 @@ async function runCanary(opts: {
   const probeOut = path.join(dir, 'probe.json');
 
   /**
+   * The journal cannot live under the OS temp directory on Linux.
+   *
+   * `os.tmpdir()` IS `/tmp` there, and the journal refuses ephemeral container storage on
+   * purpose -- a deploy would erase the record of transactions that are still on chain. That
+   * guard is correct and stays; the test was putting the file in the one place it forbids,
+   * which passed on Windows (whose temp path is not /tmp) and failed on CI. Somewhere durable
+   * under the home directory satisfies both.
+   */
+  const journalDir = fs.mkdtempSync(path.join(os.homedir(), '.ponsr-canary-test-'));
+  journalDirs.push(journalDir);
+
+  /**
    * The probe is preloaded through argv rather than NODE_OPTIONS.
    *
    * NODE_OPTIONS took the Windows path with escaped backslashes and the child failed before
@@ -218,7 +242,7 @@ async function runCanary(opts: {
       CHAIN_ID: '4663',
       PONS_FACTORY_VERSION: 'v2',
       TREASURY_ADDRESS: TEST_TREASURY,
-      CANARY_JOURNAL: path.join(dir, 'canary.sqlite'),
+      CANARY_JOURNAL: path.join(journalDir, 'canary.sqlite'),
       DAILY_SPEND_CAP_WEI: STATUS_CAP_WEI,
       /**
        * The permanent identity, explicit because mainnet refuses a default. A dry run that
