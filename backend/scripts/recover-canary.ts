@@ -84,6 +84,17 @@ async function main() {
     },
     readCode: (address) => provider.getCode(address),
     /**
+     * "Does the node have this transaction at all?" -- a different question from "is there a
+     * receipt", and the one that separates a pending transaction from one nobody has seen.
+     * Both are read-only; neither can put anything on chain.
+     */
+    readTransaction: async (txHash: string) => {
+      const t = await provider.getTransaction(txHash);
+      return t ? { hash: t.hash, blockNumber: t.blockNumber ?? null } : null;
+    },
+    /** Confirmed nonce count, to tell a free reserved nonce from one something else took. */
+    readNonce: (address: string) => provider.getTransactionCount(address, 'latest'),
+    /**
      * The splitter's own answer about where it sends money.
      *
      * This was missing, and the round-4 report claimed recovery supplied it. So the direct

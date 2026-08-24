@@ -56,14 +56,14 @@ function stubPreview(value: string | (() => never) = ECON, escrow?: string) {
 }
 
 describe('createLaunchTarget', () => {
-  const realVersion = config.PONS_FACTORY_VERSION;
+  const realVersion = process.env.PONS_FACTORY_VERSION;
   afterEach(() => {
-    (config as any).PONS_FACTORY_VERSION = realVersion;
+    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
     jest.restoreAllMocks();
   });
 
   describe('v1', () => {
-    beforeEach(() => { (config as any).PONS_FACTORY_VERSION = 'v1'; });
+    beforeEach(() => { process.env.PONS_FACTORY_VERSION = 'v1'; });
 
     it('builds a v1 call that decodes against the v1 ABI', async () => {
       const t = createLaunchTarget(fakeProvider);
@@ -105,7 +105,7 @@ describe('createLaunchTarget', () => {
   // reachable from createLaunchTarget, and a test asserting its address would now be
   // asserting that the bot still aims at a factory pons has replaced.
   describe('current v2', () => {
-    beforeEach(() => { (config as any).PONS_FACTORY_VERSION = 'v2'; });
+    beforeEach(() => { process.env.PONS_FACTORY_VERSION = 'v2'; });
 
     it('builds a stock-paired call that decodes against the current ABI', async () => {
       stubPreview();
@@ -187,14 +187,14 @@ describe('createLaunchTarget', () => {
     it('each version reads its own event shape', () => {
       const token = '0x4444444444444444444444444444444444444444';
 
-      (config as any).PONS_FACTORY_VERSION = 'v2';
+      process.env.PONS_FACTORY_VERSION = 'v2';
       const v2Log = new ethers.Interface(PONS_V2_FACTORY_ABI).encodeEventLog('TokenLaunched', [
         token, '0x2222222222222222222222222222222222222222', '0x3333333333333333333333333333333333333333',
         AAPL_ASSET.address, 0n, 1n,
       ]);
       expect(createLaunchTarget(fakeProvider).extractToken([{ topics: v2Log.topics, data: v2Log.data } as any])).toBe(token);
 
-      (config as any).PONS_FACTORY_VERSION = 'v1';
+      process.env.PONS_FACTORY_VERSION = 'v1';
       expect(createLaunchTarget(fakeProvider).extractToken([{ topics: v2Log.topics, data: v2Log.data } as any])).toBeNull();
     });
   });

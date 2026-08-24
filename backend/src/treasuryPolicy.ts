@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { config } from './config';
+import { preflightEnv } from './preflightEnv';
 
 /**
  * Part 5 mitigation #7 -- hot/cold treasury split.
@@ -59,12 +59,12 @@ export interface TreasuryPolicy {
 
 export function treasuryPolicyFromConfig(): TreasuryPolicy {
   return {
-    dailyCapWei: config.DAILY_SPEND_CAP_WEI,
-    maxDailyCaps: config.HOT_WALLET_MAX_DAILY_CAPS,
-    floorLaunches: config.HOT_WALLET_FLOOR_LAUNCHES,
-    targetLaunches: config.HOT_WALLET_TARGET_LAUNCHES,
-    criticalLaunches: config.HOT_WALLET_CRITICAL_LAUNCHES,
-    gasReserveWei: config.TREASURY_GAS_RESERVE_WEI,
+    dailyCapWei: preflightEnv().DAILY_SPEND_CAP_WEI,
+    maxDailyCaps: preflightEnv().HOT_WALLET_MAX_DAILY_CAPS,
+    floorLaunches: preflightEnv().HOT_WALLET_FLOOR_LAUNCHES,
+    targetLaunches: preflightEnv().HOT_WALLET_TARGET_LAUNCHES,
+    criticalLaunches: preflightEnv().HOT_WALLET_CRITICAL_LAUNCHES,
+    gasReserveWei: preflightEnv().TREASURY_GAS_RESERVE_WEI,
   };
 }
 

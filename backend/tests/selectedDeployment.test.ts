@@ -24,13 +24,13 @@ import { splitterEscrowFor } from '../src/splitterDeployer';
  * reads it from the target rather than from module state.
  */
 describe('every launch target names its own deployment', () => {
-  const realVersion = config.PONS_FACTORY_VERSION;
+  const realVersion = process.env.PONS_FACTORY_VERSION;
   afterEach(() => {
-    (config as any).PONS_FACTORY_VERSION = realVersion;
+    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
   });
 
   it('the current V2 target carries the executable deployment', () => {
-    (config as any).PONS_FACTORY_VERSION = 'v2';
+    process.env.PONS_FACTORY_VERSION = 'v2';
     const t = createLaunchTarget({} as ethers.Provider);
     expect(t.deployment.id).toBe(executableDeployment().id);
   });
@@ -44,21 +44,21 @@ describe('every launch target names its own deployment', () => {
    * the V2 factory before sending a V1 transaction.
    */
   it('the v1 target carries the v1 deployment, not the executable one', () => {
-    (config as any).PONS_FACTORY_VERSION = 'v1';
+    process.env.PONS_FACTORY_VERSION = 'v1';
     const t = createLaunchTarget({} as ethers.Provider);
     expect(t.deployment.id).toBe('pons-v1');
     expect(t.deployment.id).not.toBe(executableDeployment().id);
   });
 
   it('the v1 target addresses the v1 factory', () => {
-    (config as any).PONS_FACTORY_VERSION = 'v1';
+    process.env.PONS_FACTORY_VERSION = 'v1';
     const t = createLaunchTarget({} as ethers.Provider);
     expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
   });
 
   it('every target agrees with itself about which factory it addresses', () => {
     for (const version of ['v1', 'v2'] as const) {
-      (config as any).PONS_FACTORY_VERSION = version;
+      process.env.PONS_FACTORY_VERSION = version;
       const t: LaunchTarget = createLaunchTarget({} as ethers.Provider);
       expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
       expect(t.deployment.chainId).toBe(4663);
@@ -221,7 +221,7 @@ describe('handleMention verifies the SELECTED deployment', () => {
 /**
  * The splitter TYPE follows the deployment's fee model, not a global flag.
  *
- * `splitterArtifact()` chose FeeSplitterV2 when `config.PONS_FACTORY_VERSION === 'v2'`.
+ * `splitterArtifact()` chose FeeSplitterV2 when `process.env.PONS_FACTORY_VERSION === 'v2'`.
  * That is a different question from which deployment this launch is going to, and the
  * two can disagree: a v1 rollback with the flag still v2, or an injected v2 target while
  * the flag says v1.
@@ -233,18 +233,18 @@ describe('handleMention verifies the SELECTED deployment', () => {
  */
 describe('splitter type follows the deployment, not the flag', () => {
   const { splitterArtifactFor } = require('../src/splitterDeployer');
-  const realVersion = config.PONS_FACTORY_VERSION;
+  const realVersion = process.env.PONS_FACTORY_VERSION;
   afterEach(() => {
-    (config as any).PONS_FACTORY_VERSION = realVersion;
+    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
   });
 
   it('an escrow-credit deployment gets FeeSplitterV2 even when the flag says v1', () => {
-    (config as any).PONS_FACTORY_VERSION = 'v1';
+    process.env.PONS_FACTORY_VERSION = 'v1';
     expect(splitterArtifactFor(executableDeployment()).name).toBe('FeeSplitterV2');
   });
 
   it('a push-from-locker deployment gets FeeSplitter even when the flag says v2', () => {
-    (config as any).PONS_FACTORY_VERSION = 'v2';
+    process.env.PONS_FACTORY_VERSION = 'v2';
     expect(splitterArtifactFor(deploymentById('pons-v1')).name).toBe('FeeSplitter');
   });
 
@@ -428,7 +428,7 @@ describe('the canary threads one selected deployment', () => {
   });
 
   it('decides the v1/v2 branch from the deployment, not the global flag', () => {
-    // config.PONS_FACTORY_VERSION answers which factory is the default. The branch here
+    // process.env.PONS_FACTORY_VERSION answers which factory is the default. The branch here
     // must follow the deployment actually selected, which under rollback is not that.
     expect(code).toMatch(/const isV2 = selected\.tokenParamsVersion/);
   });

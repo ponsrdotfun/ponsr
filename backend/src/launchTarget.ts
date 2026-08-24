@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { config } from './config';
+import { preflightEnv } from './preflightEnv';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import {
   PONS_V2_CURRENT_ABI,
@@ -102,8 +102,8 @@ class V1Target implements LaunchTarget {
         description: req.description ?? '',
         socials: EMPTY_SOCIALS,
         feeWallet: req.splitterAddress,
-        launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
-        dexId: config.PONS_DEX_ID,
+        launchConfigId: preflightEnv().PONS_LAUNCH_CONFIG_ID,
+        dexId: preflightEnv().PONS_DEX_ID,
         salt: saltForTweet(req.tweetId),
       },
       launchFeeWei
@@ -171,7 +171,7 @@ class CurrentV2Target implements LaunchTarget {
     assertEscrowMatches(this.deployment, String(await factory.feeEscrow()));
 
     const expectedEconomics: string = await factory.previewLaunchEconomics(
-      req.launchConfigId ?? config.PONS_LAUNCH_CONFIG_ID,
+      req.launchConfigId ?? preflightEnv().PONS_LAUNCH_CONFIG_ID,
       req.pairAsset.address
     );
 
@@ -183,7 +183,7 @@ class CurrentV2Target implements LaunchTarget {
         description: req.description ?? '',
         socials: EMPTY_SOCIALS,
         feeWallet: req.splitterAddress,
-        launchConfigId: req.launchConfigId ?? config.PONS_LAUNCH_CONFIG_ID,
+        launchConfigId: req.launchConfigId ?? preflightEnv().PONS_LAUNCH_CONFIG_ID,
         pairToken: req.pairAsset.address,
         creatorTaxBps: 0,
         buybackEnabled: false,
@@ -204,6 +204,6 @@ export function createLaunchTarget(provider: ethers.Provider): LaunchTarget {
   // v1 stays selectable for rollback and for the suites that exercise it. Everything
   // else routes to whichever deployment the registry marks executable, so the target
   // cannot drift from the ABI the way a bare address setting allowed.
-  if (config.PONS_FACTORY_VERSION === 'v1') return new V1Target();
+  if (preflightEnv().PONS_FACTORY_VERSION === 'v1') return new V1Target();
   return new CurrentV2Target(provider);
 }

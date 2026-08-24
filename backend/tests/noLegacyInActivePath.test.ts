@@ -88,12 +88,12 @@ function recordingProvider(): { provider: ethers.Provider; contacted: string[] }
 }
 
 describe('the legacy factory never enters the active current-V2 path', () => {
-  const realVersion = config.PONS_FACTORY_VERSION;
+  const realVersion = process.env.PONS_FACTORY_VERSION;
   beforeEach(() => {
-    (config as any).PONS_FACTORY_VERSION = 'v2';
+    process.env.PONS_FACTORY_VERSION = 'v2';
   });
   afterEach(() => {
-    (config as any).PONS_FACTORY_VERSION = realVersion;
+    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
     jest.restoreAllMocks();
   });
 

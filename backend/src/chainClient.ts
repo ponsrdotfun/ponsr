@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { config } from './config';
+import { preflightEnv } from './preflightEnv';
 import { PONS_FACTORY_ABI } from './ponsEncoder';
 import { PONS_V2_FACTORY_ABI } from './ponsV2Encoder';
 import { PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
@@ -14,7 +14,7 @@ function executableAbi(): ethers.InterfaceAbi {
 }
 
 export function createProvider(): ethers.JsonRpcProvider {
-  return new ethers.JsonRpcProvider(config.RPC_URL, config.CHAIN_ID);
+  return new ethers.JsonRpcProvider(preflightEnv().RPC_URL, preflightEnv().CHAIN_ID);
 }
 
 /**
@@ -39,13 +39,13 @@ export function activeFactoryAddress(): string {
   //
   // The guard and the calldata have to name one contract. Two settings that can
   // disagree is the entire shape of what this migration was cleaning up.
-  return config.PONS_FACTORY_VERSION === 'v2'
+  return preflightEnv().PONS_FACTORY_VERSION === 'v2'
     ? executableDeployment().factory
-    : config.PONS_FACTORY_ADDRESS;
+    : preflightEnv().PONS_FACTORY_ADDRESS;
 }
 
 function factory(provider: ethers.Provider): ethers.Contract {
-  const v2 = config.PONS_FACTORY_VERSION === 'v2';
+  const v2 = preflightEnv().PONS_FACTORY_VERSION === 'v2';
   return new ethers.Contract(
     activeFactoryAddress(),
     // The current deployment's ABI, not the superseded one's. They differ, and the
@@ -134,7 +134,7 @@ export async function getLaunchReadiness(
   provider: ethers.Provider,
   launcherAddress: string,
   launchConfigId: bigint,
-  dexId: bigint = config.PONS_DEX_ID,
+  dexId: bigint = preflightEnv().PONS_DEX_ID,
   /** The deployment this launch is going to. Without it this reads whichever factory
    *  the global flag considers active, which can be a contract nobody is calling. */
   deployment?: PonsDeployment
@@ -153,7 +153,7 @@ export async function getLaunchReadiness(
   // if the global flag still says v2.
   const isV2 = deployment
     ? deployment.tokenParamsVersion !== 'v1'
-    : config.PONS_FACTORY_VERSION === 'v2';
+    : preflightEnv().PONS_FACTORY_VERSION === 'v2';
   const [enabled, whitelisted, count, dexCount] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,

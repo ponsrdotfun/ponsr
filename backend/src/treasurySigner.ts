@@ -29,7 +29,28 @@ import { config, requireConfig } from './config';
 export interface TreasurySigner {
   address(): Promise<string>;
   sendTransaction(tx: { to: string; data: string; value: bigint }): Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
+  /**
+   * Signs a fully-populated transaction WITHOUT broadcasting it.
+   *
+   * Separating signature from broadcast is what makes a transaction identifiable before it
+   * becomes irreversible: the canonical hash can be computed from the returned bytes, written
+   * down, and only then handed to a node. `sendTransaction` cannot offer that, because by the
+   * time it returns the irreversible half has already happened.
+   *
+   * Optional on the interface so the mock signers in tests need not implement it. Every path
+   * that requires it goes through `requirePreSigning`, which fails loudly rather than
+   * silently falling back to the combined call.
+   */
+  signTransaction?(tx: ethers.TransactionRequest): Promise<string>;
 }
+
+/**
+ * `requirePreSigning` deliberately does NOT live here.
+ *
+ * This module imports `./config`, which runs dotenv and parses every credential field at load.
+ * The canary's secret-free preflight needs the narrowing helper and must not pull that in, so
+ * it lives in `signedTxFlow.ts`, which imports no configuration at all. See preflightEnv.ts.
+ */
 
 /**
  * Turnkey-backed treasury signer. Implemented 2026-08-04.
@@ -98,6 +119,21 @@ export class TurnkeyTreasurySigner implements TreasurySigner {
   async sendTransaction(tx: { to: string; data: string; value: bigint }) {
     return this.signer.sendTransaction(tx);
   }
+
+  /**
+   * One Turnkey `ACTIVITY_TYPE_SIGN_TRANSACTION_V2`, which returns signed bytes and
+   * broadcasts nothing. Verified against the installed `@turnkey/ethers@1.3.32`: its
+   * `signTransaction` serialises and signs, and no code path in it reaches a provider's
+   * send.
+   *
+   * The policy engine still applies. Signing is exactly the moment Turnkey evaluates its
+   * rules, so a transaction the policy forbids is refused here rather than later — which is
+   * the correct order: nothing broadcastable should exist for a transaction the policy would
+   * not have allowed.
+   */
+  async signTransaction(tx: ethers.TransactionRequest): Promise<string> {
+    return this.signer.signTransaction(tx);
+  }
 }
 
 /**
@@ -148,6 +184,11 @@ export class RawKeyTreasurySigner implements TreasurySigner {
 
   async sendTransaction(tx: { to: string; data: string; value: bigint }) {
     return this.wallet.sendTransaction(tx);
+  }
+
+  /** ethers' own sign-without-send. Testnet only, like everything else on this class. */
+  async signTransaction(tx: ethers.TransactionRequest): Promise<string> {
+    return this.wallet.signTransaction(tx);
   }
 }
 

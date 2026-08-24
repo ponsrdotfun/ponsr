@@ -30,7 +30,7 @@
  * what to run afterwards.
  */
 import { ethers } from 'ethers';
-import { config, requireConfig } from '../src/config';
+import { preflightEnv } from '../src/preflightEnv';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness } from '../src/chainClient';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchDetails, saltForTweet } from '../src/ponsEncoder';
 import { createLaunchTarget } from '../src/launchTarget';
@@ -46,7 +46,7 @@ import { CanaryJournal } from '../src/canaryJournal';
 import { admitCanarySpend, readBotRollingSpend } from '../src/canarySpend';
 import { decideCanaryPhase } from '../src/canaryReporting';
 import { verifyDeployedSplitter } from '../src/splitterVerifier';
-import { RawKeyTreasurySigner, createTreasurySigner } from '../src/treasurySigner';
+import { signAndPersist, broadcastPersisted, requirePreSigning } from '../src/signedTxFlow';
 import { pinnedTreasuryAddress, assertSignerMatchesPin, assertRawKeyNotOnMainnet } from '../src/canarySignerBoundary';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -112,11 +112,11 @@ async function main() {
    *
    * The signer is built after the gate, and checked against this pin before it can spend.
    */
-  const treasury = pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string });
+  const treasury = pinnedTreasuryAddress(preflightEnv());
   assertRawKeyNotOnMainnet(network.chainId, process.env.RAW_KEY === '1');
 
   console.log('Chain');
-  line('rpc', config.RPC_URL);
+  line('rpc', preflightEnv().RPC_URL);
   line('chainId', `${network.chainId}${network.chainId === 4663n ? '  (Robinhood Chain MAINNET)' : ''}`);
   // From the registry, never from configuration. This is the script that would perform
   // the first real launch on the current factory, and `config.PONS_V2_FACTORY_ADDRESS`
@@ -191,8 +191,8 @@ async function main() {
   const readiness = await getLaunchReadiness(
     provider,
     treasury,
-    config.PONS_LAUNCH_CONFIG_ID,
-    config.PONS_DEX_ID,
+    preflightEnv().PONS_LAUNCH_CONFIG_ID,
+    preflightEnv().PONS_DEX_ID,
     selected
   );
   line('launchEnabled', readiness.launchEnabled);
@@ -228,11 +228,11 @@ async function main() {
     );
   }
 
-  if (fee > config.TREASURY_MAX_FEE_WEI) {
-    problems.push(`live fee ${formatEth(fee)} ETH exceeds TREASURY_MAX_FEE_WEI ${formatEth(config.TREASURY_MAX_FEE_WEI)} ETH`);
+  if (fee > preflightEnv().TREASURY_MAX_FEE_WEI) {
+    problems.push(`live fee ${formatEth(fee)} ETH exceeds TREASURY_MAX_FEE_WEI ${formatEth(preflightEnv().TREASURY_MAX_FEE_WEI)} ETH`);
   }
   // Splitter deployment + the launch itself are two transactions, both paying gas from here.
-  const needed = fee + config.TREASURY_GAS_RESERVE_WEI;
+  const needed = fee + preflightEnv().TREASURY_GAS_RESERVE_WEI;
   if (balance < needed) {
     problems.push(`balance ${formatEth(balance)} ETH is below the fee plus gas reserve (${formatEth(needed)} ETH)`);
   }
@@ -257,7 +257,7 @@ async function main() {
       // Typed field, window verified, AND bound to this runtime. The previous version
       // parsed a human-readable sentence built from a UTC calendar-day figure while the
       // breaker admits against a rolling 24 hours -- a different budget, read confidently.
-      botSpent = readBotRollingSpend(await res.json(), config.DAILY_SPEND_CAP_WEI, {
+      botSpent = readBotRollingSpend(await res.json(), preflightEnv().DAILY_SPEND_CAP_WEI, {
         chainId: selected.chainId,
         deploymentId: selected.id,
         factory: selected.factory,
@@ -308,9 +308,9 @@ async function main() {
     botSpentWei: botSpent,
     journalSpentWei: journalSpent,
     feeWei: fee,
-    capWei: config.DAILY_SPEND_CAP_WEI,
+    capWei: preflightEnv().DAILY_SPEND_CAP_WEI,
   });
-  line('daily cap', `${formatEth(config.DAILY_SPEND_CAP_WEI)} ETH`);
+  line('daily cap', `${formatEth(preflightEnv().DAILY_SPEND_CAP_WEI)} ETH`);
   line('bot accounted spend', botSpent === null ? 'UNREADABLE' : `${formatEth(botSpent)} ETH  [${botSpentSource}]`);
   line('canary journal spend', `${formatEth(journalSpent)} ETH`);
   line(
@@ -335,8 +335,8 @@ async function main() {
   line('name', TOKEN_NAME);
   line('symbol', TOKEN_SYMBOL);
   line('creator', `${treasury}   <- the treasury itself, so no user funds are at risk`);
-  line('launchConfigId', config.PONS_LAUNCH_CONFIG_ID);
-  line('dexId', config.PONS_DEX_ID);
+  line('launchConfigId', preflightEnv().PONS_LAUNCH_CONFIG_ID);
+  line('dexId', preflightEnv().PONS_DEX_ID);
   line('salt', salt);
   line('value', `${formatEth(fee)} ETH   <- exactly the fee, so the factory performs no dev buy`);
   console.log();
@@ -389,10 +389,40 @@ async function main() {
    * Only now, past the gate, does a credential enter the process -- and the first thing
    * asked of it is whether it is the account every preflight reading above was about.
    */
+  /**
+   * The credential modules are loaded HERE, dynamically, and nowhere above.
+   *
+   * A static `import { config }` or `import { createTreasurySigner }` at the top of this file
+   * runs `dotenv.config()` at module load and parses every credential-bearing field --
+   * including the Turnkey API private key and the raw treasury key -- before a single line of
+   * the dry run executes. The dry run needed none of them, and the completion reports called
+   * it keyless while it was reading all of them off disk.
+   *
+   * `await import(...)` moves that to the far side of the EXECUTE gate. Everything above this
+   * line runs without the mixed `.env` ever being opened, which is the only version of
+   * "keyless" that survives inspection: discarding the values after reading them still reads
+   * them.
+   */
+  const { requireConfig } = await import('../src/config');
+  const { RawKeyTreasurySigner, createTreasurySigner } = await import('../src/treasurySigner');
+
   const signer = process.env.RAW_KEY === '1'
     ? new RawKeyTreasurySigner(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider)
     : createTreasurySigner(provider);
   assertSignerMatchesPin(await signer.address(), treasury);
+
+  /**
+   * The two halves of an irreversible send, held apart deliberately.
+   *
+   * `preSigner` can produce signed bytes and cannot broadcast; `broadcaster` can broadcast
+   * and cannot sign. Neither irreversible operation below goes through a call that does both,
+   * because a combined call cannot tell anybody what it sent if it dies while sending.
+   *
+   * `requirePreSigning` refuses rather than falling back: a signer without a sign-only path
+   * stops the canary here, at a point where nothing has been spent.
+   */
+  const preSigner = requirePreSigning(signer);
+  const broadcaster = provider;
 
   // The provider is not optional here in spirit: without it `deploySplitter` skips its
   // own identity check, and the splitter is the first artifact that cannot be undone.
@@ -435,7 +465,7 @@ ABORTING: the status endpoint returned HTTP ${fresh.status} immediately before t
       journal.close();
       process.exit(1);
     }
-    const nowSpent = readBotRollingSpend(await fresh.json(), config.DAILY_SPEND_CAP_WEI, {
+    const nowSpent = readBotRollingSpend(await fresh.json(), preflightEnv().DAILY_SPEND_CAP_WEI, {
       chainId: selected.chainId,
       deploymentId: selected.id,
       factory: selected.factory,
@@ -447,7 +477,7 @@ ABORTING: the status endpoint returned HTTP ${fresh.status} immediately before t
       botSpentWei: nowSpent,
       journalSpentWei: journal.recordedFeeTotalWei(new Date(Date.now() - 24 * 3600_000).toISOString()),
       feeWei: fee,
-      capWei: config.DAILY_SPEND_CAP_WEI,
+      capWei: preflightEnv().DAILY_SPEND_CAP_WEI,
     });
     if (!recheck.admitted) {
       console.error(`
@@ -483,7 +513,22 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
           calldata: initcode,
         });
       },
-      onSent: (hash) => journal.bindHash(splitterRowId, hash),
+      /**
+       * Sign, persist the identity, then broadcast the exact bytes.
+       *
+       * This replaced an `onSent` that bound the hash AFTER `sendTransaction` returned. The
+       * splitter creation is irreversible and pays real gas, so it gets the same treatment as
+       * the launch: nothing is broadcast until the transaction can be named.
+       */
+      sendVia: async (initcode) => {
+        await signAndPersist({ signer: preSigner, broadcaster }, journal, splitterRowId, {
+          chainId: selected.chainId,
+          to: null, // a true contract creation, not a call to a placeholder
+          data: initcode,
+          value: 0n,
+        });
+        return broadcastPersisted({ broadcaster }, journal, splitterRowId);
+      },
       // status null stays `broadcast`: a receipt nobody saw is not a revert.
       /**
        * Records the receipt and NOTHING more.
@@ -614,12 +659,12 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
   }
 
   /**
-   * Intent first, then the send.
+   * Intent, then signature identity, then the broadcast.
    *
-   * The row exists before the signer can broadcast, so a crash between these two lines
-   * still leaves a record naming exactly what was about to happen. The hash is bound the
-   * instant `sendTransaction` returns -- before the receipt is awaited, which is the window
-   * that used to be invisible.
+   * The row exists before anything can be signed, and the exact signed bytes plus their
+   * canonical hash exist before anything can be broadcast. A crash at any point leaves a row
+   * that names either what was about to happen or precisely which transaction is out there --
+   * never the old middle state of "something may have been sent, and nothing knows what".
    */
   const launchRowId = journal.prepare({
     runId: RUN_ID,
@@ -636,9 +681,15 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
     splitterAddress,
   });
 
-  const sent = await signer.sendTransaction({ to, data, value });
-  journal.bindHash(launchRowId, sent.hash);
-  line('tx', sent.hash);
+  const signedLaunch = await signAndPersist(
+    { signer: preSigner, broadcaster },
+    journal,
+    launchRowId,
+    { chainId: selected.chainId, to, data, value }
+  );
+  // The hash is already durable at this point; printing it is a courtesy, not the record.
+  line('tx', signedLaunch.hash);
+  const sent = await broadcastPersisted({ broadcaster }, journal, launchRowId);
   const receipt = await sent.wait();
   /**
    * null, not 0.

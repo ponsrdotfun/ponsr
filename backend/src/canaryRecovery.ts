@@ -48,7 +48,73 @@ export interface CanaryRecoveryDeps {
     address: string,
     deployment: PonsDeployment
   ) => Promise<{ creator: string; treasury: string; token: string; escrow?: string } | null>;
+  /**
+   * Is this exact transaction visible to the node, mined or pending?
+   *
+   * Distinct from `readReceipt`, and the distinction is the whole point for a signed row: no
+   * receipt means "not mined yet, or the node cannot say"; no TRANSACTION means the node has
+   * never seen these bytes at all. The first is ambiguous, the second is a different and more
+   * answerable state -- signed, never observed.
+   */
+  readTransaction?: (txHash: string) => Promise<{ hash: string; blockNumber: number | null } | null>;
+  /** Confirmed transaction count for an address: how many of its nonces are spent. */
+  readNonce?: (address: string) => Promise<number>;
   treasuryAddress: string;
+}
+
+/**
+ * Holds the persisted bytes to the persisted intent, without asking anybody.
+ *
+ * Entirely local: it decodes `raw_tx` and checks that the transaction it describes is the one
+ * the journal says was signed. A mismatch here is not a chain problem to be retried, it is a
+ * corrupt or substituted record, and the row must never be advanced or resumed on the strength
+ * of it.
+ */
+export function signedIdentityProblems(row: CanaryRow): string[] {
+  if (!row.rawTx) return [];
+  const problems: string[] = [];
+  let decoded: ethers.Transaction;
+  try {
+    decoded = ethers.Transaction.from(row.rawTx);
+  } catch (e) {
+    return [`the stored signed transaction does not decode: ${(e as Error).message}`];
+  }
+  if (!decoded.signature) problems.push('the stored transaction carries no signature');
+  if (decoded.hash?.toLowerCase() !== (row.txHash ?? '').toLowerCase()) {
+    problems.push(
+      `the stored bytes hash to ${decoded.hash} but the journal records ${row.txHash}`
+    );
+  }
+  const intendedTo = row.to === '' ? null : row.to;
+  const decodedTo = decoded.to;
+  const sameTo =
+    (intendedTo === null && decodedTo === null) ||
+    (intendedTo !== null && decodedTo !== null && intendedTo.toLowerCase() === decodedTo.toLowerCase());
+  if (!sameTo) {
+    problems.push(`signed destination ${decodedTo ?? '(creation)'} != journalled ${intendedTo ?? '(creation)'}`);
+  }
+  if (decoded.value !== row.value) problems.push(`signed value ${decoded.value} != journalled ${row.value}`);
+  if ((decoded.data ?? '0x').toLowerCase() !== row.calldata.toLowerCase()) {
+    problems.push('signed calldata differs from the journalled calldata');
+  }
+  if (row.nonce !== null && decoded.nonce !== row.nonce) {
+    problems.push(`signed nonce ${decoded.nonce} != journalled ${row.nonce}`);
+  }
+  if (Number(decoded.chainId) !== row.chainId) {
+    problems.push(`signed chainId ${decoded.chainId} != journalled ${row.chainId}`);
+  }
+  if (row.sender) {
+    let recovered = '';
+    try {
+      recovered = ethers.getAddress(decoded.from!);
+    } catch {
+      /* left empty: reported below */
+    }
+    if (recovered.toLowerCase() !== row.sender.toLowerCase()) {
+      problems.push(`signed by ${recovered || '(unrecoverable)'} != journalled sender ${row.sender}`);
+    }
+  }
+  return problems;
 }
 
 export interface CanaryRecoveryResult {
@@ -79,6 +145,22 @@ export async function recoverCanary(
     const problems: string[] = [];
     const selected = deps.resolveDeployment(row.deploymentId);
 
+    /**
+     * Corrupt identity is terminal-ish, and checked before anything else.
+     *
+     * If the stored bytes do not describe the stored transaction, every later question --
+     * "did this land?", "is the nonce spent?" -- is being asked about an object the journal
+     * cannot correctly name. Recorded as a durable incident rather than left open, because no
+     * amount of re-reading the chain will repair a record that disagrees with itself.
+     */
+    const identityProblems = selected ? signedIdentityProblems(row) : [];
+    if (identityProblems.length > 0) {
+      const all = ['stored signature identity is inconsistent', ...identityProblems];
+      journal.markIncidentAnyState(row.id, { problems: all, token: null });
+      results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: all });
+      continue;
+    }
+
     if (!selected) {
       problems.push(`unknown recorded deployment ${row.deploymentId}`);
     } else if (!row.txHash) {
@@ -104,11 +186,77 @@ export async function recoverCanary(
       }
 
       if (!receipt || receipt.status === null) {
+        /**
+         * No receipt. For a SIGNED row the chain can still narrow this considerably.
+         *
+         * Three distinguishable states hide behind "no receipt", and conflating them is how a
+         * transaction gets sent twice:
+         *
+         *   the node has the transaction         -> pending; wait, do not resend
+         *   the node has never seen it, nonce free -> SIGNED / NOT OBSERVED
+         *   the node has never seen it, nonce spent by something else -> INCIDENT
+         *
+         * None of the three is "safe to sign a replacement", which is the only conclusion
+         * that could cost a second permanent artifact.
+         */
+        let narrowed = false;
+        if (row.rawTx && row.sender && row.nonce !== null && deps.readTransaction) {
+          let seen: { hash: string; blockNumber: number | null } | null = null;
+          let lookupFailed = false;
+          try {
+            seen = await deps.readTransaction(row.txHash);
+          } catch (err) {
+            lookupFailed = true;
+            problems.push(`transaction lookup failed: ${(err as Error)?.message ?? err}`);
+          }
+
+          if (!lookupFailed && seen) {
+            narrowed = true;
+            problems.push(
+              'the exact signed transaction is known to the node but has no receipt yet: it is ' +
+                'pending. Wait for it. Do not resend and do not re-sign.'
+            );
+          } else if (!lookupFailed && !seen) {
+            let spent: number | null = null;
+            if (deps.readNonce) {
+              try {
+                spent = await deps.readNonce(row.sender);
+              } catch (err) {
+                problems.push(`nonce lookup failed: ${(err as Error)?.message ?? err}`);
+              }
+            }
+            if (spent !== null && spent > row.nonce) {
+              narrowed = true;
+              const all = [
+                'INCIDENT: nonce ' +
+                  row.nonce +
+                  ' for this sender is already spent, but not by this transaction. Something ' +
+                  'else occupies it, so these signed bytes can never land. Do not re-sign: ' +
+                  'establish what did land at that nonce first.',
+              ];
+              journal.markIncidentAnyState(row.id, { problems: all, token: null });
+              results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: all });
+              continue;
+            }
+            if (spent !== null) {
+              narrowed = true;
+              problems.push(
+                'SIGNED / NOT OBSERVED: the node has never seen this transaction and its nonce ' +
+                  'is still free. It is NOT reverted, and it is NOT safe to sign a replacement ' +
+                  '-- the bytes are already signed and could still be broadcast by anyone ' +
+                  'holding them. Rebroadcast the stored raw transaction under explicit ' +
+                  'authorisation, or wait.'
+              );
+            }
+          }
+        }
         // Unfetchable is not reverted. The row stays exactly where it is, hash intact.
-        problems.push(
-          'the receipt could not be read, so this stays ambiguous. The transaction may have ' +
-            'landed. Retry the lookup rather than the transaction.'
-        );
+        if (!narrowed) {
+          problems.push(
+            'the receipt could not be read, so this stays ambiguous. The transaction may have ' +
+              'landed. Retry the lookup rather than the transaction.'
+          );
+        }
       } else if (receipt.status !== 1) {
         journal.recordReceipt(row.id, { status: 0 });
         results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: ['reverted on chain'] });

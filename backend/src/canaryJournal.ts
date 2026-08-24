@@ -37,6 +37,15 @@ export type CanaryOp = 'splitter_deploy' | 'token_launch';
 
 export type CanaryState =
   | 'prepared'
+  /**
+   * Signed, not yet known to be broadcast.
+   *
+   * The state that closes the crash window. `prepared` says an intent existed; `signed` says
+   * a specific transaction exists, by canonical hash, with its exact bytes on disk. A process
+   * that dies between here and `broadcast` is recoverable by asking the chain about a hash
+   * this journal already holds, rather than by searching an explorer and guessing.
+   */
+  | 'signed'
   | 'broadcast'
   | 'receipt_success'
   | 'receipt_reverted'
@@ -62,10 +71,31 @@ export interface PreparedCanary {
   splitterAddress?: string;
 }
 
+/**
+ * The identity of one specific signed transaction.
+ *
+ * Every field is derived from the signed bytes themselves, never from a provider's account of
+ * them. `rawTx` is broadcast-ready authority: anyone holding it can put this transaction on
+ * chain. It belongs in the operator's journal and nowhere else -- not in logs, reports,
+ * Telegram messages or completion reports.
+ */
+export interface SignedIdentity {
+  sender: string;
+  nonce: number;
+  chainId: number;
+  txHash: string;
+  rawTx: string;
+}
+
 export interface CanaryRow extends PreparedCanary {
   id: number;
   state: CanaryState;
   txHash: string | null;
+  sender: string | null;
+  nonce: number | null;
+  /** Broadcast-ready authority. Never log, print or transmit this. */
+  rawTx: string | null;
+  signedAt: string | null;
   token: string | null;
   problems: string[];
   feeRecordedWei: bigint | null;
@@ -179,6 +209,40 @@ export class CanaryJournal {
     if (!columns.includes('fee_recorded_at')) {
       this.db.exec('ALTER TABLE canary_tx ADD COLUMN fee_recorded_at TEXT');
     }
+
+    /**
+     * Migration for journals written before signature identity existed.
+     *
+     * Backward compatible by construction: old rows get NULL in all four columns, which reads
+     * as "this row was never signed through the identity path". They cannot be resumed by
+     * hash because they never had one -- that is a true statement about them, and the
+     * recovery path says so rather than inventing an identity for a transaction whose bytes
+     * nobody kept.
+     */
+    for (const [name, type] of [
+      ['sender', 'TEXT'],
+      ['nonce', 'INTEGER'],
+      ['raw_tx', 'TEXT'],
+      ['signed_at', 'TEXT'],
+    ] as const) {
+      if (!columns.includes(name)) {
+        this.db.exec(`ALTER TABLE canary_tx ADD COLUMN ${name} ${type}`);
+      }
+    }
+
+    /**
+     * At most one row per (sender, nonce) that is not settled.
+     *
+     * A reserved nonce is a scarce, exclusive resource: two signed transactions sharing one
+     * nonce means at most one can ever land, and the journal would be describing a race it
+     * cannot see the end of. The partial index makes the second signature impossible to
+     * record rather than merely discouraged.
+     */
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS canary_tx_one_nonce
+        ON canary_tx(sender, nonce)
+        WHERE sender IS NOT NULL AND state NOT IN ('confirmed','receipt_reverted');
+    `);
   }
 
   private row(r: any): CanaryRow {
@@ -198,6 +262,10 @@ export class CanaryJournal {
       splitterAddress: r.splitter_address ?? undefined,
       state: r.state as CanaryState,
       txHash: r.tx_hash ?? null,
+      sender: r.sender ?? null,
+      nonce: r.nonce === null || r.nonce === undefined ? null : Number(r.nonce),
+      rawTx: r.raw_tx ?? null,
+      signedAt: r.signed_at ?? null,
       token: r.token ?? null,
       problems: JSON.parse(r.problems),
       feeRecordedWei: r.fee_recorded_wei === null ? null : BigInt(r.fee_recorded_wei),
@@ -265,14 +333,103 @@ export class CanaryJournal {
     return Number(info.lastInsertRowid);
   }
 
-  /** Bound the instant `sendTransaction` returns, before the receipt is awaited. */
-  bindHash(id: number, txHash: string): void {
+  /**
+   * The pre-2B transition: straight from `prepared` to `broadcast`, hash supplied afterwards.
+   *
+   * LEGACY. It models journals written before signature identity existed, and exists so the
+   * migration and back-compatibility paths can be tested against rows that genuinely lack a
+   * sender, nonce and raw transaction. It must never be used by an executable canary path:
+   * a row that reaches `broadcast` this way has no bytes to rebroadcast and no nonce to
+   * reconcile, which is exactly the hole `recordSigned` closes.
+   *
+   * `tests/canaryScriptAuthority.test.ts` asserts no script calls it.
+   */
+  bindHashLegacy(id: number, txHash: string): void {
     this.db
       .prepare(
         `UPDATE canary_tx SET tx_hash = ?, state = 'broadcast', updated_at = ?
          WHERE id = ? AND state = 'prepared'`
       )
       .run(txHash, new Date().toISOString(), id);
+  }
+
+  /**
+   * Persists the identity of a signed transaction, BEFORE any broadcast is reachable.
+   *
+   * This is the write that closes 2B. Everything it stores is derived from the signed bytes
+   * by the caller -- the hash is recomputed locally from `rawTx`, never accepted from a
+   * provider -- so after this returns, the exact transaction is identifiable whatever happens
+   * next: mid-broadcast crash, timeout, disconnect, or a machine that never comes back.
+   *
+   * Immutable once written. A second call for the same row throws rather than overwriting,
+   * because a changed hash or nonce would silently redefine which transaction the journal is
+   * talking about, and every later reconciliation would be about a different object.
+   */
+  recordSigned(id: number, identity: SignedIdentity): void {
+    const row = this.byId(id);
+    if (!row) throw new Error(`canary row ${id} does not exist`);
+    if (row.state !== 'prepared') {
+      throw new Error(
+        `canary row ${id} is ${row.state}, not prepared -- refusing to sign over an existing ` +
+          'signature identity. A row is signed exactly once.'
+      );
+    }
+    if (identity.chainId !== row.chainId) {
+      throw new Error(
+        `signed chainId ${identity.chainId} does not match journalled ${row.chainId} for row ${id}`
+      );
+    }
+    const info = this.db
+      .prepare(
+        `UPDATE canary_tx
+           SET state = 'signed', tx_hash = ?, sender = ?, nonce = ?, raw_tx = ?, signed_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'prepared' AND tx_hash IS NULL`
+      )
+      .run(
+        identity.txHash,
+        identity.sender,
+        identity.nonce,
+        identity.rawTx,
+        new Date().toISOString(),
+        new Date().toISOString(),
+        id
+      );
+    if (info.changes === 0) {
+      throw new Error(`canary row ${id} could not be moved to signed -- it already carries an identity`);
+    }
+  }
+
+  /**
+   * Has this sender already signed something at this nonce, in ANY state?
+   *
+   * Deliberately not limited to live rows. A nonce consumed by a transaction that already
+   * landed is gone forever: signing a second transaction at it produces bytes that can never
+   * be mined, and the operator would be left waiting on a hash with no future. The partial
+   * unique index cannot express this, because it excludes settled rows on purpose -- so the
+   * check lives here, where "spent" and "live" can both be seen.
+   */
+  nonceAlreadyUsed(sender: string, nonce: number): CanaryRow | null {
+    const r = this.db
+      .prepare('SELECT * FROM canary_tx WHERE lower(sender) = lower(?) AND nonce = ?')
+      .get(sender, nonce) as any;
+    return r ? this.row(r) : null;
+  }
+
+  /**
+   * Marks that the exact persisted bytes were handed to a broadcaster.
+   *
+   * Carries no hash argument on purpose. The hash was fixed at signing; accepting one here
+   * would let a provider's answer redefine the row, which is the failure `recordSigned`
+   * exists to prevent. Broadcasting is a fact ABOUT an already-identified transaction, not
+   * the moment it acquires an identity.
+   */
+  markBroadcast(id: number): void {
+    this.db
+      .prepare(
+        `UPDATE canary_tx SET state = 'broadcast', updated_at = ?
+         WHERE id = ? AND state = 'signed'`
+      )
+      .run(new Date().toISOString(), id);
   }
 
   /**
@@ -294,7 +451,7 @@ export class CanaryJournal {
     const info = this.db
       .prepare(
         `UPDATE canary_tx SET state = ?, updated_at = ?
-         WHERE id = ? AND state IN ('prepared','broadcast')`
+         WHERE id = ? AND state IN ('prepared','signed','broadcast')`
       )
       .run(next, new Date().toISOString(), id);
     if (info.changes === 0) {

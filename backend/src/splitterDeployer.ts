@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import feeSplitterArtifact from './feeSplitterArtifact.json';
-import { TreasurySigner } from './treasurySigner';
-import { config } from './config';
+import type { TreasurySigner } from './treasurySigner';
 import { PonsDeployment, executableDeployment } from './deployments';
 import { assertDeploymentIdentity } from './deploymentIdentity';
 
@@ -168,6 +167,18 @@ export async function deploySplitter(
     onPlanned?: (initcode: string) => void | Promise<void>;
     /** The hash, the instant send returns and before the receipt is awaited. */
     onSent?: (txHash: string) => void | Promise<void>;
+    /**
+     * Replaces the internal `sendTransaction` with a caller-supplied lifecycle.
+     *
+     * The canary supplies sign -> persist identity -> broadcast, so the transaction is
+     * identifiable by canonical hash before any broadcast is reachable. Production supplies
+     * nothing and keeps the previous single-call behaviour.
+     *
+     * It takes the initcode rather than a full request because a splitter deployment is a
+     * contract creation: there is no destination, and inventing one to fit a uniform shape is
+     * how a creation quietly becomes a call to an address.
+     */
+    sendVia?: (initcode: string) => Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
     /** `status: null` means no receipt was seen — which is not a revert. */
     onReceipt?: (r: { status: number | null; contractAddress: string | null }) => void | Promise<void>;
   }
@@ -226,13 +237,21 @@ export async function deploySplitter(
    */
   await hooks?.onPlanned?.(deployTx.data as string);
 
-  const sent = await signer.sendTransaction({
-    to: '',
-    data: deployTx.data as string,
-    value: 0n,
-  });
+  /**
+   * The window nothing could see, now closed by whoever owns the lifecycle.
+   *
+   * With `sendVia`, the identity is durable before this line returns and `onSent` has nothing
+   * left to rescue -- the hash was written down before the bytes went out, not after. Without
+   * it, behaviour is exactly as before: send, then record the hash, with the gap in between.
+   */
+  const sent = hooks?.sendVia
+    ? await hooks.sendVia(deployTx.data as string)
+    : await signer.sendTransaction({
+        to: '',
+        data: deployTx.data as string,
+        value: 0n,
+      });
 
-  // Before the receipt is awaited. That gap is the window nothing could see.
   await hooks?.onSent?.(sent.hash);
 
   const receipt = await sent.wait();
