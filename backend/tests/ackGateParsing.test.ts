@@ -17,6 +17,11 @@ import { parseAcknowledgement } from '../src/config';
  * The failure direction is what makes it material rather than cosmetic. A parser that turns
  * a refusal into a confirmation gives its most confident answer precisely when somebody was
  * trying to say no.
+ *
+ * These are unit cases and they are NOT the proof. This whole suite passed for a full review
+ * round while `ConfigSchema` still declared `z.coerce.boolean()`, so every assertion here was
+ * green about a function no configuration path called. The evidence that the shipped gate
+ * behaves this way lives in tests/ackGateSchema.test.ts, which parses the schema itself.
  */
 
 describe('the acknowledgement gate reads what was written', () => {
