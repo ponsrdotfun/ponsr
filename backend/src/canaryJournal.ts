@@ -147,6 +147,42 @@ export interface WindowsAce {
   /** SID or well-known abbreviation the ACE applies to. */
   trustee: string;
   inherited: boolean;
+  /** `Allow` or `Deny`. A trustee alone says nothing about which. */
+  accessControlType: string;
+  /** FileSystemRights as a number, or null when the entry cannot be read as one. */
+  rights: number | null;
+}
+
+/**
+ * `FileSystemRights.FullControl`, measured rather than assumed.
+ *
+ * Read back from a real file on this platform after the replacement DACL was applied:
+ * `[int]$rule.FileSystemRights` is 2032127, which is what SDDL's `FA` resolves to. Bound as a
+ * constant so an entry granting anything less -- or anything different -- is refused rather
+ * than being read as "close enough".
+ */
+export const WINDOWS_FULL_CONTROL = 2032127;
+
+/**
+ * SDDL rights tokens this code is willing to interpret.
+ *
+ * Deliberately short. A token that is not here yields `null`, which the verifier treats as
+ * unknown and refuses: guessing at an unfamiliar rights mask is exactly how a partial grant
+ * would be accepted as a full one.
+ */
+const SDDL_RIGHTS: Record<string, number> = {
+  FA: 0x1f01ff, // FILE_ALL_ACCESS -- 2032127
+  FR: 0x120089,
+  FW: 0x120116,
+  FX: 0x1200a0,
+};
+
+function sddlRightsToNumber(token: string): number | null {
+  const t = token.trim().toUpperCase();
+  if (t in SDDL_RIGHTS) return SDDL_RIGHTS[t];
+  if (/^0X[0-9A-F]+$/.test(t)) return Number.parseInt(t.slice(2), 16);
+  if (/^\d+$/.test(t)) return Number.parseInt(t, 10);
+  return null;
 }
 
 /**
@@ -165,11 +201,16 @@ export function parseDaclAces(sddl: string): WindowsAce[] {
   for (const m of section.matchAll(/\(([^)]*)\)/g)) {
     const body = m[1];
     const parts = body.split(';');
+    const kind = (parts[0] ?? '').trim().toUpperCase();
     aces.push({
       raw: body,
       flags: parts[1] ?? '',
       trustee: (parts[5] ?? '').trim(),
       inherited: (parts[1] ?? '').toUpperCase().includes('ID'),
+      // `A` allows, `D` denies. Anything else (audit entries, unfamiliar types) is left as
+      // written so the verifier refuses it rather than guessing.
+      accessControlType: kind === 'A' ? 'Allow' : kind === 'D' ? 'Deny' : kind,
+      rights: sddlRightsToNumber(parts[2] ?? ''),
     });
   }
   return aces;
@@ -201,11 +242,56 @@ export function assertOwnerOnlyDacl(label: string, aces: WindowsAce[], sid: stri
         `restricted to ${sid}. Refusing to store raw signed transactions.`
     );
   }
-  const inherited = aces.filter((a) => a.inherited);
-  if (inherited.length > 0) {
+
+  /**
+   * EXACTLY ONE rule, not merely "none belonging to anyone else".
+   *
+   * Two entries for the same SID can disagree -- a deny alongside an allow, or a narrow grant
+   * beside a full one -- and which wins depends on their order. The descriptor this code
+   * writes has one entry, so anything else is a descriptor it did not write.
+   */
+  if (aces.length !== 1) {
+    throw new Error(
+      `${label} carries ${aces.length} access-control entries for ${sid} where exactly one is ` +
+        'written. Refusing to store raw signed transactions on a descriptor this code did not ' +
+        'produce.'
+    );
+  }
+
+  const ace = aces[0];
+  if (ace.inherited) {
     throw new Error(
       `${label} still carries inherited access-control entries, so the parent directory can ` +
         're-grant access. Refusing to store raw signed transactions.'
+    );
+  }
+
+  /**
+   * A trustee says WHO; it says nothing about whether they are allowed or denied, or how much.
+   *
+   * Both of these named the correct SID and were accepted by the previous check, which is the
+   * gap this closes:
+   *
+   *   D:P(D;;FA;;;<current SID>)   a DENY of everything -- the journal becomes unusable, and
+   *                               "locked down" would have been reported
+   *   D:P(A;;FR;;;<current SID>)   read-only -- writes fail later, far from here
+   */
+  if (ace.accessControlType !== 'Allow') {
+    throw new Error(
+      `${label} carries a ${ace.accessControlType || 'unrecognised'} entry for ${sid} rather ` +
+        'than an allow. Refusing to store raw signed transactions.'
+    );
+  }
+  if (ace.rights === null) {
+    throw new Error(
+      `${label} carries an entry for ${sid} whose rights could not be read, so they cannot be ` +
+        'confirmed as full control. Refusing to store raw signed transactions.'
+    );
+  }
+  if (ace.rights !== WINDOWS_FULL_CONTROL) {
+    throw new Error(
+      `${label} grants ${sid} rights ${ace.rights} rather than full control ` +
+        `(${WINDOWS_FULL_CONTROL}). Refusing to store raw signed transactions.`
     );
   }
 }
@@ -273,7 +359,9 @@ function secureWindowsFiles(targets: string[]): void {
     // Every rule, explicit and inherited, with the trustee TRANSLATED TO A SID rather than
     // rendered as a name or an SDDL abbreviation.
     '    foreach($r in $now.GetAccessRules($true, $true, $sidType)){',
-    "      Write-Output ('ACE|'+$t+'|'+$r.IdentityReference.Value+'|'+$r.IsInherited+'|'+$r.AccessControlType)",
+    // The rights go out as a NUMBER. `$r.FileSystemRights` renders as text that varies with
+    // the mask and can be localized; `[int]` is the mask itself and has one spelling.
+    "      Write-Output ('ACE|'+$t+'|'+$r.IdentityReference.Value+'|'+$r.IsInherited+'|'+$r.AccessControlType+'|'+[int]$r.FileSystemRights)",
     '    }',
     "    Write-Output ('END|'+$t)",
     '  }',
@@ -313,13 +401,18 @@ function secureWindowsFiles(targets: string[]): void {
       continue;
     }
     if (!line.startsWith('ACE|')) continue;
-    const [, file, trustee, inherited, kind] = line.split('|');
+    const [, file, trustee, inherited, kind, rights] = line.split('|');
     const list = byFile.get(file) ?? [];
+    const parsedRights = /^-?\d+$/.test((rights ?? '').trim())
+      ? Number.parseInt(rights.trim(), 10)
+      : null;
     list.push({
-      raw: `${kind};${inherited};${trustee}`,
+      raw: `${kind};${inherited};${trustee};${rights}`,
       flags: inherited === 'True' ? 'ID' : '',
       trustee: (trustee ?? '').trim(),
       inherited: inherited === 'True',
+      accessControlType: (kind ?? '').trim(),
+      rights: parsedRights,
     });
     byFile.set(file, list);
   }

@@ -3,7 +3,12 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { CanaryJournal, parseDaclAces, assertOwnerOnlyDacl } from '../src/canaryJournal';
+import {
+  CanaryJournal,
+  parseDaclAces,
+  assertOwnerOnlyDacl,
+  WINDOWS_FULL_CONTROL,
+} from '../src/canaryJournal';
 import { signAndPersist } from '../src/signedTxFlow';
 
 /**
@@ -69,13 +74,22 @@ function currentSid(): string {
  * the account under test came back as `LA`, the local Administrator -- so a test comparing
  * spellings would fail a file that is correctly locked down, and could pass one that is not.
  */
-function aceSidsOf(file: string): string[] {
+interface RealRule {
+  sid: string;
+  type: string;
+  rights: number;
+  inherited: boolean;
+}
+
+function aceRulesOf(file: string): RealRule[] {
   const script = [
     "$ErrorActionPreference='Stop'",
     '$sec=[System.Security.AccessControl.AccessControlSections]::Access',
     '$acl=[System.IO.File]::GetAccessControl($env:PONSR_T, $sec)',
     '$t=[System.Security.Principal.SecurityIdentifier]',
-    'foreach($r in $acl.GetAccessRules($true,$true,$t)){ Write-Output $r.IdentityReference.Value }',
+    'foreach($r in $acl.GetAccessRules($true,$true,$t)){',
+    "  Write-Output ($r.IdentityReference.Value+'|'+$r.AccessControlType+'|'+[int]$r.FileSystemRights+'|'+$r.IsInherited)",
+    '}',
   ].join('; ');
   const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
@@ -83,8 +97,29 @@ function aceSidsOf(file: string): string[] {
   });
   return out
     .split(/\r?\n/)
-    .map((l) => l.trim().toUpperCase())
-    .filter(Boolean);
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const [sid, type, rights, inherited] = l.split('|');
+      return {
+        sid: sid.toUpperCase(),
+        type,
+        rights: Number.parseInt(rights, 10),
+        inherited: inherited === 'True',
+      };
+    });
+}
+
+const aceSidsOf = (file: string) => aceRulesOf(file).map((r) => r.sid);
+
+/** Exactly one explicit Allow FullControl rule for the given SID, and nothing else. */
+function expectSoleFullControl(file: string, sid: string): void {
+  const rules = aceRulesOf(file);
+  expect(rules).toHaveLength(1);
+  expect(rules[0].sid).toBe(sid.toUpperCase());
+  expect(rules[0].type).toBe('Allow');
+  expect(rules[0].rights).toBe(WINDOWS_FULL_CONTROL);
+  expect(rules[0].inherited).toBe(false);
 }
 
 function grantTo(file: string, sid: string, rights = '(F)'): void {
@@ -148,7 +183,8 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
     expect(present).toContain(`${db}-wal`);
 
     for (const f of present) {
-      expect(aceSidsOf(f)).toEqual([sid.toUpperCase()]);
+      // Not just "whose": exactly one rule, Allow, FullControl, not inherited.
+      expectSoleFullControl(f, sid);
     }
     journal.close();
   });
@@ -196,7 +232,7 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
     const reopened = new CanaryJournal(db, { allowEphemeral: true });
     const after = aceSidsOf(target);
     expect(after).toEqual([mine]);
-    expect(after.filter((t) => t !== mine)).toEqual([]);
+    expectSoleFullControl(target, mine);
     reopened.close();
     journal.close();
   });
@@ -209,7 +245,7 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
 
     // recordSigned re-secures before writing raw bytes; a second run reaches it.
     const second = new CanaryJournal(db, { allowEphemeral: true });
-    expect(aceSidsOf(db)).toEqual([currentSid().toUpperCase()]);
+    expectSoleFullControl(db, currentSid());
     second.close();
     journal.close();
   });
@@ -221,6 +257,48 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
  */
 describe('an owner-only DACL is judged by SID, never by display name', () => {
   const MINE = 'S-1-5-21-111-222-333-1001';
+
+  /**
+   * A trustee says WHO. It says nothing about allow-versus-deny, or about how much.
+   *
+   * Both cases below name the correct SID and were ACCEPTED by the previous verifier, which
+   * checked only the trustee and the inherited flag while the completion report claimed the
+   * result was "exactly one explicit ALLOW FullControl ACE". Measured against that code:
+   *
+   *   D:P(D;;FA;;;<SID>)  -> accepted   (a deny of everything)
+   *   D:P(A;;FR;;;<SID>)  -> accepted   (read-only)
+   */
+  it('refuses a DENY entry for the current SID', () => {
+    expect(() =>
+      assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(D;;FA;;;${MINE})`), MINE)
+    ).toThrow(/Deny entry/);
+  });
+
+  it('refuses a read-only grant to the current SID', () => {
+    expect(() =>
+      assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FR;;;${MINE})`), MINE)
+    ).toThrow(new RegExp(`rather than full control \\(${WINDOWS_FULL_CONTROL}\\)`));
+  });
+
+  it('refuses rights it cannot interpret rather than assuming they are enough', () => {
+    expect(() =>
+      assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;GA;;;${MINE})`), MINE)
+    ).toThrow(/rights could not be read/);
+  });
+
+  /**
+   * Two entries for one SID can disagree, and which wins depends on their order. The
+   * descriptor this code writes has exactly one, so anything else is not its descriptor.
+   */
+  it('refuses duplicate entries for the current SID', () => {
+    expect(() =>
+      assertOwnerOnlyDacl(
+        'canary.sqlite',
+        parseDaclAces(`D:P(A;;FA;;;${MINE})(A;;FA;;;${MINE})`),
+        MINE
+      )
+    ).toThrow(/carries 2 access-control entries/);
+  });
 
   it('accepts exactly one ACE for the given SID', () => {
     expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${MINE})`), MINE)).not.toThrow();
