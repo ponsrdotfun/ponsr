@@ -132,50 +132,181 @@ const EPHEMERAL_PREFIXES = ['/app', '/tmp', '/var/tmp', '/run'];
  * to open, because the alternative is writing broadcastable authority into a file this code
  * has just discovered it cannot protect.
  */
+/**
+ * One ACE, parsed out of an SDDL string.
+ *
+ * SDDL is the locale-independent form: trustees appear as SIDs, or as two-letter well-known
+ * abbreviations like `SY` and `BA`. Neither is translated, which is the whole reason for
+ * reading it instead of `icacls`'s display output.
+ */
+export interface WindowsAce {
+  /** The raw ACE body, e.g. `A;ID;FA;;;SY`. */
+  raw: string;
+  /** ACE flags field: `ID` marks an inherited entry. */
+  flags: string;
+  /** SID or well-known abbreviation the ACE applies to. */
+  trustee: string;
+  inherited: boolean;
+}
+
+/**
+ * Extracts the DACL's ACEs from an SDDL security descriptor.
+ *
+ * Deliberately ignores `O:` and `G:` (owner and group) and stops at `S:` (the SACL), so only
+ * entries that actually grant or deny access are enumerated.
+ */
+export function parseDaclAces(sddl: string): WindowsAce[] {
+  const dacl = sddl.indexOf('D:');
+  if (dacl < 0) return [];
+  let section = sddl.slice(dacl + 2);
+  const sacl = section.indexOf('S:');
+  if (sacl >= 0) section = section.slice(0, sacl);
+  const aces: WindowsAce[] = [];
+  for (const m of section.matchAll(/\(([^)]*)\)/g)) {
+    const body = m[1];
+    const parts = body.split(';');
+    aces.push({
+      raw: body,
+      flags: parts[1] ?? '',
+      trustee: (parts[5] ?? '').trim(),
+      inherited: (parts[1] ?? '').toUpperCase().includes('ID'),
+    });
+  }
+  return aces;
+}
+
+/**
+ * The decision itself: does this DACL grant access to anyone but the given SID?
+ *
+ * Separated from the process plumbing so it can be tested directly against a descriptor,
+ * including ones that are awkward to produce on a real filesystem. Comparison is by SID, and
+ * an SDDL abbreviation like `SY` or `BA` is therefore FOREIGN by construction -- it is not the
+ * current user's SID, so it fails without needing a table of well-known principals.
+ */
+export function assertOwnerOnlyDacl(label: string, sddl: string, sid: string): void {
+  const aces = parseDaclAces(sddl);
+  if (aces.length === 0) {
+    throw new Error(
+      `${label} reports no access-control entries at all, which cannot be verified as ` +
+        'owner-only. Refusing to store raw signed transactions.'
+    );
+  }
+  const foreign = aces.filter((a) => a.trustee.toUpperCase() !== sid.toUpperCase());
+  if (foreign.length > 0) {
+    throw new Error(
+      `${label} still grants access to ${foreign.map((a) => a.trustee).join(', ')} after being ` +
+        `restricted to ${sid}. Refusing to store raw signed transactions.`
+    );
+  }
+  const inherited = aces.filter((a) => a.inherited);
+  if (inherited.length > 0) {
+    throw new Error(
+      `${label} still carries inherited access-control entries, so the parent directory can ` +
+        're-grant access. Refusing to store raw signed transactions.'
+    );
+  }
+}
+
+/**
+ * Replaces each file's DACL with exactly one entry: full control for the current user's SID.
+ *
+ * WHY NOT `icacls /inheritance:r /grant:r`. That was the previous approach and it left
+ * explicit foreign ACEs in place -- `/grant:r` replaces only the entry for the named user, and
+ * `/inheritance:r` removes inherited entries, neither of which touches an explicit ACE somebody
+ * else added. Measured on this machine: an ACE granting `S-1-5-18` FULL control survived the
+ * call and the verification step accepted it, because that step matched localized DISPLAY
+ * NAMES -- `Everyone`, `BUILTIN\Users` -- and SYSTEM was not in the list. On a non-English
+ * Windows even those names do not match, so the check would have passed over anything at all.
+ *
+ * Setting `D:P(A;;FA;;;<SID>)` is not a repair of the existing ACL; it is a replacement.
+ * `P` marks it protected, so the parent directory cannot re-grant through inheritance, and no
+ * entry survives that was not written here.
+ *
+ * The result is then read back and enumerated BY SID. Anything other than the current user --
+ * any principal, inherited or explicit, known or unknown -- fails closed.
+ */
+function secureWindowsFiles(targets: string[]): void {
+  const { execFileSync } = require('child_process') as typeof import('child_process');
+  const present = targets.filter((t) => fs.existsSync(t));
+  if (present.length === 0) return;
+
+  /**
+   * The identity comes from the process token, not from %USERNAME%.
+   *
+   * The environment variable is attacker-influenced and, on this machine, `whoami` resolves to
+   * a Git Bash shim that does not understand `/user` at all. `WindowsIdentity.GetCurrent()` is
+   * the account the file operations actually run as, which is the only account whose access
+   * means anything here.
+   */
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  present.forEach((t, i) => {
+    env[`PONSR_ACL_${i}`] = t;
+  });
+
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    '$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    `foreach($i in 0..${present.length - 1}){`,
+    "  $t=[Environment]::GetEnvironmentVariable('PONSR_ACL_'+$i)",
+    '  if($t -and (Test-Path -LiteralPath $t)){',
+    '    $acl=New-Object System.Security.AccessControl.FileSecurity',
+    "    $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;'+$sid+')')",
+    '    Set-Acl -LiteralPath $t -AclObject $acl',
+    "    Write-Output ('ACL|'+$t+'|'+((Get-Acl -LiteralPath $t).Sddl))",
+    '  }',
+    '}',
+    "Write-Output ('SID|'+$sid)",
+  ].join('; ');
+
+  let out: string;
+  try {
+    out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', stdio: 'pipe', env }
+    );
+  } catch (e) {
+    throw new Error(
+      'failed to establish owner-only access to the canary journal on Windows: ' +
+        `${(e as Error).message}. It holds broadcast-ready transactions and will not be opened ` +
+        'without it.'
+    );
+  }
+
+  const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const sid = lines.find((l) => l.startsWith('SID|'))?.slice(4);
+  if (!sid || !/^S-1-[\d-]+$/.test(sid)) {
+    throw new Error(
+      'could not determine the current Windows account SID, so owner-only access to the ' +
+        'canary journal cannot be verified. Refusing to store raw signed transactions.'
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const line of lines.filter((l) => l.startsWith('ACL|'))) {
+    const sep = line.lastIndexOf('|');
+    const file = line.slice(4, sep);
+    const sddl = line.slice(sep + 1);
+    seen.add(file);
+
+    assertOwnerOnlyDacl(path.basename(file), sddl, sid);
+  }
+
+  const missed = present.filter((t) => !seen.has(t));
+  if (missed.length > 0) {
+    throw new Error(
+      `no access-control result was returned for ${missed
+        .map((m) => path.basename(m))
+        .join(', ')}. Refusing to store raw signed transactions on unverified files.`
+    );
+  }
+}
+
 function secureJournalFiles(dbPath: string): void {
   const targets = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
 
   if (process.platform === 'win32') {
-    /**
-     * Windows does not implement POSIX mode bits; `fs.chmod` there only toggles the read-only
-     * flag, and `fs.stat().mode` reports a synthesised 0666 regardless of the real ACL. So a
-     * mode check on Windows is not evidence of anything, and pretending otherwise would be a
-     * green tick over an unenforced control.
-     *
-     * `icacls` is the real mechanism: inheritance is removed so the parent directory's ACEs
-     * cannot re-grant access, and exactly one grant is left for the current user.
-     */
-    const { execFileSync } = require('child_process') as typeof import('child_process');
-    const user = process.env.USERNAME
-      ? `${process.env.USERDOMAIN ?? ''}${process.env.USERDOMAIN ? '\\' : ''}${process.env.USERNAME}`
-      : null;
-    if (!user) {
-      throw new Error(
-        'cannot determine the current Windows user, so owner-only access to the canary ' +
-          'journal cannot be established. Refusing to store raw signed transactions.'
-      );
-    }
-    for (const t of targets) {
-      if (!fs.existsSync(t)) continue;
-      try {
-        execFileSync('icacls', [t, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'pipe' });
-      } catch (e) {
-        throw new Error(
-          `failed to restrict ${path.basename(t)} to the current user: ${(e as Error).message}. ` +
-            'The canary journal holds broadcast-ready transactions and will not be opened ' +
-            'without owner-only access.'
-        );
-      }
-      // Verified by reading the ACL back, not by trusting the call above to have worked.
-      const acl = execFileSync('icacls', [t], { encoding: 'utf8', stdio: 'pipe' });
-      const exposed = /\b(Everyone|BUILTIN\\Users|Users:|AUTHENTICATED USERS)\b/i.test(acl);
-      if (exposed) {
-        throw new Error(
-          `${path.basename(t)} is still readable beyond its owner after restriction. Refusing ` +
-            'to store raw signed transactions.'
-        );
-      }
-    }
+    secureWindowsFiles(targets);
     return;
   }
 
