@@ -22,12 +22,19 @@
 > live service; the backend runs on Fly as `ponsr-backend` (`iad`,
 > `min_machines_running = 1`), health check passing.
 >
-> **What is deployed IS what is in this repository (2026-08-24).** Release **v31** runs commit
-> `7856dd2`, image `sha256:48982e50…`; rollback target is the exact digest `sha256:37f2755c…`
-> (v30). `/status` serves the typed `spend` envelope — `rolling-24h`, chain 4663,
-> `pons-v2-current-7ed`, treasury pinned to the hot wallet, `publicLaunchEnabled: false`.
+> **What is deployed IS what is in this repository (2026-08-25).** Release **v35** runs commit
+> `dd9fcbe`, image `sha256:bca351d2…`; rollback target is the exact digest `sha256:2676be63…`
+> (v34, source `e92b23b`). `/status` serves the typed `spend` envelope — `rolling-24h`, chain
+> 4663, `pons-v2-current-7ed`, treasury pinned to the hot wallet, `publicLaunchEnabled: false`.
 > Overall `degraded` is correct: `public-launches` is the only non-ok check and must stay
-> paused. Evidence in `PONSR-DEPLOY-PAUSED-REPORT.txt`.
+> paused. Evidence in `PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
+>
+> **A live keyless mainnet dry run is ADMITTING** for the final identity **PONSR STONKS /
+> PSTONKS / native ETH**: chain 4663, exact deployment identity, live readiness and fee, the
+> bot ledger bound from the deployed typed `/status`, no signer, no signature, no broadcast.
+> `--execute` is still NO-GO — it needs an independent audit and renewed explicit financial
+> authorisation against a maximum exposure of **0.0025 ETH** (fee 0.0005 + combined gas at
+> most 0.002).
 >
 > **Public launching is off, and that is now a decision rather than an accident.** The
 > paragraph replaced here said the stale deploy was acting as a brake because the running bot

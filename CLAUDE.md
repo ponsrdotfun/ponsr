@@ -227,22 +227,44 @@ Still blocked on the owner:
    to be sequenced with the canary plan — is history now, and is kept only in
    `PONSR-DEPLOY-PAUSED-REPORT.txt`.
 
-### Production, as actually deployed (2026-08-24)
+### Production, as actually deployed (2026-08-25)
 
-`ponsr-backend` on Fly runs **commit `7856dd2`, release v31**, image
-`sha256:48982e5044369aa35724a15a06178012c8d368cac96710b424f3945acc18fa3c`. One machine
+`ponsr-backend` on Fly runs **commit `dd9fcbe`, release v35**, image
+`sha256:bca351d294d589dddef8847dfc334409a57057d40c7ea3a76dbc79b09c56ae84`. One machine
 (`867634bee0e048`, `iad`), volume `vol_r1j1nwjzdx6p7q3r` attached. Rollback target is the
-exact previous digest, `sha256:37f2755c26949ed9d2fb249070838b89ea09f033a5c29750ede4105f37f8bd8a`
-(v30) — name the digest, never "the previous release".
+exact previous digest, `sha256:2676be6325aea318abf7e4888320ebed9cf9f2c7a8c55b8c40a76f0bed1452a3`
+(v34, source `e92b23b`) — name the digest, never "the previous release".
 
 Live `/status` serves the typed `spend` envelope: `rolling-24h`, chain 4663,
 `pons-v2-current-7ed`, factory `0x7eD598…EC7e`, treasury pinned to the hot wallet,
-`publicLaunchEnabled: false`. Overall `degraded` is CORRECT — `public-launches` is the only
-non-ok check and it must stay paused.
+`publicLaunchEnabled: false`, `capWei` 0.01 ETH. Overall `degraded` is CORRECT —
+`public-launches` is the only non-ok check and it must stay paused.
 
-Three booleans are now set explicitly rather than inherited, because the runtime parses them
-strictly (see below): `TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`,
-`REPLY_INCLUDE_LINK=false`. Two of those names did not previously exist as secrets at all.
+Five settings are now established deliberately rather than inherited:
+`TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`, `REPLY_INCLUDE_LINK=false`,
+and the two ceilings `TREASURY_MAX_FEE_WEI` and `TREASURY_GAS_RESERVE_WEI`, both 0.002 ETH.
+Fly secret VALUES cannot be read, so their old values are not merely unknown but unknowable;
+what is recorded is what they ARE.
+
+**`TREASURY_GAS_RESERVE_WEI` is ONE COMBINED budget for the complete two-transaction canary
+run — splitter creation plus token launch — not a per-transaction allowance.** It was passed
+to both operations independently, which authorised 0.002 ETH twice against a reserve chosen
+once. Gas burned by a MINED REVERT counts against it too, and a mined receipt whose gas cannot
+be read blocks rather than being accounted as zero. Maximum exposure for one canary execute:
+launch fee 0.0005 ETH + combined gas at most 0.002 ETH = **0.0025 ETH**.
+
+The final canary identity is **PONSR STONKS / PSTONKS / native ETH**, chosen by the owner. Its
+salt is deterministic per identity, so changing the name or symbol changes the salt and
+invalidates any earlier dry run.
+
+**A live keyless mainnet dry run against v35 is ADMITTING** (2026-08-25). `--execute` remains
+NO-GO pending independent audit and renewed explicit financial authorisation. See
+`PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
+
+**The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
+table; the journal is operator state outside the container, deliberately, so a deploy cannot
+erase a record of transactions that are still on chain. Migrations to it — such as the
+gas-evidence columns — happen on the operator's machine, not in production.
 
 **Two lessons from this deploy, both about documents rather than code.**
 
