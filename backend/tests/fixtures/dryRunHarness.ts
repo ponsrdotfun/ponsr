@@ -16,6 +16,10 @@
  */
 import { main } from '../../scripts/phase-b-launch';
 import { NATIVE_ETH, PairAsset } from '../../src/pairTokens';
+import { resolveCanaryPair } from '../../src/canaryPreflight';
+
+/** Every address the run asked the factory's approval map about. Printed at exit. */
+const approvalMapReads: string[] = [];
 
 /** A complete PairAsset. Every field the real registry supplies, so nothing reads undefined. */
 const ETH_PAIR: PairAsset = {
@@ -48,8 +52,35 @@ main({
    * it and the run printed "paired against ETH (undefined)" -- a harness that completes while
    * producing output the real path never would is not evidence about the real path.
    */
-  resolvePair: async () => ({ asset: ETH_PAIR, source: 'default-eth' as const }),
-}).catch((err) => {
-  console.error('\nFAILED:', err?.message ?? err);
-  process.exit(1);
-});
+  /**
+   * The REAL resolver, with bounded dependencies -- not a substitute for it.
+   *
+   * This used to return a canned answer, which meant the completion proof never exercised the
+   * branch that refused explicit ETH on mainnet. The registry lookup and the approval read are
+   * bounded here; the decision itself is the shipped `resolveCanaryPair`.
+   *
+   * `approvalMapReads` is printed at exit so a test can assert what the run actually asked. For
+   * native ETH the correct number is zero: the factory's gate short-circuits on the zero
+   * address, and reading `approvedPairTokens(0x0)` is what produced the false revocation.
+   */
+  resolvePair: async (requested, deps) =>
+    resolveCanaryPair(requested, {
+      ...deps,
+      resolve: async (typed: string) =>
+        /^eth$/i.test(typed.trim())
+          ? ({ ok: true, asset: ETH_PAIR } as never)
+          : ({ ok: false, detail: 'the harness resolves ETH only' } as never),
+      isApprovedNow: async (address: string) => {
+        approvalMapReads.push(address);
+        return false;
+      },
+    }),
+})
+  .then(() => {
+    console.log(`[harness] approvalMapReads=${approvalMapReads.length}`);
+  })
+  .catch((err) => {
+    console.log(`[harness] approvalMapReads=${approvalMapReads.length}`);
+    console.error('\nFAILED:', err?.message ?? err);
+    process.exit(1);
+  });

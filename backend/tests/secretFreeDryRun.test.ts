@@ -499,6 +499,61 @@ describe('the secret-free dry run runs to completion', () => {
     expect(run.stdout).not.toContain('undefined');
   });
 
+  /** With nothing requested, the approval map is not consulted either. */
+  it('read the approval map zero times for the default ETH pair', () => {
+    expect(run.stdout).toContain('[harness] approvalMapReads=0');
+  });
+});
+
+/**
+ * The mainnet failure of 2026-08-25, as a regression through the real orchestration.
+ *
+ * `PAIR_WITH=ETH` reached `isApprovedNow(0x0)`, which is false and always has been, and the
+ * run refused with a revocation message about something nobody had revoked. It exited 1 having
+ * spent nothing. Here the shipped resolver runs for real against bounded dependencies whose
+ * approval reader would answer FALSE if it were asked -- so a run that completes is a run that
+ * did not ask.
+ */
+describe('an explicitly requested ETH pair completes the dry run', () => {
+  let rpc: Awaited<ReturnType<typeof startMockRpc>>;
+  let run: Awaited<ReturnType<typeof runCanary>>;
+
+  beforeAll(async () => {
+    rpc = await startMockRpc();
+    run = await runCanary({
+      rpcUrl: rpc.url,
+      complete: true,
+      extraEnv: { PAIR_WITH: 'ETH' },
+    });
+  }, 180000);
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  it('exits 0 and reaches the terminal line', () => {
+    expect(run.stderr).not.toMatch(/no longer approved/);
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('Dry run complete. Nothing was sent.');
+  });
+
+  it('never reads the native approval map', () => {
+    expect(run.stdout).toContain('[harness] approvalMapReads=0');
+  });
+
+  it('reports the pairing truthfully as an explicit choice', () => {
+    expect(run.stdout).toMatch(/paired against\s+ETH\s+\(explicit-eth\)/);
+    // Not dressed up as a registry approval that was never consulted.
+    expect(run.stdout).not.toMatch(/paired against\s+ETH\s+\(registry\)/);
+  });
+
+  it('requests no signer, signature or broadcast', () => {
+    expect(run.stdout).not.toContain('EXECUTING');
+    expect(loadedMatching(run.report, /treasurySigner/)).toEqual([]);
+    expect(loadedMatching(run.report, /@turnkey/)).toEqual([]);
+    expect(run.stdout).toContain('no signer loaded');
+  });
+
   /** The completion run is held to the same secret-free boundary as the plain one. */
   it('still never opened the mixed .env or loaded credential modules', () => {
     expect(run.report.loaded.length).toBeGreaterThan(10);

@@ -37,6 +37,22 @@
 /** The zero address: native ETH, exempt from the approval check. */
 export const NATIVE_ETH = '0x0000000000000000000000000000000000000000';
 
+/**
+ * Is this address the native-ETH pairing, whatever it is called or how it is cased?
+ *
+ * The one predicate for the exemption above, so every path answers it the same way. The
+ * canary asked the question twice and got two answers: with `PAIR_WITH` unset it returned ETH
+ * without consulting the approval map, and with `PAIR_WITH=ETH` it resolved to this same
+ * address and then read `approvedPairTokens(0x0)` -- false, as it has always been -- and
+ * reported a revocation that never happened.
+ *
+ * Bound to the ADDRESS rather than to a label, so an alias somebody types resolves to the
+ * same exemption and a display string can never grant one on its own.
+ */
+export function isNativeEth(address: string | null | undefined): boolean {
+  return typeof address === 'string' && address.toLowerCase() === NATIVE_ETH;
+}
+
 export interface PairAsset {
   /** `pairToken` as passed to `launchToken`. NATIVE_ETH for ETH. */
   address: string;
