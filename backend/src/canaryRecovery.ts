@@ -36,6 +36,9 @@ export interface CanaryRecoveryDeps {
     status: number | null;
     logs: readonly { address?: string; topics: readonly string[]; data: string }[];
     contractAddress: string | null;
+    /** Canonical gas evidence. Absent leaves the cost UNKNOWN, which blocks rather than zeroes. */
+    gasUsed?: bigint | null;
+    gasPriceWei?: bigint | null;
   } | null>;
   readLaunchRecord: (
     deployment: PonsDeployment,
@@ -263,6 +266,41 @@ export async function recoverCanary(
         continue;
       } else {
         journal.recordReceipt(row.id, { status: 1 });
+
+        /**
+         * Gas evidence, recovered from the SAME canonical receipt.
+         *
+         * A crash between a landed receipt and this write used to leave the run's actual gas
+         * cost unrecorded, and the combined budget subtracts that cost to decide what the
+         * second transaction may spend. Recovering it here is what lets a later, separately
+         * authorised continuation compute a remaining budget at all -- and its absence is
+         * what correctly blocks one.
+         *
+         * Idempotent in the journal, and never invented: a receipt without both fields leaves
+         * the row UNKNOWN rather than zero.
+         */
+        if (
+          row.txHash &&
+          receipt.gasUsed !== undefined &&
+          receipt.gasUsed !== null &&
+          receipt.gasPriceWei !== undefined &&
+          receipt.gasPriceWei !== null
+        ) {
+          try {
+            journal.recordGasEvidence(row.id, {
+              txHash: row.txHash,
+              gasUsed: receipt.gasUsed,
+              gasPriceWei: receipt.gasPriceWei,
+            });
+          } catch (err) {
+            problems.push(`gas evidence could not be recorded: ${(err as Error)?.message ?? err}`);
+          }
+        } else {
+          problems.push(
+            'the receipt carries no usable gas evidence, so this run\'s actual gas cost stays ' +
+              'UNKNOWN. A later continuation cannot compute the remaining combined budget.'
+          );
+        }
 
         /**
          * The fee is consumed by LANDING, not by reconciling.
