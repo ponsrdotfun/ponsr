@@ -243,16 +243,30 @@ function secureWindowsFiles(targets: string[]): void {
     env[`PONSR_ACL_${i}`] = t;
   });
 
+  /**
+   * .NET statics, not the Get-Acl / Set-Acl cmdlets.
+   *
+   * Those live in Microsoft.PowerShell.Security, and on the GitHub Windows runner `Set-Acl`
+   * failed to autoload at all -- `CouldNotAutoloadMatchingModule` -- so every journal open
+   * refused there. `System.IO.File.SetAccessControl` and `GetAccessControl` are part of the
+   * framework itself and need no module, which makes the behaviour the same on a developer
+   * machine and on a bare runner.
+   *
+   * `AccessControlSections.Access` asks for the DACL alone, so the returned descriptor is not
+   * padded with the owner and group fields the check does not use.
+   */
   const script = [
     "$ErrorActionPreference='Stop'",
     '$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    '$sec=[System.Security.AccessControl.AccessControlSections]::Access',
     `foreach($i in 0..${present.length - 1}){`,
     "  $t=[Environment]::GetEnvironmentVariable('PONSR_ACL_'+$i)",
-    '  if($t -and (Test-Path -LiteralPath $t)){',
+    '  if($t -and [System.IO.File]::Exists($t)){',
     '    $acl=New-Object System.Security.AccessControl.FileSecurity',
-    "    $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;'+$sid+')')",
-    '    Set-Acl -LiteralPath $t -AclObject $acl',
-    "    Write-Output ('ACL|'+$t+'|'+((Get-Acl -LiteralPath $t).Sddl))",
+    "    $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;'+$sid+')', $sec)",
+    '    [System.IO.File]::SetAccessControl($t, $acl)',
+    '    $now=[System.IO.File]::GetAccessControl($t, $sec)',
+    "    Write-Output ('ACL|'+$t+'|'+$now.GetSecurityDescriptorSddlForm($sec))",
     '  }',
     '}',
     "Write-Output ('SID|'+$sid)",
