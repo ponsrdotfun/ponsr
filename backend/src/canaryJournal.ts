@@ -178,13 +178,16 @@ export function parseDaclAces(sddl: string): WindowsAce[] {
 /**
  * The decision itself: does this DACL grant access to anyone but the given SID?
  *
- * Separated from the process plumbing so it can be tested directly against a descriptor,
- * including ones that are awkward to produce on a real filesystem. Comparison is by SID, and
- * an SDDL abbreviation like `SY` or `BA` is therefore FOREIGN by construction -- it is not the
- * current user's SID, so it fails without needing a table of well-known principals.
+ * Separated from the process plumbing so it can be tested directly, including against
+ * descriptors that are awkward to produce on a real filesystem.
+ *
+ * The entries handed to it must already be RESOLVED TO SIDS. That is not a detail: Windows
+ * renders well-known accounts in SDDL as two-letter abbreviations, and on the GitHub runner
+ * the account we had just granted came back as `LA` -- the local Administrator, whose SID ends
+ * in -500. Comparing spellings failed a file that was correctly locked down. Comparing SIDs
+ * cannot, because a SID has one spelling.
  */
-export function assertOwnerOnlyDacl(label: string, sddl: string, sid: string): void {
-  const aces = parseDaclAces(sddl);
+export function assertOwnerOnlyDacl(label: string, aces: WindowsAce[], sid: string): void {
   if (aces.length === 0) {
     throw new Error(
       `${label} reports no access-control entries at all, which cannot be verified as ` +
@@ -259,6 +262,7 @@ function secureWindowsFiles(targets: string[]): void {
     "$ErrorActionPreference='Stop'",
     '$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     '$sec=[System.Security.AccessControl.AccessControlSections]::Access',
+    '$sidType=[System.Security.Principal.SecurityIdentifier]',
     `foreach($i in 0..${present.length - 1}){`,
     "  $t=[Environment]::GetEnvironmentVariable('PONSR_ACL_'+$i)",
     '  if($t -and [System.IO.File]::Exists($t)){',
@@ -266,7 +270,12 @@ function secureWindowsFiles(targets: string[]): void {
     "    $acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;'+$sid+')', $sec)",
     '    [System.IO.File]::SetAccessControl($t, $acl)',
     '    $now=[System.IO.File]::GetAccessControl($t, $sec)',
-    "    Write-Output ('ACL|'+$t+'|'+$now.GetSecurityDescriptorSddlForm($sec))",
+    // Every rule, explicit and inherited, with the trustee TRANSLATED TO A SID rather than
+    // rendered as a name or an SDDL abbreviation.
+    '    foreach($r in $now.GetAccessRules($true, $true, $sidType)){',
+    "      Write-Output ('ACE|'+$t+'|'+$r.IdentityReference.Value+'|'+$r.IsInherited+'|'+$r.AccessControlType)",
+    '    }',
+    "    Write-Output ('END|'+$t)",
     '  }',
     '}',
     "Write-Output ('SID|'+$sid)",
@@ -296,14 +305,29 @@ function secureWindowsFiles(targets: string[]): void {
     );
   }
 
-  const seen = new Set<string>();
-  for (const line of lines.filter((l) => l.startsWith('ACL|'))) {
-    const sep = line.lastIndexOf('|');
-    const file = line.slice(4, sep);
-    const sddl = line.slice(sep + 1);
-    seen.add(file);
+  const byFile = new Map<string, WindowsAce[]>();
+  for (const line of lines) {
+    if (line.startsWith('END|')) {
+      const file = line.slice(4);
+      if (!byFile.has(file)) byFile.set(file, []);
+      continue;
+    }
+    if (!line.startsWith('ACE|')) continue;
+    const [, file, trustee, inherited, kind] = line.split('|');
+    const list = byFile.get(file) ?? [];
+    list.push({
+      raw: `${kind};${inherited};${trustee}`,
+      flags: inherited === 'True' ? 'ID' : '',
+      trustee: (trustee ?? '').trim(),
+      inherited: inherited === 'True',
+    });
+    byFile.set(file, list);
+  }
 
-    assertOwnerOnlyDacl(path.basename(file), sddl, sid);
+  const seen = new Set<string>();
+  for (const [file, aces] of byFile) {
+    seen.add(file);
+    assertOwnerOnlyDacl(path.basename(file), aces, sid);
   }
 
   const missed = present.filter((t) => !seen.has(t));

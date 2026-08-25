@@ -61,13 +61,30 @@ function currentSid(): string {
   return out.trim();
 }
 
-function sddlOf(file: string): string {
-  const out = execFileSync(
-    'powershell',
-    ['-NoProfile', '-NonInteractive', '-Command', '(Get-Acl -LiteralPath $env:PONSR_T).Sddl'],
-    { encoding: 'utf8', env: { ...process.env, PONSR_T: file } }
-  );
-  return out.trim();
+/**
+ * Every trustee on the file's DACL, as a SID.
+ *
+ * Reads the same way the production path does, and for the same reason. Asking for the SDDL
+ * instead would return well-known accounts as two-letter abbreviations -- on the GitHub runner
+ * the account under test came back as `LA`, the local Administrator -- so a test comparing
+ * spellings would fail a file that is correctly locked down, and could pass one that is not.
+ */
+function aceSidsOf(file: string): string[] {
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    '$sec=[System.Security.AccessControl.AccessControlSections]::Access',
+    '$acl=[System.IO.File]::GetAccessControl($env:PONSR_T, $sec)',
+    '$t=[System.Security.Principal.SecurityIdentifier]',
+    'foreach($r in $acl.GetAccessRules($true,$true,$t)){ Write-Output $r.IdentityReference.Value }',
+  ].join('; ');
+  const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    env: { ...process.env, PONSR_T: file },
+  });
+  return out
+    .split(/\r?\n/)
+    .map((l) => l.trim().toUpperCase())
+    .filter(Boolean);
 }
 
 function grantTo(file: string, sid: string, rights = '(F)'): void {
@@ -131,9 +148,7 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
     expect(present).toContain(`${db}-wal`);
 
     for (const f of present) {
-      const aces = parseDaclAces(sddlOf(f));
-      expect(aces.map((a) => a.trustee.toUpperCase())).toEqual([sid.toUpperCase()]);
-      expect(aces.some((a) => a.inherited)).toBe(false);
+      expect(aceSidsOf(f)).toEqual([sid.toUpperCase()]);
     }
     journal.close();
   });
@@ -172,14 +187,14 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
      * "is this my SID?" is true of all three.
      */
     const mine = currentSid().toUpperCase();
-    const before = parseDaclAces(sddlOf(target)).map((a) => a.trustee.toUpperCase());
+    const before = aceSidsOf(target);
     const foreignBefore = before.filter((t) => t !== mine);
     expect(foreignBefore.length).toBeGreaterThanOrEqual(2);
 
     // A second handle runs the secure pass over all three files while the first keeps the
     // sidecars alive.
     const reopened = new CanaryJournal(db, { allowEphemeral: true });
-    const after = parseDaclAces(sddlOf(target)).map((a) => a.trustee.toUpperCase());
+    const after = aceSidsOf(target);
     expect(after).toEqual([mine]);
     expect(after.filter((t) => t !== mine)).toEqual([]);
     reopened.close();
@@ -194,9 +209,7 @@ onWindows('the journal is owned by exactly one account on Windows', () => {
 
     // recordSigned re-secures before writing raw bytes; a second run reaches it.
     const second = new CanaryJournal(db, { allowEphemeral: true });
-    expect(parseDaclAces(sddlOf(db)).map((a) => a.trustee.toUpperCase())).toEqual([
-      currentSid().toUpperCase(),
-    ]);
+    expect(aceSidsOf(db)).toEqual([currentSid().toUpperCase()]);
     second.close();
     journal.close();
   });
@@ -210,12 +223,12 @@ describe('an owner-only DACL is judged by SID, never by display name', () => {
   const MINE = 'S-1-5-21-111-222-333-1001';
 
   it('accepts exactly one ACE for the given SID', () => {
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', `D:P(A;;FA;;;${MINE})`, MINE)).not.toThrow();
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${MINE})`), MINE)).not.toThrow();
   });
 
   it('refuses SYSTEM, which the old display-name check let through', () => {
     expect(() =>
-      assertOwnerOnlyDacl('canary.sqlite', `D:P(A;;FA;;;${MINE})(A;;FA;;;${SYSTEM})`, MINE)
+      assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${MINE})(A;;FA;;;${SYSTEM})`), MINE)
     ).toThrow(new RegExp(SYSTEM));
   });
 
@@ -224,33 +237,33 @@ describe('an owner-only DACL is judged by SID, never by display name', () => {
    * which is why no table of well-known principals is needed or kept.
    */
   it('refuses well-known abbreviations without needing to know what they mean', () => {
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', `D:P(A;;FA;;;${MINE})(A;;FA;;;SY)`, MINE)).toThrow(
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${MINE})(A;;FA;;;SY)`), MINE)).toThrow(
       /still grants access to SY/
     );
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', `D:P(A;;FA;;;${MINE})(A;;FA;;;BA)`, MINE)).toThrow(
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${MINE})(A;;FA;;;BA)`), MINE)).toThrow(
       /still grants access to BA/
     );
   });
 
   it('refuses Everyone by SID, whatever it is called on this machine', () => {
     expect(() =>
-      assertOwnerOnlyDacl('canary.sqlite', `D:P(A;;FA;;;${EVERYONE})(A;;FA;;;${MINE})`, MINE)
+      assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:P(A;;FA;;;${EVERYONE})(A;;FA;;;${MINE})`), MINE)
     ).toThrow(new RegExp(EVERYONE));
   });
 
   it('refuses an inherited entry even when it names the right SID', () => {
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', `D:AI(A;ID;FA;;;${MINE})`, MINE)).toThrow(
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(`D:AI(A;ID;FA;;;${MINE})`), MINE)).toThrow(
       /inherited/
     );
   });
 
   it('refuses an empty DACL rather than reading it as harmless', () => {
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', 'D:P', MINE)).toThrow(/no access-control entries/);
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces('D:P'), MINE)).toThrow(/no access-control entries/);
   });
 
   it('ignores the owner and group fields, and stops at the SACL', () => {
     const sddl = `O:${SYSTEM}G:${SYSTEM}D:P(A;;FA;;;${MINE})S:AI(AU;SA;FA;;;WD)`;
-    expect(() => assertOwnerOnlyDacl('canary.sqlite', sddl, MINE)).not.toThrow();
+    expect(() => assertOwnerOnlyDacl('canary.sqlite', parseDaclAces(sddl), MINE)).not.toThrow();
     expect(parseDaclAces(sddl).map((a) => a.trustee)).toEqual([MINE]);
   });
 });
