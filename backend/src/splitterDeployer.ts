@@ -180,7 +180,22 @@ export async function deploySplitter(
      */
     sendVia?: (initcode: string) => Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
     /** `status: null` means no receipt was seen — which is not a revert. */
-    onReceipt?: (r: { status: number | null; contractAddress: string | null; gasUsed: bigint | null; gasPriceWei: bigint | null }) => void | Promise<void>;
+    /**
+     * `hash` is the RECEIPT'S OWN transaction hash, from `receipt.hash` -- ethers 6.17.0
+     * documents that field as "The transaction hash".
+     *
+     * It is carried because asking a provider for the receipt of hash A is not proof that the
+     * object it returned describes hash A. Without it, a caller comparing "the hash I asked
+     * for" against "the hash on the row" is comparing a value with a copy of itself, and any
+     * gas figures on that object are attributed on the strength of nothing.
+     */
+    onReceipt?: (r: {
+      status: number | null;
+      contractAddress: string | null;
+      gasUsed: bigint | null;
+      gasPriceWei: bigint | null;
+      hash: string | null;
+    }) => void | Promise<void>;
   }
 ): Promise<SplitterDeployResult> {
   if (provider) {
@@ -271,6 +286,9 @@ export async function deploySplitter(
      */
     gasUsed: receipt ? receipt.gasUsed : null,
     gasPriceWei: receipt ? receipt.gasPrice : null,
+    // Never substituted with the hash that was asked for. The point is to be able to detect
+    // a disagreement, and a field overwritten with the expectation can never disagree.
+    hash: receipt ? receipt.hash : null,
   });
 
   if (!receipt || !receipt.contractAddress) {

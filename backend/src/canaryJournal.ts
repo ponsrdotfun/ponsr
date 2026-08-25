@@ -1016,8 +1016,20 @@ export class CanaryJournal {
   actualGasSpentWei(runId: string): bigint | null {
     const rows = this.db
       .prepare(
+        /**
+         * EVERY MINED transaction, including reverted ones.
+         *
+         * `receipt_reverted` used to be excluded, and a status-0 transaction still burns gas.
+         * A reverted splitter therefore cost real money, was terminal, and was accounted as
+         * zero -- so a retry under the same deterministic run id received the whole budget
+         * again, which is the same double-authority defect the combined budget was created to
+         * close, arriving by a different door.
+         *
+         * `prepared` and `signed` are excluded because nothing has been mined for them.
+         */
         `SELECT actual_gas_cost_wei FROM canary_tx
-          WHERE run_id = ? AND state IN ('broadcast','receipt_success','confirmed','confirmed_incident')`
+          WHERE run_id = ?
+            AND state IN ('broadcast','receipt_success','receipt_reverted','confirmed','confirmed_incident')`
       )
       .all(runId) as Array<{ actual_gas_cost_wei: string | null }>;
     let total = 0n;

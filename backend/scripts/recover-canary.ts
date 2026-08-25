@@ -73,6 +73,8 @@ async function main() {
         // gasUsed * gasPrice -- so this is the same product, recomputed by the journal.
         gasUsed: r.gasUsed,
         gasPriceWei: r.gasPrice,
+        // The receipt's OWN hash, never the one that was requested.
+        hash: r.hash,
       };
     },
     readLaunchRecord: async (deployment: PonsDeployment, token: string) => {

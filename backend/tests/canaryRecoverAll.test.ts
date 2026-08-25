@@ -79,6 +79,16 @@ function splitterRow(j: CanaryJournal) {
   });
 }
 
+/**
+ * Realistic 32-byte hashes, and every receipt fixture carries its OWN.
+ *
+ * These were short placeholders and the receipt objects had no hash at all, so a test could
+ * not tell a receipt for this transaction from a receipt for another one -- which is exactly
+ * the binding the recovery path now requires before it will account any gas.
+ */
+const TX_LAUNCH = "0xabababababababababababababababababababababababababababababababab";
+const TX_DEPLOY = "0xdededededededededededededededededededededededededededededededede";
+
 describe('recovery advances every unresolved state', () => {
   let dir: string;
   let file: string;
@@ -95,7 +105,7 @@ describe('recovery advances every unresolved state', () => {
 
   const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null }),
+    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null, hash: TX_LAUNCH }),
     readLaunchRecord: async () => record(),
     readCode: async () => GOOD_CODE,
     treasuryAddress: TREASURY,
@@ -105,7 +115,7 @@ describe('recovery advances every unresolved state', () => {
   /** 1 — broadcast + successful receipt resumes the full confirmation. */
   it('confirms a broadcast launch row once the receipt is readable', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     const r = await recoverCanary(j, deps());
     expect(r.find((x) => x.id === id)!.confirmed).toBe(true);
     expect(j.byId(id)!.state).toBe('confirmed');
@@ -114,17 +124,17 @@ describe('recovery advances every unresolved state', () => {
   /** 2 — a null receipt stays exactly where it was. */
   it('leaves a broadcast row ambiguous when no receipt can be read', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     const r = await recoverCanary(j, deps({ readReceipt: async () => null }));
     expect(r.find((x) => x.id === id)!.confirmed).toBe(false);
     expect(j.byId(id)!.state).toBe('broadcast');
-    expect(j.byId(id)!.txHash).toBe('0xabc');
+    expect(j.byId(id)!.txHash).toBe(TX_LAUNCH);
   });
 
   /** 3 — a row already at receipt_success resumes confirmation after a restart. */
   it('resumes confirmation from receipt_success', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     j.recordReceipt(id, { status: 1 });
     await recoverCanary(j, deps());
     expect(j.byId(id)!.state).toBe('confirmed');
@@ -142,17 +152,51 @@ describe('recovery advances every unresolved state', () => {
   });
 
   /** A real revert is terminal and recovery says so. */
-  it('records an actual reverted receipt as terminal', async () => {
+  /**
+   * A reverted transaction still burned gas, so its cost is accounted BEFORE the row is
+   * allowed to become terminal. Accounting it as zero would hand a retry under the same
+   * deterministic run id the whole combined budget again.
+   */
+  it('records an actual reverted receipt as terminal, with its gas counted', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
-    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null }) }));
-    expect(j.byId(id)!.state).toBe('receipt_reverted');
+    j.bindHashLegacy(id, TX_LAUNCH);
+    await recoverCanary(
+      j,
+      deps({
+        readReceipt: async () => ({
+          status: 0,
+          logs: [],
+          contractAddress: null,
+          hash: TX_LAUNCH,
+          gasUsed: 100_000n,
+          gasPriceWei: 3_000_000_000n,
+        }),
+      })
+    );
+    const row = j.byId(id)!;
+    expect(row.state).toBe('receipt_reverted');
+    expect(row.actualGasCostWei).toBe(300_000_000_000_000n);
+    // The reverted attempt counts against the run, so a retry cannot pretend it was free.
+    expect(j.actualGasSpentWei(row.runId)).toBe(300_000_000_000_000n);
+  });
+
+  /** A mined receipt whose gas cannot be read is blocking, not quietly terminal. */
+  it('refuses to make a reverted receipt terminal when its gas is unknown', async () => {
+    const id = launchRow(j);
+    j.bindHashLegacy(id, TX_LAUNCH);
+    const out = await recoverCanary(
+      j,
+      deps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null, hash: TX_LAUNCH }) })
+    );
+    expect(j.byId(id)!.state).toBe('confirmed_incident');
+    expect(out[0].problems.join(' ')).toMatch(/UNKNOWN/);
+    expect(j.actualGasSpentWei(j.byId(id)!.runId)).toBeNull();
   });
 
   /** 6 — terminal rows are not re-read, and nothing is counted twice. */
   it('makes no chain reads for terminal rows and adds no spend on a second pass', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     j.recordReceipt(id, { status: 1 });
     j.recordFee(id, FEE);
     await recoverCanary(j, deps());
@@ -166,7 +210,7 @@ describe('recovery advances every unresolved state', () => {
   /** 7 — the reason survives the process, rather than only reaching stdout. */
   it('persists the latest recovery reason durably', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     await recoverCanary(j, deps({ readReceipt: async () => null }));
     j.close();
 
@@ -192,7 +236,7 @@ describe('splitter rows are recovered by their own verifier', () => {
 
   const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER }),
+    readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER, hash: TX_DEPLOY }),
     readLaunchRecord: async () => record(),
     readCode: async () => GOOD_CODE,
     treasuryAddress: TREASURY,
@@ -213,7 +257,7 @@ describe('splitter rows are recovered by their own verifier', () => {
    */
   it('refuses a splitter whose immutables are unset, template or not', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     await recoverCanary(j, deps());
     const row = j.byId(id)!;
     expect(row.state).toBe('confirmed_incident');
@@ -223,22 +267,22 @@ describe('splitter rows are recovered by their own verifier', () => {
   /** 4 from finding 1 — landed, but the code is not what a splitter must be. */
   it('raises a durable incident when the deployed code lacks the interface', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     await recoverCanary(j, deps({ readCode: async () => '0x6080604052' }));
     expect(j.byId(id)!.state).toBe('confirmed_incident');
   });
 
   it('raises an incident when the receipt produced no contract address', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
-    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 1, logs: [], contractAddress: null }) }));
+    j.bindHashLegacy(id, TX_DEPLOY);
+    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 1, logs: [], contractAddress: null, hash: TX_LAUNCH }) }));
     expect(j.byId(id)!.state).toBe('confirmed_incident');
   });
 
   /** 7 from finding 1 — one splitter per run. */
   it('refuses a second splitter deployment for the same run', () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     j.recordReceipt(id, { status: 1 });
     j.markConfirmed(id, { token: null, splitterAddress: SPLITTER });
     expect(() => splitterRow(j)).toThrow(/already/i);
@@ -247,7 +291,7 @@ describe('splitter rows are recovered by their own verifier', () => {
   /** A splitter never records a launch fee: it costs gas and nothing else. */
   it('records no launch fee against a splitter row', () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     j.recordReceipt(id, { status: 1 });
     expect(() => j.recordFee(id, FEE)).toThrow(/token_launch/i);
   });
@@ -284,7 +328,7 @@ describe('recovery records the launch fee exactly once', () => {
 
   const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null }),
+    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null, hash: TX_LAUNCH }),
     readLaunchRecord: async () => record(),
     readCode: async () => '0x',
     treasuryAddress: TREASURY,
@@ -293,7 +337,7 @@ describe('recovery records the launch fee exactly once', () => {
 
   it('fills the fee when a crash left it unrecorded', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     j.recordReceipt(id, { status: 1 });   // crashed here: fee never recorded
     expect(j.byId(id)!.feeRecordedWei).toBeNull();
 
@@ -305,7 +349,7 @@ describe('recovery records the launch fee exactly once', () => {
 
   it('records the fee on a landed launch that does not reconcile', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     await recoverCanary(j, deps({ readLaunchRecord: async () => null }));
     expect(j.byId(id)!.state).toBe('confirmed_incident');
     // The fee was spent whether or not anybody can say what was launched.
@@ -314,7 +358,7 @@ describe('recovery records the launch fee exactly once', () => {
 
   it('adds nothing on a second recovery pass', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     await recoverCanary(j, deps());
     await recoverCanary(j, deps());
     expect(j.recordedFeeTotalWei()).toBe(FEE);
@@ -322,15 +366,15 @@ describe('recovery records the launch fee exactly once', () => {
 
   it('records no fee for a reverted launch', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
-    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null }) }));
+    j.bindHashLegacy(id, TX_LAUNCH);
+    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null, hash: TX_LAUNCH }) }));
     expect(j.byId(id)!.feeRecordedWei).toBeNull();
     expect(j.recordedFeeTotalWei()).toBe(0n);
   });
 
   it('records no fee while the receipt is still unknown', async () => {
     const id = launchRow(j);
-    j.bindHashLegacy(id, '0xabc');
+    j.bindHashLegacy(id, TX_LAUNCH);
     await recoverCanary(j, deps({ readReceipt: async () => null }));
     expect(j.byId(id)!.feeRecordedWei).toBeNull();
   });
@@ -338,8 +382,8 @@ describe('recovery records the launch fee exactly once', () => {
   /** A splitter costs gas, never the protocol fee. */
   it('records no launch fee against a recovered splitter', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
-    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER }) }));
+    j.bindHashLegacy(id, TX_DEPLOY);
+    await recoverCanary(j, deps({ readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER, hash: TX_DEPLOY }) }));
     expect(j.byId(id)!.feeRecordedWei).toBeNull();
     expect(j.recordedFeeTotalWei()).toBe(0n);
   });
@@ -372,7 +416,7 @@ describe('recovery requires the splitter to speak for itself', () => {
 
   const base = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER }),
+    readReceipt: async () => ({ status: 1, logs: [], contractAddress: SPLITTER, hash: TX_DEPLOY }),
     readLaunchRecord: async () => record(),
     readCode: async () => GOOD_CODE,
     treasuryAddress: TREASURY,
@@ -381,7 +425,7 @@ describe('recovery requires the splitter to speak for itself', () => {
 
   it('leaves an incident when the getters cannot be read at all', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     await recoverCanary(j, base({ readSplitterBindings: async () => { throw new Error('RPC down'); } }));
     const row = j.byId(id)!;
     expect(row.state).toBe('confirmed_incident');
@@ -390,7 +434,7 @@ describe('recovery requires the splitter to speak for itself', () => {
 
   it('leaves an incident when no getter reader is supplied at all', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     await recoverCanary(j, base());
     expect(j.byId(id)!.state).toBe('confirmed_incident');
   });
@@ -398,7 +442,7 @@ describe('recovery requires the splitter to speak for itself', () => {
   /** A contract that names someone else's treasury is refused whatever the bytes say. */
   it('leaves an incident when a getter names a foreign address', async () => {
     const id = splitterRow(j);
-    j.bindHashLegacy(id, '0xdeploy');
+    j.bindHashLegacy(id, TX_DEPLOY);
     await recoverCanary(
       j,
       base({

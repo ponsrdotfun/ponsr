@@ -86,7 +86,7 @@ describe('canary incident recovery reads, and only reads', () => {
 
   const deps = (over: Partial<CanaryRecoveryDeps> = {}): CanaryRecoveryDeps => ({
     resolveDeployment: (id) => (id === D.id ? D : null),
-    readReceipt: async () => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null }),
+    readReceipt: async (h: string) => ({ status: 1, logs: [launchedLog(D.factory)], contractAddress: null, hash: h, gasUsed: 90_000n, gasPriceWei: 2_000_000_000n }),
     readLaunchRecord: async () => record(),
     readCode: async () => '0x',
     treasuryAddress: TREASURY,
@@ -131,7 +131,7 @@ describe('canary incident recovery reads, and only reads', () => {
     const foreign = '0x000000000000000000000000000000000000beef';
     const results = await recoverCanary(
       j,
-      deps({ readReceipt: async () => ({ status: 1, logs: [launchedLog(foreign)], contractAddress: null }) })
+      deps({ readReceipt: async (h: string) => ({ status: 1, logs: [launchedLog(foreign)], contractAddress: null, hash: h, gasUsed: 90_000n, gasPriceWei: 2_000_000_000n }) })
     );
     expect(results[0].confirmed).toBe(false);
     expect(j.byId(id)!.state).toBe('confirmed_incident');

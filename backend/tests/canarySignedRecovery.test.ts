@@ -243,7 +243,7 @@ describe('a landed signed transaction still reconciles exactly once', () => {
     const { id } = await signedRow(journal);
 
     const deps = baseDeps({
-      readReceipt: async () => ({ status: 1, logs: [], contractAddress: null }),
+      readReceipt: async (h: string) => ({ status: 1, logs: [], contractAddress: null, hash: h, gasUsed: 90_000n, gasPriceWei: 2_000_000_000n }),
       readLaunchRecord: async () => null,
     });
 
@@ -262,10 +262,16 @@ describe('a landed signed transaction still reconciles exactly once', () => {
     const { id } = await signedRow(journal);
     const results = await recoverCanary(
       journal,
-      baseDeps({ readReceipt: async () => ({ status: 0, logs: [], contractAddress: null }) })
+      baseDeps({ readReceipt: async (h: string) => ({ status: 0, logs: [], contractAddress: null, hash: h, gasUsed: 21_000n, gasPriceWei: 2_000_000_000n }) })
     );
-    expect(results[0].problems).toContain('reverted on chain');
+    expect(results[0].problems.join(' ')).toMatch(/reverted on chain/);
     expect(journal.byId(id)!.state).toBe('receipt_reverted');
+    /**
+     * The revert still burned gas, and it is counted. 21,000 x 2 gwei = 4.2e13 wei. Accounting
+     * it as zero would let a retry under this run id draw the full combined budget again.
+     */
+    expect(journal.byId(id)!.actualGasCostWei).toBe(42_000_000_000_000n);
+    expect(journal.actualGasSpentWei('r')).toBe(42_000_000_000_000n);
     journal.close();
   });
 });

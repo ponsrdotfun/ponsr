@@ -47,7 +47,7 @@ import { admitCanarySpend, readBotRollingSpend } from '../src/canarySpend';
 import { decideCanaryPhase } from '../src/canaryReporting';
 import { verifyDeployedSplitter } from '../src/splitterVerifier';
 import { signAndPersist, broadcastPersisted, requirePreSigning } from '../src/signedTxFlow';
-import { gasAllowanceForNext, reconcileCombinedGas } from '../src/canaryGasBudget';
+import { gasAllowanceForNext, reconcileCombinedGas, receiptBindingProblem } from '../src/canaryGasBudget';
 import { pinnedTreasuryAddress, assertSignerMatchesPin, assertRawKeyNotOnMainnet } from '../src/canarySignerBoundary';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -599,6 +599,23 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
        * shared verifier below may confirm.
        */
       onReceipt: (r) => {
+        /**
+         * BIND FIRST, then transition. A receipt that cannot be shown to describe this row's
+         * transaction may not move its state and may not contribute gas: the row becomes a
+         * durable incident instead, because a receipt for something else is not a weaker
+         * answer about this transaction, it is an answer about a different one.
+         */
+        const signedHashPre = journal.byId(splitterRowId)?.txHash ?? null;
+        if (r.status !== null) {
+          const binding = receiptBindingProblem(signedHashPre, r.hash);
+          if (binding) {
+            journal.markIncidentAnyState(splitterRowId, {
+              problems: [`splitter receipt is not bound to the signed transaction: ${binding}`],
+              token: null,
+            });
+            throw new Error(`splitter receipt binding failed: ${binding}`);
+          }
+        }
         journal.recordReceipt(splitterRowId, { status: r.status });
         /**
          * The splitter's REAL cost, persisted before the launch is even considered.
@@ -608,15 +625,31 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
          * carrying both fields; anything else leaves it UNKNOWN, and unknown blocks the
          * launch rather than silently handing it the full budget again.
          */
-        const signedHash = journal.byId(splitterRowId)?.txHash ?? null;
-        if (r.status === 1 && r.gasUsed !== null && r.gasPriceWei !== null && signedHash) {
-          // Bound to the hash persisted at SIGNING, so evidence can only be accounted
-          // against the transaction this row actually is.
-          journal.recordGasEvidence(splitterRowId, {
-            txHash: signedHash,
-            gasUsed: r.gasUsed,
-            gasPriceWei: r.gasPriceWei,
-          });
+        /**
+         * EVERY MINED RECEIPT, status 0 or 1. A reverted transaction still burns gas, and
+         * accounting it as zero would hand a retry the whole budget again.
+         *
+         * A mined receipt with no usable gas fields is NOT allowed to rest as a quiet terminal
+         * revert: the run's spent total would silently omit real money. It becomes an incident,
+         * which blocks, and says why.
+         */
+        if (r.status !== null) {
+          if (r.gasUsed !== null && r.gasPriceWei !== null) {
+            journal.recordGasEvidence(splitterRowId, {
+              txHash: r.hash!,
+              gasUsed: r.gasUsed,
+              gasPriceWei: r.gasPriceWei,
+            });
+          } else {
+            journal.markIncidentAnyState(splitterRowId, {
+              problems: [
+                'the splitter receipt carries no usable gas fields, so what this attempt cost ' +
+                  'is UNKNOWN. The remaining combined budget cannot be computed and nothing ' +
+                  'further may be signed.',
+              ],
+              token: null,
+            });
+          }
         }
       },
     }
@@ -807,24 +840,40 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
    * journal was taught to accept null in round 2 and this caller was never changed -- so
    * the unit test passed against the journal while the executable path stayed broken.
    */
+  /**
+   * BIND FIRST. The receipt must prove it describes the transaction this row signed before it
+   * is allowed to move the row's state or contribute a single wei of gas accounting.
+   */
+  if (receipt) {
+    const binding = receiptBindingProblem(journal.byId(launchRowId)?.txHash ?? null, receipt.hash);
+    if (binding) {
+      journal.markIncidentAnyState(launchRowId, {
+        problems: [`launch receipt is not bound to the signed transaction: ${binding}`],
+        token: null,
+      });
+      throw new Error(`launch receipt binding failed: ${binding}`);
+    }
+  }
+
   journal.recordReceipt(launchRowId, { status: receipt ? Number(receipt.status) : null });
 
   /**
-   * The launch's real gas cost, and then the closing reconciliation.
+   * The launch's real gas cost -- whether it succeeded or reverted -- and then the closing
+   * reconciliation.
    *
-   * Persisted against the hash fixed at signing. The sum of both operations must fit the one
-   * reserve; an over-budget ACTUAL result cannot be prevented at this point -- the money is
-   * already spent -- so it is reported as an incident rather than folded into a success.
+   * A reverted launch burns gas and must count against the one reserve. Its FEE is a separate
+   * matter and stays unrecorded, because a reverted launch did not buy a launch: gas and value
+   * are accounted separately throughout.
+   *
+   * An over-budget ACTUAL result cannot be prevented here -- the money is already spent -- so
+   * it is reported as an incident rather than folded into a success.
    */
-  if (receipt && Number(receipt.status) === 1) {
-    const signedLaunchHash = journal.byId(launchRowId)?.txHash ?? null;
-    if (signedLaunchHash) {
-      journal.recordGasEvidence(launchRowId, {
-        txHash: signedLaunchHash,
-        gasUsed: receipt.gasUsed,
-        gasPriceWei: receipt.gasPrice,
-      });
-    }
+  if (receipt) {
+    journal.recordGasEvidence(launchRowId, {
+      txHash: receipt.hash,
+      gasUsed: receipt.gasUsed,
+      gasPriceWei: receipt.gasPrice,
+    });
     const combined = reconcileCombinedGas(COMBINED_GAS_BUDGET_WEI, journal.actualGasSpentWei(RUN_ID));
     line('combined gas', combined.detail);
     if (!combined.ok) {
