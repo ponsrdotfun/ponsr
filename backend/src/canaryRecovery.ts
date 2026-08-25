@@ -8,6 +8,7 @@ import {
 } from './launchAssertions';
 import { decodeCurrentV2Launch } from './ponsV2CurrentEncoder';
 import { verifyDeployedSplitter } from './splitterVerifier';
+import { receiptBindingProblem } from './canaryGasBudget';
 
 /**
  * Advancing a canary run that was interrupted, using reads alone.
@@ -39,6 +40,14 @@ export interface CanaryRecoveryDeps {
     /** Canonical gas evidence. Absent leaves the cost UNKNOWN, which blocks rather than zeroes. */
     gasUsed?: bigint | null;
     gasPriceWei?: bigint | null;
+    /**
+     * The RECEIPT'S OWN transaction hash (`receipt.hash` on ethers 6.17.0).
+     *
+     * Asking for the receipt of hash A is not proof that the returned object describes hash A.
+     * Without this the caller compares the requested hash against the row's hash -- the same
+     * value twice -- and learns nothing about the object carrying the gas figures.
+     */
+    hash?: string | null;
   } | null>;
   readLaunchRecord: (
     deployment: PonsDeployment,
@@ -188,6 +197,24 @@ export async function recoverCanary(
         problems.push(`receipt could not be read: ${(err as Error)?.message ?? err}`);
       }
 
+      /**
+       * A mined receipt must prove it is THIS transaction's before it may do anything.
+       *
+       * Checked before `recordReceipt`, before gas accounting and before confirmation, so a
+       * receipt describing some other transaction cannot advance the row, contribute gas, or
+       * be read as a confirmation. Recorded as a durable incident: nothing about re-reading
+       * the chain repairs a provider that answered about the wrong object.
+       */
+      if (receipt && receipt.status !== null) {
+        const binding = receiptBindingProblem(row.txHash, receipt.hash);
+        if (binding) {
+          const all = [`receipt is not bound to the signed transaction: ${binding}`];
+          journal.markIncidentAnyState(row.id, { problems: all, token: null });
+          results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: all });
+          continue;
+        }
+      }
+
       if (!receipt || receipt.status === null) {
         /**
          * No receipt. For a SIGNED row the chain can still narrow this considerably.
@@ -261,8 +288,56 @@ export async function recoverCanary(
           );
         }
       } else if (receipt.status !== 1) {
+        /**
+         * Reverted, and it still burned gas.
+         *
+         * The cost is persisted BEFORE the row becomes terminal. Without this a reverted
+         * attempt was accounted as zero, so a retry under the same deterministic run id was
+         * handed the whole combined budget again -- the double-authority defect returning
+         * through the failure path instead of the success one.
+         *
+         * A reverted receipt with no usable gas fields does NOT become a quiet terminal
+         * revert: it is an incident, which blocks, because the run's spent total would
+         * otherwise omit real money.
+         */
+        const usable =
+          receipt.gasUsed !== undefined &&
+          receipt.gasUsed !== null &&
+          receipt.gasPriceWei !== undefined &&
+          receipt.gasPriceWei !== null;
+        if (!usable) {
+          const all = [
+            'reverted on chain, and the receipt carries no usable gas fields. What this attempt ' +
+              'cost is UNKNOWN, so the remaining combined budget cannot be computed and nothing ' +
+              'further may be signed.',
+          ];
+          journal.markIncidentAnyState(row.id, { problems: all, token: null });
+          results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: all });
+          continue;
+        }
+        try {
+          journal.recordGasEvidence(row.id, {
+            txHash: receipt.hash!,
+            gasUsed: receipt.gasUsed!,
+            gasPriceWei: receipt.gasPriceWei!,
+          });
+        } catch (err) {
+          const all = [`reverted on chain, and its gas could not be accounted: ${(err as Error)?.message ?? err}`];
+          journal.markIncidentAnyState(row.id, { problems: all, token: null });
+          results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: all });
+          continue;
+        }
         journal.recordReceipt(row.id, { status: 0 });
-        results.push({ id: row.id, op: row.op, txHash: row.txHash, confirmed: false, problems: ['reverted on chain'] });
+        results.push({
+          id: row.id,
+          op: row.op,
+          txHash: row.txHash,
+          confirmed: false,
+          problems: [
+            `reverted on chain; it spent ${receipt.gasUsed! * receipt.gasPriceWei!} wei of gas, ` +
+              'which counts against this run\'s combined budget.',
+          ],
+        });
         continue;
       } else {
         journal.recordReceipt(row.id, { status: 1 });

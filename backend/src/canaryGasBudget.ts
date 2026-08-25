@@ -28,6 +28,40 @@
  * the original defect exactly -- the launch would receive the full budget a second time.
  */
 
+/**
+ * Does this receipt actually describe the transaction the row is about?
+ *
+ * Asking a provider for the receipt of hash A does not prove the object it returned is for
+ * hash A. The previous check compared the row's hash against an argument the caller had copied
+ * from the row's hash -- a value against a copy of itself, which cannot disagree and therefore
+ * proved nothing about where the gas figures came from.
+ *
+ * Returns a problem string, or null when the receipt is bound. Fails closed on a missing or
+ * malformed hash: an unbound receipt is not weaker evidence, it is evidence about an unknown
+ * object.
+ */
+export function receiptBindingProblem(
+  expectedTxHash: string | null,
+  receiptHash: string | null | undefined
+): string | null {
+  if (!expectedTxHash) {
+    return 'the row carries no signed transaction hash, so no receipt can be bound to it';
+  }
+  if (typeof receiptHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(receiptHash)) {
+    return (
+      `the receipt carries no usable transaction hash (${receiptHash ?? 'absent'}), so it cannot ` +
+      `be shown to describe ${expectedTxHash}`
+    );
+  }
+  if (receiptHash.toLowerCase() !== expectedTxHash.toLowerCase()) {
+    return (
+      `the receipt is for ${receiptHash} but this row's transaction is ${expectedTxHash}. ` +
+      'Refusing to account it.'
+    );
+  }
+  return null;
+}
+
 export interface CombinedGasBudget {
   /** The one reserve for the complete run. */
   totalWei: bigint;
