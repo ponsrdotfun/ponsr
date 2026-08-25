@@ -101,6 +101,15 @@ export interface CanaryRow extends PreparedCanary {
   feeRecordedWei: bigint | null;
   /** Immutable. Written once with the fee; never moved by a later update. */
   feeRecordedAt: string | null;
+  /** Canonical gas evidence. NULL means UNKNOWN -- never treat it as zero. */
+  gasUsed: bigint | null;
+  /** The receipt's own `gasPrice`: "the actual gas price used during execution". */
+  gasPriceWei: bigint | null;
+  /** gasUsed x gasPriceWei, recomputed here rather than accepted from a caller. */
+  actualGasCostWei: bigint | null;
+  /** The transaction hash the evidence is bound to. */
+  gasReceiptHash: string | null;
+  gasRecordedAt: string | null;
   preparedAt: string;
   updatedAt: string;
 }
@@ -560,11 +569,28 @@ export class CanaryJournal {
      * recovery path says so rather than inventing an identity for a transaction whose bytes
      * nobody kept.
      */
+    /**
+     * Gas evidence, added for the COMBINED budget.
+     *
+     * `TREASURY_GAS_RESERVE_WEI` is one reserve for the whole two-transaction run, and the
+     * launch's allowance is the total minus what the splitter actually cost. That subtraction
+     * needs the splitter's real cost to survive a crash, so it is persisted rather than held
+     * in a variable.
+     *
+     * Old rows keep NULL in all five columns, which reads as UNKNOWN -- not zero. A fabricated
+     * zero would hand the launch the full budget a second time, which is the defect this
+     * closes.
+     */
     for (const [name, type] of [
       ['sender', 'TEXT'],
       ['nonce', 'INTEGER'],
       ['raw_tx', 'TEXT'],
       ['signed_at', 'TEXT'],
+      ['gas_used', 'TEXT'],
+      ['gas_price_wei', 'TEXT'],
+      ['actual_gas_cost_wei', 'TEXT'],
+      ['gas_receipt_hash', 'TEXT'],
+      ['gas_recorded_at', 'TEXT'],
     ] as const) {
       if (!columns.includes(name)) {
         this.db.exec(`ALTER TABLE canary_tx ADD COLUMN ${name} ${type}`);
@@ -611,6 +637,15 @@ export class CanaryJournal {
       problems: JSON.parse(r.problems),
       feeRecordedWei: r.fee_recorded_wei === null ? null : BigInt(r.fee_recorded_wei),
       feeRecordedAt: r.fee_recorded_at ?? null,
+      gasUsed: r.gas_used === null || r.gas_used === undefined ? null : BigInt(r.gas_used),
+      gasPriceWei:
+        r.gas_price_wei === null || r.gas_price_wei === undefined ? null : BigInt(r.gas_price_wei),
+      actualGasCostWei:
+        r.actual_gas_cost_wei === null || r.actual_gas_cost_wei === undefined
+          ? null
+          : BigInt(r.actual_gas_cost_wei),
+      gasReceiptHash: r.gas_receipt_hash ?? null,
+      gasRecordedAt: r.gas_recorded_at ?? null,
       preparedAt: r.prepared_at,
       updatedAt: r.updated_at,
     };
@@ -894,6 +929,105 @@ export class CanaryJournal {
    * Conditional on `fee_recorded_wei IS NULL`, so a repeated recovery pass cannot
    * double-count. See canarySpend.ts for why the accounting matters.
    */
+  /**
+   * Persists what a transaction ACTUALLY cost in gas, bound to its receipt.
+   *
+   * The product is computed here from `gasUsed x gasPrice`, never accepted from a caller. A
+   * caller that arrives with a total has already done the arithmetic somewhere this code
+   * cannot see, and the whole point of the combined budget is that the launch's allowance is
+   * derived from a number nobody could have adjusted.
+   *
+   * `gasPrice` on an ethers receipt is documented as "the actual gas price used during
+   * execution", and ethers' own `receipt.fee` is exactly `gasUsed * gasPrice` -- verified in
+   * the installed 6.17.0 rather than assumed.
+   *
+   * Immutable and idempotent: recording the identical evidence twice is a no-op, and anything
+   * that contradicts what is already there throws rather than overwriting. A changed cost
+   * would silently change how much authority the next signature receives.
+   */
+  recordGasEvidence(
+    id: number,
+    evidence: { txHash: string; gasUsed: bigint; gasPriceWei: bigint }
+  ): void {
+    const row = this.byId(id);
+    if (!row) throw new Error(`recordGasEvidence(${id}): no such row`);
+
+    if (typeof evidence.gasUsed !== 'bigint' || typeof evidence.gasPriceWei !== 'bigint') {
+      throw new Error(`row ${id}: gas evidence must be bigints, not a formatted string`);
+    }
+    if (evidence.gasUsed <= 0n || evidence.gasPriceWei <= 0n) {
+      throw new Error(
+        `row ${id}: gasUsed ${evidence.gasUsed} and gasPrice ${evidence.gasPriceWei} must both ` +
+          'be positive. A zero or negative reading is not evidence of a free transaction.'
+      );
+    }
+    /**
+     * Bound to the hash this row already carries. A receipt for some other transaction is not
+     * weaker evidence about this one, it is evidence about something else.
+     */
+    if (!row.txHash || row.txHash.toLowerCase() !== evidence.txHash.toLowerCase()) {
+      throw new Error(
+        `row ${id}: gas evidence is for ${evidence.txHash} but the row's transaction is ` +
+          `${row.txHash ?? '(none)'}. Refusing to account gas against the wrong transaction.`
+      );
+    }
+
+    const cost = evidence.gasUsed * evidence.gasPriceWei;
+
+    if (row.actualGasCostWei !== null) {
+      const same =
+        row.gasUsed === evidence.gasUsed &&
+        row.gasPriceWei === evidence.gasPriceWei &&
+        row.actualGasCostWei === cost &&
+        (row.gasReceiptHash ?? '').toLowerCase() === evidence.txHash.toLowerCase();
+      if (same) return; // idempotent
+      throw new Error(
+        `row ${id}: gas evidence already recorded as ${row.actualGasCostWei} wei and the new ` +
+          `reading says ${cost} wei. A contradiction is an incident, not an update.`
+      );
+    }
+
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE canary_tx
+           SET gas_used = ?, gas_price_wei = ?, actual_gas_cost_wei = ?, gas_receipt_hash = ?,
+               gas_recorded_at = ?, updated_at = ?
+         WHERE id = ? AND actual_gas_cost_wei IS NULL`
+      )
+      .run(
+        evidence.gasUsed.toString(),
+        evidence.gasPriceWei.toString(),
+        cost.toString(),
+        evidence.txHash,
+        now,
+        now,
+        id
+      );
+  }
+
+  /**
+   * What this run has actually spent in gas so far, or null when any part is UNKNOWN.
+   *
+   * Null is deliberately contagious. If one settled operation has no gas evidence, the
+   * remaining budget cannot be computed, and the correct answer is "I do not know" rather than
+   * a smaller number that happens to be safe today.
+   */
+  actualGasSpentWei(runId: string): bigint | null {
+    const rows = this.db
+      .prepare(
+        `SELECT actual_gas_cost_wei FROM canary_tx
+          WHERE run_id = ? AND state IN ('broadcast','receipt_success','confirmed','confirmed_incident')`
+      )
+      .all(runId) as Array<{ actual_gas_cost_wei: string | null }>;
+    let total = 0n;
+    for (const r of rows) {
+      if (r.actual_gas_cost_wei === null) return null;
+      total += BigInt(r.actual_gas_cost_wei);
+    }
+    return total;
+  }
+
   recordFee(id: number, wei: bigint): boolean {
     const row = this.byId(id);
     if (!row) throw new Error(`recordFee(${id}): no such row`);

@@ -47,6 +47,7 @@ import { admitCanarySpend, readBotRollingSpend } from '../src/canarySpend';
 import { decideCanaryPhase } from '../src/canaryReporting';
 import { verifyDeployedSplitter } from '../src/splitterVerifier';
 import { signAndPersist, broadcastPersisted, requirePreSigning } from '../src/signedTxFlow';
+import { gasAllowanceForNext, reconcileCombinedGas } from '../src/canaryGasBudget';
 import { pinnedTreasuryAddress, assertSignerMatchesPin, assertRawKeyNotOnMainnet } from '../src/canarySignerBoundary';
 import { deploySplitter } from '../src/splitterDeployer';
 import { formatEth } from '../src/treasuryPolicy';
@@ -74,6 +75,14 @@ const JOURNAL_PATH = process.env.CANARY_JOURNAL ?? './data/canary-journal.sqlite
 const RUN_ID = process.env.CANARY_RUN_ID ?? `canary:${TOKEN_SYMBOL}`;
 /** The bot's own accounted 24h spend, from its /status. See canarySpend.ts. */
 const BOT_STATUS_URL = process.env.BOT_STATUS_URL ?? '';
+/**
+ * ONE gas reserve for the COMPLETE two-transaction run, not one per transaction.
+ *
+ * Named locally so the meaning travels with the value: TREASURY_GAS_RESERVE_WEI used to be
+ * handed to both irreversible operations independently, which authorised twice the reserve
+ * anybody had agreed to. See src/canaryGasBudget.ts.
+ */
+const COMBINED_GAS_BUDGET_WEI = preflightEnv().TREASURY_GAS_RESERVE_WEI;
 const TOKEN_DESCRIPTION =
   process.env.PHASE_B_DESCRIPTION ??
   'Validation launch for ponsr.fun. Not a project, not an investment, holds no value.';
@@ -564,10 +573,18 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
            * a creation's value lands in the contract being created and the sender writes that
            * contract. The signer would refuse it; this refuses it earlier, and says why.
            *
-           * Gas is budgeted separately from value, and from the reserve that exists precisely
-           * so both transactions of one launch can pay for themselves.
+           * Gas is budgeted separately from value. The splitter is the FIRST of two
+           * transactions sharing ONE reserve, so it may draw against the whole of it -- the
+           * launch below is then allowed only what is left, which is the point.
            */
-          ceilings: { maxValueWei: 0n, maxGasCostWei: preflightEnv().TREASURY_GAS_RESERVE_WEI },
+          ceilings: {
+            maxValueWei: 0n,
+            maxGasCostWei: gasAllowanceForNext(
+              'splitter creation',
+              { totalWei: COMBINED_GAS_BUDGET_WEI, spentWei: journal.actualGasSpentWei(RUN_ID) },
+              0n
+            ),
+          },
         });
         return broadcastPersisted({ broadcaster }, journal, splitterRowId);
       },
@@ -583,6 +600,24 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
        */
       onReceipt: (r) => {
         journal.recordReceipt(splitterRowId, { status: r.status });
+        /**
+         * The splitter's REAL cost, persisted before the launch is even considered.
+         *
+         * The launch's allowance is the combined budget minus this number, so it has to
+         * survive a crash between the two transactions. Recorded only for a landed receipt
+         * carrying both fields; anything else leaves it UNKNOWN, and unknown blocks the
+         * launch rather than silently handing it the full budget again.
+         */
+        const signedHash = journal.byId(splitterRowId)?.txHash ?? null;
+        if (r.status === 1 && r.gasUsed !== null && r.gasPriceWei !== null && signedHash) {
+          // Bound to the hash persisted at SIGNING, so evidence can only be accounted
+          // against the transaction this row actually is.
+          journal.recordGasEvidence(splitterRowId, {
+            txHash: signedHash,
+            gasUsed: r.gasUsed,
+            gasPriceWei: r.gasPriceWei,
+          });
+        }
       },
     }
   );
@@ -741,9 +776,22 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
        * Kept separate from the gas budget on purpose: adding them would let a generous gas
        * allowance quietly raise how much value the transaction may carry.
        */
+      /**
+       * ONLY WHAT IS LEFT.
+       *
+       * This passed the full TREASURY_GAS_RESERVE_WEI, exactly as the splitter did, so one run
+       * could authorise 0.002 ETH of gas twice against a reserve chosen as 0.002 ETH for the
+       * whole run. The remainder is computed from the splitter's PERSISTED canonical receipt
+       * cost, so a crash between the two transactions cannot restore the full budget, and an
+       * unknown splitter cost refuses here rather than defaulting to generous.
+       */
       ceilings: {
         maxValueWei: preflightEnv().TREASURY_MAX_FEE_WEI,
-        maxGasCostWei: preflightEnv().TREASURY_GAS_RESERVE_WEI,
+        maxGasCostWei: gasAllowanceForNext(
+          'token launch',
+          { totalWei: COMBINED_GAS_BUDGET_WEI, spentWei: journal.actualGasSpentWei(RUN_ID) },
+          0n
+        ),
       },
     }
   );
@@ -760,6 +808,30 @@ ABORTING before the splitter deploy: ${recheck.reason}`);
    * the unit test passed against the journal while the executable path stayed broken.
    */
   journal.recordReceipt(launchRowId, { status: receipt ? Number(receipt.status) : null });
+
+  /**
+   * The launch's real gas cost, and then the closing reconciliation.
+   *
+   * Persisted against the hash fixed at signing. The sum of both operations must fit the one
+   * reserve; an over-budget ACTUAL result cannot be prevented at this point -- the money is
+   * already spent -- so it is reported as an incident rather than folded into a success.
+   */
+  if (receipt && Number(receipt.status) === 1) {
+    const signedLaunchHash = journal.byId(launchRowId)?.txHash ?? null;
+    if (signedLaunchHash) {
+      journal.recordGasEvidence(launchRowId, {
+        txHash: signedLaunchHash,
+        gasUsed: receipt.gasUsed,
+        gasPriceWei: receipt.gasPrice,
+      });
+    }
+    const combined = reconcileCombinedGas(COMBINED_GAS_BUDGET_WEI, journal.actualGasSpentWei(RUN_ID));
+    line('combined gas', combined.detail);
+    if (!combined.ok) {
+      console.error();
+      console.error(combined.detail);
+    }
+  }
 
   /**
    * Two outcomes, two different things to say.

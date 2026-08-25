@@ -68,6 +68,11 @@ async function main() {
         status: r.status === null || r.status === undefined ? null : Number(r.status),
         logs: r.logs as unknown as readonly { address?: string; topics: readonly string[]; data: string }[],
         contractAddress: r.contractAddress ?? null,
+        // Canonical, from the receipt itself. `gasPrice` is documented by ethers as "the
+        // actual gas price used during execution", and its own `receipt.fee` is exactly
+        // gasUsed * gasPrice -- so this is the same product, recomputed by the journal.
+        gasUsed: r.gasUsed,
+        gasPriceWei: r.gasPrice,
       };
     },
     readLaunchRecord: async (deployment: PonsDeployment, token: string) => {

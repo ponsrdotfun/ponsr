@@ -180,7 +180,7 @@ export async function deploySplitter(
      */
     sendVia?: (initcode: string) => Promise<{ hash: string; wait: () => Promise<ethers.TransactionReceipt | null> }>;
     /** `status: null` means no receipt was seen — which is not a revert. */
-    onReceipt?: (r: { status: number | null; contractAddress: string | null }) => void | Promise<void>;
+    onReceipt?: (r: { status: number | null; contractAddress: string | null; gasUsed: bigint | null; gasPriceWei: bigint | null }) => void | Promise<void>;
   }
 ): Promise<SplitterDeployResult> {
   if (provider) {
@@ -260,6 +260,17 @@ export async function deploySplitter(
   await hooks?.onReceipt?.({
     status: receipt ? Number(receipt.status) : null,
     contractAddress: receipt?.contractAddress ?? null,
+    /**
+     * Canonical gas evidence, passed straight through.
+     *
+     * `gasPrice` on a receipt is "the actual gas price used during execution" -- ethers' own
+     * `receipt.fee` is `gasUsed * gasPrice`. The caller needs both to subtract this
+     * transaction's real cost from the run's single combined gas budget before the second
+     * signature is requested. Null when there is no receipt, which stays UNKNOWN rather than
+     * becoming a convenient zero.
+     */
+    gasUsed: receipt ? receipt.gasUsed : null,
+    gasPriceWei: receipt ? receipt.gasPrice : null,
   });
 
   if (!receipt || !receipt.contractAddress) {
