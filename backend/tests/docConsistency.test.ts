@@ -121,8 +121,11 @@ describe('the migration cannot silently enable public launching', () => {
 
   it('records the actual production sequence instead of a stale v1-first rollout', () => {
     const text = claims('docs/ROLLOUT-RUNBOOK.md');
-    expect(text).toMatch(/Production already carries `PONS_FACTORY_VERSION=v2`/);
+    expect(text).toMatch(/runs `pons-v2-current-7ed`/);
     expect(text).toMatch(/fly secrets set PUBLIC_LAUNCH_ENABLED=false/);
+    // The lever the old sequence flipped no longer exists. A runbook step naming it would
+    // send an operator to set a variable nothing reads, and then to trust the result.
+    expect(text).not.toMatch(/fly secrets set PONS_FACTORY_VERSION/);
     expect(text).not.toMatch(/Deploy the new code with `PONS_FACTORY_VERSION` \*\*still `v1`/);
   });
 });

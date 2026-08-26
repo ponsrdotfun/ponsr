@@ -16,7 +16,7 @@
  *     -> v1 factory   ALLOWED
  *     -> v2 factory   DENIED by the Turnkey policy
  *
- * So switching `PONS_FACTORY_VERSION` to v2 without running this produces a bot that
+ * So moving the executable deployment forward without running this produces a bot that
  * passes every check it makes of pons, gets a green light, and is then refused by its
  * own signer. That failure would arrive after the splitter had already been deployed
  * and paid for.
@@ -82,7 +82,7 @@ async function main() {
   // what happened: the previous plan targeted 0x7E1EAbd5…, a deployment pons replaced
   // on 2026-08-03 and which no longer accepts the calldata this bot builds.
   const target = executableDeployment();
-  const v1Addr = String(config.PONS_FACTORY_ADDRESS).toLowerCase();
+  const v1Addr = deploymentById('pons-v1').factory.toLowerCase();
   const v2Addr = target.factory.toLowerCase();
   const superseded = deploymentById('pons-v2-legacy-7e1').factory.toLowerCase();
 
@@ -215,7 +215,7 @@ async function main() {
   const policyId = policy?.policyId ?? policy?.activity?.result?.createPolicyResult?.policyId;
   line('policyId', policyId);
 
-  console.log('\nDone. Confirm it actually bites before switching PONS_FACTORY_VERSION:');
+  console.log('\nDone. Confirm it actually bites before moving the executable deployment:');
   console.log('  npx tsx scripts/turnkey-verify-policy.ts');
   console.log('\nThat script must still show an arbitrary destination DENIED. If this policy');
   console.log('were mis-scoped, the bot would be able to send the treasury anywhere, and a');

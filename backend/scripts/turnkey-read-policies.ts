@@ -27,7 +27,7 @@
  * neither needed nor wanted here.
  */
 import { config } from '../src/config';
-import { DEPLOYMENTS, executableDeployment } from '../src/deployments';
+import { DEPLOYMENTS, executableDeployment, deploymentById } from '../src/deployments';
 
 function line(label: string, value: unknown) {
   console.log(`  ${label.padEnd(28)} ${value}`);
@@ -42,7 +42,7 @@ function describeTarget(condition: string): string {
       hits.push(d.executable ? `${d.id} (EXECUTABLE)` : `${d.id} (superseded)`);
     }
   }
-  const v1 = String(config.PONS_FACTORY_ADDRESS ?? '').toLowerCase();
+  const v1 = deploymentById('pons-v1').factory.toLowerCase();
   if (v1 && c.includes(v1)) hits.push('v1 factory');
   // An empty `to` is a contract creation -- how the per-launch FeeSplitter is deployed.
   if (/eth\.tx\.to\s*==\s*''/.test(c)) hits.push('contract creation');

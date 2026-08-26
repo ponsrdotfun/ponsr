@@ -32,6 +32,16 @@ export interface FakeChainOptions {
   delays?: Record<string, number>;
   /** Methods that never answer at all. The socket is simply left open. */
   hang?: string[];
+  /**
+   * `eth_call` results, keyed by the 4-byte selector of the calldata (with `0x`).
+   *
+   * Needed so a launch can be BUILT against a real transport rather than a stand-in. A
+   * target that only reports `factoryAddress` proves what the object says about itself;
+   * driving `build()` through an actual provider proves what ends up in `to`, which is
+   * the field that decides where money goes. Anything not listed falls through to the
+   * default empty result, exactly as before.
+   */
+  calls?: Record<string, string>;
 }
 
 export interface FakeChain {
@@ -81,6 +91,11 @@ export async function startFakeChain(options: FakeChainOptions = {}): Promise<Fa
       return { id: p.id, jsonrpc: '2.0', result: state.code ?? MATCHING_CODE };
     }
     if (m === 'eth_blockNumber') return { id: p.id, jsonrpc: '2.0', result: '0x10' };
+    if (m === 'eth_call' && state.calls) {
+      const data = String(p.params?.[0]?.data ?? '');
+      const hit = state.calls[data.slice(0, 10)];
+      if (hit !== undefined) return { id: p.id, jsonrpc: '2.0', result: hit };
+    }
     return { id: p.id, jsonrpc: '2.0', result: '0x' };
   };
 

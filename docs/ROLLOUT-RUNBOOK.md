@@ -24,9 +24,11 @@ Every command above runs a **pinned local binary** through an npm script. Do not
 `npx` during a rollout: it fetches whatever the registry serves at that moment, and
 this sequence moves treasury funds.
 
-The `--target-deployment` flag is not optional. Without it the verifier passes on
-whatever `PONS_FACTORY_VERSION` currently names -- and §3 flips that setting minutes
-later, so a gate that went green about the old value proves nothing about the new one.
+The `--target-deployment` flag names the deployment the ROLLOUT needs, and it must be
+the executable one -- the verifier now refuses a superseded id outright, because v1 and
+v2-legacy are deny-test destinations there and a green tick about one would mean the
+opposite of what it says. It stays required so the gate is checked against the
+deployment being rolled out rather than merely against whatever is executable today.
 
 **Two of these gates SIGN.** `probe:creation` and `verify:policy` send real signing
 requests to Turnkey. They never broadcast and no value moves -- but they use the bot's
@@ -116,10 +118,13 @@ maintenance ceremony is **not LIVE-tested** by this repository work.
 
 ## 2. Fence public launching before the deploy
 
-Production already carries `PONS_FACTORY_VERSION=v2`. The stale running image interprets that
-as the superseded factory; current `main` interprets it as `pons-v2-current-7ed`, where the
-public gate is open. **Deploying is therefore the migration cut-over.** The old instruction to
-deploy under v1 and flip afterwards is not the state that exists and must not be followed.
+Production has already been migrated: it runs `pons-v2-current-7ed`, where the public gate is
+open. There is no longer a `PONS_FACTORY_VERSION` setting to carry, agree with, or flip -- it
+was removed on 2026-08-26 because its default was `v1`, so an environment that simply did not
+mention it launched through the superseded factory. Which contract a launch goes to is decided
+by the registry in `backend/src/deployments.ts`, which refuses to run unless exactly one entry
+is executable. The old instruction to deploy under v1 and flip afterwards must not be
+followed; it describes a lever that no longer exists.
 
 Set Ponsr's independent gate first. The stale image does not read this setting, so its existing
 behaviour is unchanged; current code reads it before the paid parser, wallet creation, chain
@@ -127,10 +132,10 @@ reads, splitter deployment, signing, or broadcast.
 
 ```bash
 fly secrets set PUBLIC_LAUNCH_ENABLED=false
-fly secrets list | grep -E '^(PUBLIC_LAUNCH_ENABLED|PONS_FACTORY_VERSION|TURNKEY_POLICY_CONFIRMED)'
+fly secrets list | grep -E '^(PUBLIC_LAUNCH_ENABLED|TURNKEY_POLICY_CONFIRMED)'
 ```
 
-Abort unless all three names are present, the signer-active probes in §0 passed for the current
+Abort unless both names are present, the signer-active probes in §0 passed for the current
 deployment, and `TURNKEY_POLICY_CONFIRMED` has been set deliberately. Secret values are not
 shown by Fly; the post-deploy status check below proves how the running process interpreted the
 public-launch gate.
@@ -326,9 +331,9 @@ printf '%s\n' 'ROLLBACK_EXPECTED_DEPLOYMENT=pons-v2-superseded-a5a' \
 | database | restore from `backup-manifest-$STAMP.json` — ordered procedure below | operator |
 | website | `git revert -m 1 <merge commit>` then push; Netlify republishes from `main` | operator |
 
-The captured stale image interprets the production value `PONS_FACTORY_VERSION=v2` as
-`pons-v2-superseded-a5a`; it does **not** report a named deployment check. After restoring it,
-prove the old image/config tuple is the one running rather than falsely expecting `pons-v1`:
+A captured pre-migration image interprets its own configuration differently from current
+`main`, and does **not** report a named deployment check. After restoring one, prove the old
+image/config tuple is what is running rather than falsely expecting `pons-v1`:
 
 ```bash
 grep -Fx 'ROLLBACK_EXPECTED_DEPLOYMENT=pons-v2-superseded-a5a' ./rollback-target.txt

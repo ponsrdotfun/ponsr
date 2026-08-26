@@ -22,6 +22,7 @@ import { ethers } from 'ethers';
 import { config, requireConfig } from '../src/config';
 import { createProvider } from '../src/chainClient';
 import lockerArtifact from '../src/abi/ponsLaunchLocker.json';
+import { deploymentById } from '../src/deployments';
 
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -61,7 +62,10 @@ async function main() {
   const provider = createProvider();
   const wallet = new ethers.Wallet(requireConfig('TREASURY_SIGNER_PRIVATE_KEY'), provider);
 
-  const locker = new ethers.Contract(config.PONS_LOCKER_ADDRESS, lockerArtifact.abi, wallet);
+  // The v1 locker, from the registry. v1 PUSHES fees from the locker rather than
+  // escrowing them, so `pons-v1`'s `feeEscrow` IS the locker -- bound to that deployment
+  // rather than settable on its own, where it could name a contract v1 never used.
+  const locker = new ethers.Contract(deploymentById('pons-v1').feeEscrow, lockerArtifact.abi, wallet);
   const split = new ethers.Contract(splitter, SPLITTER_ABI, wallet);
 
   const creator = (await split.creator()) as string;

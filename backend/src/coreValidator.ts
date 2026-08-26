@@ -1,4 +1,4 @@
-import { CORE_SCHEMA, CORE_VERSION, CoreEvidence, CORE_PROBLEMS } from './statusCore';
+import { CORE_SCHEMA, CORE_VERSION, CoreEvidence, CORE_PROBLEMS, CORE_DEPENDENCIES } from './statusCore';
 import { DEPENDENCY_NAMES, DEPENDENCY_OUTCOMES } from './dependencyTiming';
 import {
   parseAddress,
@@ -116,6 +116,8 @@ export type ValidationCode =
   | 'spend-unknown'
   | 'spend-exhausted'
   | 'public-gate-unexpected'
+  | 'dependency-not-ok'
+  | 'dependency-missing'
   | 'request-failed'
   | 'response-too-large';
 
@@ -137,6 +139,8 @@ const AUTHORITY =
 const PROBLEM_SET: ReadonlySet<string> = new Set(CORE_PROBLEMS);
 const DEP_NAMES: ReadonlySet<string> = new Set(DEPENDENCY_NAMES);
 const DEP_OUTCOMES: ReadonlySet<string> = new Set(DEPENDENCY_OUTCOMES);
+/** The dependencies a spend decision rests on. Optional telemetry is not among them. */
+const REQUIRED_DEPENDENCIES: ReadonlySet<string> = new Set(CORE_DEPENDENCIES);
 
 /**
  * Checks an already-fetched body. Separated from the fetch so every rule is testable
@@ -355,11 +359,25 @@ export function validateCoreEvidence(
     fail('public-gate-unexpected', `publicLaunchEnabled is ${gate}, expected ${expectGate}`);
   }
 
-  // --- diagnostics, validated in shape but never trusted for anything -----------------
+  /**
+   * --- dependencies: shape AND outcome ------------------------------------------------
+   *
+   * These were validated for SHAPE only, and a caller that read just the names could
+   * therefore accept a document whose `chain` row said `timed-out` sitting beside
+   * `ok: true`. The producer should never emit that, but "the producer should never" is
+   * the assumption a validator exists to stop making -- and this validator's whole job is
+   * to be as good as the WORST input it is handed, not the one anyone had in mind.
+   *
+   * So: every row well-formed, every CORE dependency present exactly once, and every one
+   * of them settled `ok`. A core dependency that failed, timed out or was never reached
+   * is a fact about whether the evidence was gathered at all.
+   */
   if (e.dependencies !== undefined) {
     if (!Array.isArray(e.dependencies)) {
       fail('malformed-field', 'dependencies is not an array');
     } else {
+      const seen = new Map<string, number>();
+      let wellFormed = true;
       for (const d of e.dependencies) {
         const row = d as Record<string, unknown> | null;
         if (
@@ -374,7 +392,20 @@ export function validateCoreEvidence(
           parseBoolean(row.shared) === null
         ) {
           fail('malformed-field', 'a dependency timing row is not a well-formed diagnostic');
+          wellFormed = false;
           break;
+        }
+        seen.set(row.name, (seen.get(row.name) ?? 0) + 1);
+        if (REQUIRED_DEPENDENCIES.has(row.name) && row.outcome !== 'ok') {
+          fail('dependency-not-ok', `core dependency ${row.name} settled ${row.outcome}, not ok`);
+        }
+      }
+      if (wellFormed) {
+        for (const [name, count] of seen) {
+          if (count > 1) fail('malformed-field', `dependency ${name} appears ${count} times`);
+        }
+        for (const name of REQUIRED_DEPENDENCIES) {
+          if (!seen.has(name)) fail('dependency-missing', `core dependency ${name} is absent`);
         }
       }
     }

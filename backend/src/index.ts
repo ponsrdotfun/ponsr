@@ -27,7 +27,7 @@ import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
 import { createLaunchTarget } from './launchTarget';
-import { executableDeployment, PonsDeployment } from './deployments';
+import { executableDeployment, deploymentById, PonsDeployment } from './deployments';
 import { readCurrentReadiness } from './currentReadiness';
 import { FixedWindowRateLimit } from './webhookRateLimit';
 
@@ -141,9 +141,10 @@ const monitor = new TreasuryMonitor(db, notifier, undefined, 30, {
  */
 const pairAssets = (() => {
   const d = executableDeployment();
-  // v1 prices every launch from its launch config, so there is nothing to discover
-  // and no reason to spend a log scan finding that out.
-  if (config.PONS_FACTORY_VERSION === 'v1') return undefined;
+  // From the deployment's own capability, not an environment string. v1 prices every
+  // launch from its launch config, so there is nothing to discover and no reason to spend
+  // a log scan finding that out; the current v2 approves a set and can revoke from it.
+  if (d.tokenParamsVersion === 'v1') return undefined;
   return new PairAssetRegistry(
     new ChainPairTokenSource({
       provider,
@@ -465,7 +466,10 @@ const statusDepsFor = (session: AcquiredSession | null) => {
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
       publicLaunchEnabled: config.PUBLIC_LAUNCH_ENABLED,
-      factoryVersion: config.PONS_FACTORY_VERSION,
+      // The PUBLIC string stays 'v1'/'v2' -- it is part of what /status has always
+      // published -- but it is DERIVED from the selected deployment now rather than read
+      // from a setting that could name a version the bot is not running.
+      factoryVersion: (executableDeployment().tokenParamsVersion === 'v1' ? 'v1' : 'v2') as 'v1' | 'v2',
       deploymentId: launchTarget.deployment?.id,
       deploymentFactory: launchTarget.deployment?.factory,
       listPairAssets: pairAssets ? async () => (await pairAssets.list()).map((a) => a.symbol) : undefined,
@@ -579,13 +583,16 @@ const crossCheck =
  * from an open one with no traffic, so nobody found out. It runs on a timer for
  * exactly that reason: waiting for a mention would mean waiting for the failure.
  */
-// Both factories are watched, not just the one the bot launches through. The
-// whitelist actually being waited on is a **v2** grant while the bot still runs v1,
-// so a watch that only read v1 would miss the exact event it exists to catch. Each
-// alert names its factory: two watches sending identical text would send somebody
-// to check the wrong contract.
+// Both factories are watched, not just the one the bot launches through -- and the v1
+// address comes from the REGISTRY, which binds it to an ABI, a selector and hashes, not
+// from a settable string that could name anything. Each alert names its factory: two
+// watches sending identical text would send somebody to check the wrong contract.
+//
+// Watching is not launching. `pons-v1` is `executable: false`, so nothing here can send
+// to it; reading its switch state is how an operator learns pons changed something on a
+// contract Ponsr still has tokens on.
 const launchpadWatches = [
-  { label: 'the v1 factory', address: config.PONS_FACTORY_ADDRESS },
+  { label: 'the v1 factory', address: deploymentById('pons-v1').factory },
   // The CURRENT factory, from the registry. This watched
   // `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20 -- the superseded deployment --
   // which is how a "launchpad closed" alert kept firing accurately about a contract

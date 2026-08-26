@@ -3,6 +3,13 @@ import { config } from '../src/config';
 import { createLaunchTarget, LaunchTarget } from '../src/launchTarget';
 import { deploymentById, executableDeployment } from '../src/deployments';
 import { splitterEscrowFor } from '../src/splitterDeployer';
+import { EMPTY_SOCIALS } from '../src/ponsEncoder';
+import { buildCurrentV2LaunchCalldata, launchSalt } from '../src/ponsV2CurrentEncoder';
+
+/** The nonce the splitter is predicted and deployed at, so the fakes stay consistent. */
+const SPLITTER_NONCE = 0;
+const TREASURY_ADDR = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
+const ECONOMICS = '0x' + 'ab'.repeat(32);
 
 /**
  * One selected deployment, threaded through everything that acts on it.
@@ -24,45 +31,33 @@ import { splitterEscrowFor } from '../src/splitterDeployer';
  * reads it from the target rather than from module state.
  */
 describe('every launch target names its own deployment', () => {
-  const realVersion = process.env.PONS_FACTORY_VERSION;
-  afterEach(() => {
-    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
-  });
-
-  it('the current V2 target carries the executable deployment', () => {
-    process.env.PONS_FACTORY_VERSION = 'v2';
+  it('the target carries the executable deployment', () => {
     const t = createLaunchTarget({} as ethers.Provider);
     expect(t.deployment.id).toBe(executableDeployment().id);
+    expect(t.deployment.executable).toBe(true);
   });
 
   /**
-   * V1 rollback, represented rather than smuggled.
+   * The two cases that stood here asserted V1Target carried `pons-v1` rather than falling
+   * back to the executable deployment -- a real bug at the time, since a guard that
+   * verifies one deployment before sending to another is aimed at the wrong contract.
    *
-   * `pons-v1` is `executable: false` -- correctly, since it is not the launch target --
-   * and V1Target used to carry no deployment at all. That left rollback as a path with
-   * no identity to verify, so the guard silently fell back to the global one and checked
-   * the V2 factory before sending a V1 transaction.
+   * V1Target was deleted on 2026-08-26, so the property is now stronger and simpler: there
+   * is one target and it carries the one executable deployment. That it can never carry a
+   * superseded one is proved behaviourally, against a real transport, in
+   * `v1NonExecutable.test.ts`; that v1 remains READABLE is proved in
+   * `v1HistoricalReader.test.ts`.
    */
-  it('the v1 target carries the v1 deployment, not the executable one', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
+  it('never carries a superseded deployment', () => {
     const t = createLaunchTarget({} as ethers.Provider);
-    expect(t.deployment.id).toBe('pons-v1');
-    expect(t.deployment.id).not.toBe(executableDeployment().id);
+    expect(t.deployment.id).not.toBe('pons-v1');
+    expect(t.deployment.id).not.toBe('pons-v2-legacy-7e1');
   });
 
-  it('the v1 target addresses the v1 factory', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
-    const t = createLaunchTarget({} as ethers.Provider);
+  it('agrees with itself about which factory it addresses', () => {
+    const t: LaunchTarget = createLaunchTarget({} as ethers.Provider);
     expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
-  });
-
-  it('every target agrees with itself about which factory it addresses', () => {
-    for (const version of ['v1', 'v2'] as const) {
-      process.env.PONS_FACTORY_VERSION = version;
-      const t: LaunchTarget = createLaunchTarget({} as ethers.Provider);
-      expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
-      expect(t.deployment.chainId).toBe(4663);
-    }
+    expect(t.deployment.chainId).toBe(4663);
   });
 });
 
@@ -109,11 +104,33 @@ describe('handleMention verifies the SELECTED deployment', () => {
   /** A target for whichever deployment we want to prove is the one checked. */
   function targetFor(deployment: any): LaunchTarget {
     return {
-      version: 'v1',
+      version: 'v2-current',
       deployment,
       factoryAddress: deployment.factory,
-      supportsPairing: false,
-      build: async () => ({ to: deployment.factory, data: '0xdeadbeef', value: LIVE_FEE }),
+      supportsPairing: true,
+      // REAL calldata for the deployment it names. `0xdeadbeef` was decodable by nothing,
+      // which was fine while nobody read the bytes -- the orchestrator now re-checks the
+      // built destination and selector immediately before the signer, so a stub that
+      // cannot be decoded is a stub that would never have been sent.
+      build: async (req: any) =>
+        buildCurrentV2LaunchCalldata(
+          {
+            tokenName: req.tokenName,
+            tokenSymbol: req.tokenSymbol,
+            logo: '',
+            description: '',
+            socials: EMPTY_SOCIALS,
+            feeWallet: req.splitterAddress,
+            launchConfigId: 0n,
+            pairToken: req.pairAsset.address,
+            creatorTaxBps: 0,
+            buybackEnabled: false,
+            expectedEconomics: ECONOMICS,
+            salt: launchSalt(deployment, req.tweetId),
+          },
+          LIVE_FEE,
+          deployment
+        ),
       extractToken: () => '0x' + '44'.repeat(20),
     } as unknown as LaunchTarget;
   }
@@ -139,7 +156,7 @@ describe('handleMention verifies the SELECTED deployment', () => {
         }),
       },
       treasurySigner: {
-        address: async () => '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+        address: async () => TREASURY_ADDR,
         // A creation (`to: ''`) must come back with a contractAddress or deploySplitter
         // refuses -- correctly, since a splitter it cannot name is one nobody can claim
         // from. The first version of this stub returned neither, so every launch failed
@@ -149,12 +166,17 @@ describe('handleMention verifies the SELECTED deployment', () => {
           wait: async () => ({
             status: 1,
             logs: [],
-            contractAddress: tx.to === '' ? '0x' + '99'.repeat(20) : null,
+            contractAddress: tx.to === '' ? ethers.getCreateAddress({ from: TREASURY_ADDR, nonce: SPLITTER_NONCE }) : null,
           }),
         }),
       },
       provider: {} as never,
       launchTarget: targetFor(deployment),
+      // Read-only seams: the splitter address is predicted from the treasury's nonce
+      // before anything is signed, and the economics digest is observed independently so
+      // the calldata is never its own witness.
+      getTreasuryNonce: async () => SPLITTER_NONCE,
+      readLaunchEconomics: async () => ECONOMICS,
       // Records which deployment the guard was actually given.
       verifyIdentity: async () => { seen.push(deployment.id); },
       getLiveFeeWei: async () => LIVE_FEE,
@@ -163,35 +185,45 @@ describe('handleMention verifies the SELECTED deployment', () => {
     };
   }
 
-  it('checks the v1 deployment when the target is v1', async () => {
+  /*
+   * The two cases that stood here INJECTED a v1 target and asserted the guards followed
+   * it. They were right about the property -- a guard must verify the deployment being
+   * used, not a global -- and wrong about the example, which is now refused outright.
+   *
+   * A target naming a superseded deployment cannot reach a guard at all: it is rejected
+   * before the parser is billed. That is proved behaviourally in
+   * `orchestratorAuthority.test.ts`. What survives here is the same property asked with
+   * the only deployment that may execute.
+   */
+  it('checks the SELECTED deployment, twice, and names no other', async () => {
     const db = freshDb();
     const seen: string[] = [];
     try {
       await handleMention(
-        { tweetId: 't-v1', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
-        depsFor(db, deploymentById('pons-v1'), seen)
+        { tweetId: 't-sel', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
+        depsFor(db, executableDeployment(), seen)
       );
     } finally {
       db.close();
     }
     // Twice, deliberately: once before the pair read and once with nothing between it
     // and the splitter deploy. Both must name the SELECTED deployment.
-    expect(seen).toEqual(['pons-v1', 'pons-v1']);
-    expect(seen).not.toContain(executableDeployment().id);
+    expect(seen).toEqual([executableDeployment().id, executableDeployment().id]);
+    expect(seen).not.toContain('pons-v1');
   });
 
-  it('records the selected deployment in provenance, not the executable one', async () => {
+  it('records the selected deployment in provenance', async () => {
     const db = freshDb();
     const seen: string[] = [];
     try {
       await handleMention(
         { tweetId: 't-prov', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
-        depsFor(db, deploymentById('pons-v1'), seen)
+        depsFor(db, executableDeployment(), seen)
       );
       const rows = (db as any).db.prepare('SELECT deployment_id, factory FROM launch_provenance').all();
       expect(rows).toHaveLength(1);
-      expect(rows[0].deployment_id).toBe('pons-v1');
-      expect(String(rows[0].factory).toLowerCase()).toBe(deploymentById('pons-v1').factory.toLowerCase());
+      expect(rows[0].deployment_id).toBe(executableDeployment().id);
+      expect(String(rows[0].factory).toLowerCase()).toBe(executableDeployment().factory.toLowerCase());
     } finally {
       db.close();
     }
@@ -202,9 +234,9 @@ describe('handleMention verifies the SELECTED deployment', () => {
   it('a drift on the selected deployment stops the launch', async () => {
     const db = freshDb();
     try {
-      const deps: any = depsFor(db, deploymentById('pons-v1'), []);
+      const deps: any = depsFor(db, executableDeployment(), []);
       deps.verifyIdentity = async () => {
-        throw new Error('pons-v1 is not the contract the registry describes. Nothing was deployed.');
+        throw new Error('the factory is not the contract the registry describes. Nothing was deployed.');
       };
       const outcome = await handleMention(
         { tweetId: 't-drift', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
@@ -221,30 +253,27 @@ describe('handleMention verifies the SELECTED deployment', () => {
 /**
  * The splitter TYPE follows the deployment's fee model, not a global flag.
  *
- * `splitterArtifact()` chose FeeSplitterV2 when `process.env.PONS_FACTORY_VERSION === 'v2'`.
- * That is a different question from which deployment this launch is going to, and the
- * two can disagree: a v1 rollback with the flag still v2, or an injected v2 target while
- * the flag says v1.
+ * `splitterArtifact()` used to choose FeeSplitterV2 from a global version flag. That is a
+ * different question from which deployment this launch is going to, and the two could
+ * disagree. The flag is gone, but the property is still worth asserting: the artifact must
+ * follow the deployment it is HANDED, including a historical one, because that is what a
+ * fee-collection tool passes when it reads an old launch back.
  *
  * Getting it wrong is not a degraded launch. A plain `FeeSplitter` named as
  * `creatorFeeRecipient` on a v2 launch is credited correctly and forever, with no
  * transaction in existence able to move the money -- the escrow pays `msg.sender` and
  * a v1 splitter cannot call it at all. Fees stranded from the first trade.
  */
-describe('splitter type follows the deployment, not the flag', () => {
+describe('splitter type follows the deployment it is handed', () => {
   const { splitterArtifactFor } = require('../src/splitterDeployer');
-  const realVersion = process.env.PONS_FACTORY_VERSION;
-  afterEach(() => {
-    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
-  });
 
-  it('an escrow-credit deployment gets FeeSplitterV2 even when the flag says v1', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
+  it('an escrow-credit deployment gets FeeSplitterV2', () => {
     expect(splitterArtifactFor(executableDeployment()).name).toBe('FeeSplitterV2');
   });
 
-  it('a push-from-locker deployment gets FeeSplitter even when the flag says v2', () => {
-    process.env.PONS_FACTORY_VERSION = 'v2';
+  it('a push-from-locker deployment gets FeeSplitter', () => {
+    // Handed `pons-v1` explicitly, which is what a HISTORICAL reader does. Nothing can
+    // select v1 as a launch target any more, and nothing here is trying to.
     expect(splitterArtifactFor(deploymentById('pons-v1')).name).toBe('FeeSplitter');
   });
 
@@ -440,9 +469,9 @@ describe('the canary threads one selected deployment', () => {
     expect(code).toMatch(/deployment:\s*selected/);
   });
 
-  it('decides the v1/v2 branch from the deployment, not the global flag', () => {
-    // process.env.PONS_FACTORY_VERSION answers which factory is the default. The branch here
-    // must follow the deployment actually selected, which under rollback is not that.
+  it('decides the v1/v2 branch from the deployment, not a global flag', () => {
+    // A global version flag used to answer this, and it could name a different contract
+    // from the one selected. The branch must follow the deployment actually selected.
     expect(code).toMatch(/const isV2 = selected\.tokenParamsVersion/);
   });
 

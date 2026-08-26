@@ -39,7 +39,7 @@ export function splitterArtifactFor(
   immutableNames?: Record<string, string>;
   name: string;
 } {
-  // From the deployment's FEE MODEL, not from `config.PONS_FACTORY_VERSION`.
+  // From the deployment's FEE MODEL, never from a version setting -- there is none.
   //
   // The flag answers "which factory does this bot launch through by default". This
   // question is "does the deployment this launch is going to credit an escrow", and the

@@ -28,24 +28,20 @@ export function createProvider(): ethers.JsonRpcProvider {
  * a confident answer about somewhere else.
  */
 export function activeFactoryAddress(): string {
-  // From the registry, exactly as `createLaunchTarget` does.
+  // The registry, and only the registry -- exactly as `createLaunchTarget` does.
   //
-  // This read `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20, whose default is the
-  // SUPERSEDED factory. `launchTarget` had been migrated; this had not. Flipping
-  // PONS_FACTORY_VERSION to v2 would therefore have built calldata for the current
-  // factory while every guard here read a different contract -- one whose
-  // `launchEnabled` is false, so launches would have been refused loudly for a reason
-  // that had nothing to do with them.
-  //
-  // The guard and the calldata have to name one contract. Two settings that can
-  // disagree is the entire shape of what this migration was cleaning up.
-  return preflightEnv().PONS_FACTORY_VERSION === 'v2'
-    ? executableDeployment().factory
-    : preflightEnv().PONS_FACTORY_ADDRESS;
+  // Two settings that can disagree is the entire shape of what this migration was
+  // cleaning up. Until 2026-08-26 an environment variable still got a vote here, and its
+  // default named the SUPERSEDED factory: a missing value meant every guard in this file
+  // -- the live fee, `launchEnabled`, the whitelist, the launch config -- read a contract
+  // the bot was not launching through. A confident answer about somewhere else is worse
+  // than no answer, because nothing looks wrong.
+  return executableDeployment().factory;
 }
 
 function factory(provider: ethers.Provider): ethers.Contract {
-  const v2 = preflightEnv().PONS_FACTORY_VERSION === 'v2';
+  // From the selected deployment's own parameter version, never a version flag.
+  const v2 = executableDeployment().tokenParamsVersion !== 'v1';
   return new ethers.Contract(
     activeFactoryAddress(),
     // The current deployment's ABI, not the superseded one's. They differ, and the
@@ -149,11 +145,10 @@ export async function getLaunchReadiness(
   // v2 has no dexConfigCount: the DEX is not a launch parameter there, the pairing
   // asset is. Calling it would throw rather than report, so the dex leg is simply
   // not a question on v2 and is answered as satisfied.
-  // From the deployment when one was given, so a v1 rollback asks v1's questions even
-  // if the global flag still says v2.
-  const isV2 = deployment
-    ? deployment.tokenParamsVersion !== 'v1'
-    : preflightEnv().PONS_FACTORY_VERSION === 'v2';
+  // From the deployment being read -- the one passed in for a historical read, or the
+  // executable one. A HISTORICAL v1 read still has to ask v1's questions; what it must
+  // not do is take the answer from a global flag that can name a third contract.
+  const isV2 = (deployment ?? executableDeployment()).tokenParamsVersion !== 'v1';
   const [enabled, whitelisted, count, dexCount] = await Promise.all([
     f.launchEnabled() as Promise<boolean>,
     f.whitelistedLaunchers(launcherAddress) as Promise<boolean>,

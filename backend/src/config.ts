@@ -117,9 +117,18 @@ const ConfigSchema = z.object({
   RPC_FALLBACK_URLS: z.string().default(''),
   CHAIN_ID: z.coerce.number().default(46630), // testnet by default; 4663 for mainnet
 
-  // -- pons factory. The real, verified ABI is checked in at src/abi/ponsLaunchFactory.json --
-  PONS_FACTORY_ADDRESS: z.string().default('0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB'),
-  PONS_LOCKER_ADDRESS: z.string().default('0x736D76699C26D0d966744cAe304C000d471f7F35'),
+  /*
+   * PONS_FACTORY_ADDRESS and PONS_LOCKER_ADDRESS were REMOVED on 2026-08-26, joining
+   * PONS_V2_FACTORY_ADDRESS, PONS_V2_FEE_ESCROW_ADDRESS and PONS_V2_APPROVALS_FROM_BLOCK.
+   *
+   * Both named v1, and the registry already holds them bound to an ABI hash, a runtime
+   * bytecode hash, a selector and an escrow that are checked against the chain -- where an
+   * address means something. A bare settable address means only itself, which is how a
+   * superseded factory and the current one came to look identical for a week.
+   *
+   * Historical readers take `deploymentById('pons-v1')`. Its `feeEscrow` IS the v1 locker:
+   * v1 pushes fees from the locker rather than escrowing them, and the registry says so.
+   */
   /**
    * Which launch config and DEX config `launchToken` is called with.
    *
@@ -131,19 +140,19 @@ const ConfigSchema = z.object({
   PONS_LAUNCH_CONFIG_ID: z.coerce.bigint().default(0n),
   PONS_DEX_ID: z.coerce.bigint().default(0n),
 
-  /**
-   * Which factory to launch through.
+  /*
+   * PONS_FACTORY_VERSION was REMOVED on 2026-08-26.
    *
-   * v1 is what both real launches used and what the fee path was proven against. v2
-   * adds the thing v1 cannot do at all: a launch priced, funded and graduated in an
-   * approved asset other than ETH -- eight of them today, six tokenised stocks.
+   * It chose which factory a launch went to -- and `deployments.ts` already decides that,
+   * with an invariant that THROWS unless exactly one entry is executable. One fact in two
+   * places, and the setting's default was `v1`, so a missing value silently selected the
+   * factory pons replaced. Two production launches on 2026-08-12 went to v1 that way.
    *
-   * `launchToken` is a DIFFERENT function on v2, not v1 with an argument added, so
-   * this is not a cosmetic switch: it selects a different encoder, a different ABI
-   * and a different readiness check. Both factories have launching switched off
-   * right now, so neither works until pons acts either way.
+   * Changing `.default('v1')` to `.default('v2')` would have closed that instance and left
+   * the shape: a default is a preference, and the next environment gets a vote. There is
+   * nothing to vote on now. The registry answers, and `executableDeployment()` refuses to
+   * guess.
    */
-  PONS_FACTORY_VERSION: z.enum(['v1', 'v2']).default('v1'),
   /**
    * Ponsr's own public-launch gate. This is independent of pons's factory gate:
    * deploys, migrations, and operator canaries must not silently make user-triggered
@@ -168,8 +177,8 @@ const ConfigSchema = z.object({
    * `deployments.ts` now, bound to an ABI, an escrow, a selector and hashes that are
    * checked against the chain -- where an address means something.
    *
-   * `PONS_FACTORY_VERSION` still selects v1 vs current-v2. Which contract "v2" means is
-   * the registry's answer, not a setting's.
+   * Nothing selects a factory any more. The registry answers, and the exactly-one
+   * invariant in `executableDeployment()` refuses to guess.
    */
   /*
    * PONS_V2_APPROVALS_FROM_BLOCK was REMOVED on 2026-08-21, for the same reason as the

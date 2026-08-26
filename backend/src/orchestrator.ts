@@ -11,8 +11,13 @@ import { assertDeploymentIdentity } from './deploymentIdentity';
 import { executableDeployment, PonsDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
+import {
+  assertLaunchAuthority,
+  assertBuiltLaunchAuthority,
+  assertSplitterMatchesPrediction,
+} from './launchAuthority';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
-import { launchSalt, DecodedCurrentV2Launch, PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
+import { launchSalt, decodeCurrentV2Launch, DecodedCurrentV2Launch, PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
 import {
   assertPairStillApproved,
   verifyLaunchConfirmation,
@@ -79,6 +84,14 @@ export interface OrchestratorDeps {
   pairAssets?: { resolve(typed: string | null | undefined): Promise<PairResolution> };
   /** Which factory to build for. Defaults from config; injected in tests. */
   launchTarget?: LaunchTarget;
+  /** Read-only seam for the treasury's next nonce. Never reserves one. */
+  getTreasuryNonce?: (treasury: string) => Promise<number>;
+  /** Read-only seam for the economics digest, so the calldata is not its own witness. */
+  readLaunchEconomics?: (
+    deployment: PonsDeployment,
+    launchConfigId: bigint,
+    pairToken: string
+  ) => Promise<string>;
   /**
    * Proves the factory on chain is still the one the registry describes, immediately
    * before the splitter -- the first durable artifact -- is deployed.
@@ -201,6 +214,36 @@ export type OrchestratorOutcome =
    */
   | { kind: 'incident'; detail: string; txHash: string; tokenAddress: string | null };
 
+/**
+ * The treasury's next nonce, read never reserved.
+ *
+ * A plain CREATE address is a function of sender and nonce, so this is all it takes to
+ * know where the splitter will land before anything is signed. It is a READ: no nonce is
+ * reserved, no signer is touched, and the prediction is asserted against the deployed
+ * address afterwards rather than trusted.
+ */
+async function readTreasuryNonce(deps: OrchestratorDeps, treasury: string): Promise<number> {
+  if (deps.getTreasuryNonce) return deps.getTreasuryNonce(treasury);
+  return deps.provider.getTransactionCount(treasury, 'pending');
+}
+
+/**
+ * The economics digest, observed by THIS FLOW rather than accepted from the calldata.
+ *
+ * The target embeds a digest; comparing the calldata's digest against the calldata's
+ * digest proves nothing. This reads it independently so the comparison has two sides.
+ */
+async function readEconomics(
+  deps: OrchestratorDeps,
+  deployment: PonsDeployment,
+  launchConfigId: bigint,
+  pairToken: string
+): Promise<string> {
+  if (deps.readLaunchEconomics) return deps.readLaunchEconomics(deployment, launchConfigId, pairToken);
+  const factory = new ethers.Contract(deployment.factory, PONS_V2_CURRENT_ABI, deps.provider);
+  return String(await factory.previewLaunchEconomics(launchConfigId, pairToken));
+}
+
 export async function handleMention(mention: InboundMention, deps: OrchestratorDeps): Promise<OrchestratorOutcome> {
   // --- Step 1: idempotency, atomic, before anything else runs ---
   const claimed = deps.db.claimTweetForProcessing(mention.tweetId);
@@ -215,6 +258,28 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   // signer, or reply writer; at this point we do not even know this is a launch intent.
   if (!deps.publicLaunchEnabled) {
     return { kind: 'rejected', reason: 'PUBLIC_LAUNCH_PAUSED' };
+  }
+
+  /**
+   * --- Step 1b: MAY THIS TARGET SPEND AT ALL? ---
+   *
+   * Asked here, before the parser is billed, because answering it needs nothing the
+   * parser produces. `createLaunchTarget` resolves from the registry and cannot return a
+   * superseded target -- but `deps.launchTarget` is an EXPORTED injection seam, and what
+   * used to be checked was only that the injected target NAMED a deployment. Present is
+   * not permitted: a target naming `pons-v1` passed, and every guard downstream then
+   * verified the identity of the deployment it named, which is a guard aimed exactly
+   * where the caller pointed it.
+   *
+   * The claim is released, so a correct target can handle the same mention later.
+   */
+  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
+  let selected: PonsDeployment;
+  try {
+    selected = assertLaunchAuthority(launchTarget);
+  } catch (err) {
+    deps.db.releaseTweetClaim(mention.tweetId);
+    throw err;
   }
 
   // --- Step 1 continued: parse intent ---
@@ -250,20 +315,9 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   // v2 priced the launch from a contract it never called, and asked that contract's
   // permission instead of the one it needed.
   //
-  // One selected deployment, resolved once, carried through everything downstream:
-  // readiness, fee, identity, splitter type, escrow, calldata, send, receipt, provenance.
-  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
-  const selected = launchTarget.deployment;
-  if (!selected) {
-    // A target that cannot say which deployment it addresses is one no guard can be
-    // aimed at, and the only alternative -- falling back to a global -- is the defect
-    // this binding exists to remove. Refuse before the claim is consumed further.
-    deps.db.releaseTweetClaim(mention.tweetId);
-    throw new Error(
-      `launch target (${launchTarget.version}) names no deployment, so its identity cannot ` +
-        'be verified. Refusing before anything is deployed or spent.'
-    );
-  }
+  // One selected deployment, resolved and AUTHORISED once in step 1b, carried through
+  // everything downstream: readiness, fee, identity, splitter type, escrow, calldata,
+  // send, receipt, provenance.
 
   // --- Step 3: validation guard, against the SELECTED deployment ---
   const validation = await validateLaunchRequest(intent, mention.authorXUserId, mention.tweetId, {
@@ -390,6 +444,93 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // authorise a transaction to another.
     const verifyIdentity =
       deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
+    /**
+     * ONE BUILD, BEFORE THE FIRST SIGNATURE, AND THOSE EXACT BYTES ARE WHAT GET SENT.
+     *
+     * There used to be two: a dry build inspected here, and the real build inspected
+     * after the splitter had been deployed. `build()` belongs to an injected object and
+     * nothing requires it to be pure. A STATEFUL target could answer honestly on the
+     * first call and name v1 on the second -- and the splitter deploy, a signer request
+     * costing real gas, sat between them. The launch was refused correctly, after money
+     * had already moved. Two inspections of two different byte strings is a race, not a
+     * check.
+     *
+     * Building first requires knowing the splitter's address before it exists. It is a
+     * plain CREATE from the treasury, so the address is a function of sender and nonce
+     * and can be predicted with a READ. Nothing is signed, and no nonce is reserved: the
+     * prediction is ASSERTED against the deployed address afterwards, and a launch whose
+     * calldata names a contract this flow did not create is never sent.
+     */
+    const treasuryNonce = await readTreasuryNonce(deps, treasuryAddress);
+    const predictedSplitter = ethers.getCreateAddress({ from: treasuryAddress, nonce: treasuryNonce });
+
+    // Priced from the deployment this launch is actually going to, and read BEFORE the
+    // build so the bytes carry a fee this flow observed rather than one the target chose.
+    const liveFee = await deps.getLiveFeeWei(selected);
+    if (liveFee > config.TREASURY_MAX_FEE_WEI) {
+      // Re-check immediately before spending -- the validator already checked this, but fee
+      // could theoretically move in the window between validation and execution. Belt and
+      // suspenders, per Part 5's "read live, never trust a stale value" principle.
+      deps.db.updateLaunchStatus(launchId, 'rejected');
+      notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, 'FEE_EXCEEDS_CEILING'));
+      const replyText = composeRejectionReply('FEE_EXCEEDS_CEILING');
+      await replySafely(deps, mention.tweetId, replyText, { stage: 'fee_ceiling' });
+      return { kind: 'rejected', reason: 'FEE_EXCEEDS_CEILING' };
+    }
+
+    // `value` is exactly the live fee. The factory treats anything above it as an initial
+    // buy, so overpaying would make the treasury buy into the user's own token.
+    // One wallet, not two: the factory writes the splitter to the locker as this
+    // token's fee redirect, and the locker pays trading fees to it.
+    const { to, data, value } = await launchTarget.build(
+      {
+        tokenName,
+        tokenSymbol,
+        description,
+        splitterAddress: predictedSplitter,
+        tweetId: mention.tweetId,
+        pairAsset,
+      },
+      liveFee
+    );
+
+    /**
+     * Every field, against what THIS FLOW prepared -- never against the calldata itself.
+     *
+     * `to` and the selector alone would leave the recipient, the pair, the salt, the
+     * launch config and the economics digest free to be anything. A launch whose
+     * `creatorFeeRecipient` is not the splitter this flow deploys pays a stranger
+     * forever, from a transaction that passed every other check.
+     *
+     * The economics digest is observed independently rather than accepted from the
+     * bytes: a digest read out of the thing being judged is a limit acting as evidence
+     * about itself.
+     */
+    if (selected.tokenParamsVersion === 'v2-salt') {
+      const observedEconomics = await readEconomics(
+        deps,
+        selected,
+        config.PONS_LAUNCH_CONFIG_ID,
+        pairAsset.address
+      );
+      assertBuiltLaunchAuthority(
+        selected,
+        { to, data, value },
+        {
+          creatorFeeRecipient: predictedSplitter,
+          pairToken: pairAsset.address,
+          launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
+          salt: launchSalt(selected, mention.tweetId),
+          expectedEconomics: observedEconomics,
+          valueWei: liveFee,
+          maxValueWei: config.TREASURY_MAX_FEE_WEI,
+        },
+        decodeCurrentV2Launch
+      );
+    } else {
+      assertBuiltLaunchAuthority(selected, { to, data, value });
+    }
+
     await verifyIdentity(deps.provider);
 
     /**
@@ -419,34 +560,11 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       selected
     );
 
-    // Priced from the deployment this launch is actually going to.
-    const liveFee = await deps.getLiveFeeWei(selected);
-    if (liveFee > config.TREASURY_MAX_FEE_WEI) {
-      // Re-check immediately before spending -- the validator already checked this, but fee
-      // could theoretically move in the window between validation and execution. Belt and
-      // suspenders, per Part 5's "read live, never trust a stale value" principle.
-      deps.db.updateLaunchStatus(launchId, 'rejected');
-      notify(deps, (m) => m.onRejected(mention.tweetId, mention.authorXUserId, 'FEE_EXCEEDS_CEILING'));
-      const replyText = composeRejectionReply('FEE_EXCEEDS_CEILING');
-      await replySafely(deps, mention.tweetId, replyText, { stage: 'fee_ceiling' });
-      return { kind: 'rejected', reason: 'FEE_EXCEEDS_CEILING' };
-    }
-
-    // `value` is exactly the live fee. The factory treats anything above it as an initial
-    // buy, so overpaying would make the treasury buy into the user's own token.
-    // One wallet, not two: the factory writes the splitter to the locker as this
-    // token's fee redirect, and the locker pays trading fees to it.
-    const { to, data, value } = await launchTarget.build(
-      {
-        tokenName,
-        tokenSymbol,
-        description,
-        splitterAddress,
-        tweetId: mention.tweetId,
-        pairAsset,
-      },
-      liveFee
-    );
+    // The prediction, checked against reality before anything else is signed. A nonce
+    // consumed elsewhere between the read and the deploy would give a real splitter at an
+    // address the launch does not name, and the creator's fees would be pushed to a
+    // contract nobody controls.
+    assertSplitterMatchesPrediction(predictedSplitter, splitterAddress);
 
     // Written before the transaction is sent, so a launch that reverts still leaves
     // evidence of which deployment it was aimed at -- the case where knowing that
@@ -516,6 +634,13 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
         tokenParamsVersion: d.tokenParamsVersion,
       });
     }
+
+    // The same question asked of the BYTES, immediately before the signer.
+    //
+    // The pre-spend check in step 1b proved the target names and addresses the executable
+    // deployment. It ran before `build()` existed, so it cannot see a target that declares
+    // one factory and then builds a transaction to another. This can.
+    assertBuiltLaunchAuthority(selected, { to, data });
 
     const sent = await deps.treasurySigner.sendTransaction({ to, data, value });
 
