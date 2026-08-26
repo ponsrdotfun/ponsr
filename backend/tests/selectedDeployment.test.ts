@@ -3,6 +3,8 @@ import { config } from '../src/config';
 import { createLaunchTarget, LaunchTarget } from '../src/launchTarget';
 import { deploymentById, executableDeployment } from '../src/deployments';
 import { splitterEscrowFor } from '../src/splitterDeployer';
+import { EMPTY_SOCIALS } from '../src/ponsEncoder';
+import { buildCurrentV2LaunchCalldata, launchSalt } from '../src/ponsV2CurrentEncoder';
 
 /**
  * One selected deployment, threaded through everything that acts on it.
@@ -97,11 +99,33 @@ describe('handleMention verifies the SELECTED deployment', () => {
   /** A target for whichever deployment we want to prove is the one checked. */
   function targetFor(deployment: any): LaunchTarget {
     return {
-      version: 'v1',
+      version: 'v2-current',
       deployment,
       factoryAddress: deployment.factory,
-      supportsPairing: false,
-      build: async () => ({ to: deployment.factory, data: '0xdeadbeef', value: LIVE_FEE }),
+      supportsPairing: true,
+      // REAL calldata for the deployment it names. `0xdeadbeef` was decodable by nothing,
+      // which was fine while nobody read the bytes -- the orchestrator now re-checks the
+      // built destination and selector immediately before the signer, so a stub that
+      // cannot be decoded is a stub that would never have been sent.
+      build: async (req: any) =>
+        buildCurrentV2LaunchCalldata(
+          {
+            tokenName: req.tokenName,
+            tokenSymbol: req.tokenSymbol,
+            logo: '',
+            description: '',
+            socials: EMPTY_SOCIALS,
+            feeWallet: req.splitterAddress,
+            launchConfigId: 0n,
+            pairToken: req.pairAsset.address,
+            creatorTaxBps: 0,
+            buybackEnabled: false,
+            expectedEconomics: '0x' + 'ab'.repeat(32),
+            salt: launchSalt(deployment, req.tweetId),
+          },
+          LIVE_FEE,
+          deployment
+        ),
       extractToken: () => '0x' + '44'.repeat(20),
     } as unknown as LaunchTarget;
   }
@@ -151,35 +175,45 @@ describe('handleMention verifies the SELECTED deployment', () => {
     };
   }
 
-  it('checks the v1 deployment when the target is v1', async () => {
+  /*
+   * The two cases that stood here INJECTED a v1 target and asserted the guards followed
+   * it. They were right about the property -- a guard must verify the deployment being
+   * used, not a global -- and wrong about the example, which is now refused outright.
+   *
+   * A target naming a superseded deployment cannot reach a guard at all: it is rejected
+   * before the parser is billed. That is proved behaviourally in
+   * `orchestratorAuthority.test.ts`. What survives here is the same property asked with
+   * the only deployment that may execute.
+   */
+  it('checks the SELECTED deployment, twice, and names no other', async () => {
     const db = freshDb();
     const seen: string[] = [];
     try {
       await handleMention(
-        { tweetId: 't-v1', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
-        depsFor(db, deploymentById('pons-v1'), seen)
+        { tweetId: 't-sel', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
+        depsFor(db, executableDeployment(), seen)
       );
     } finally {
       db.close();
     }
     // Twice, deliberately: once before the pair read and once with nothing between it
     // and the splitter deploy. Both must name the SELECTED deployment.
-    expect(seen).toEqual(['pons-v1', 'pons-v1']);
-    expect(seen).not.toContain(executableDeployment().id);
+    expect(seen).toEqual([executableDeployment().id, executableDeployment().id]);
+    expect(seen).not.toContain('pons-v1');
   });
 
-  it('records the selected deployment in provenance, not the executable one', async () => {
+  it('records the selected deployment in provenance', async () => {
     const db = freshDb();
     const seen: string[] = [];
     try {
       await handleMention(
         { tweetId: 't-prov', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },
-        depsFor(db, deploymentById('pons-v1'), seen)
+        depsFor(db, executableDeployment(), seen)
       );
       const rows = (db as any).db.prepare('SELECT deployment_id, factory FROM launch_provenance').all();
       expect(rows).toHaveLength(1);
-      expect(rows[0].deployment_id).toBe('pons-v1');
-      expect(String(rows[0].factory).toLowerCase()).toBe(deploymentById('pons-v1').factory.toLowerCase());
+      expect(rows[0].deployment_id).toBe(executableDeployment().id);
+      expect(String(rows[0].factory).toLowerCase()).toBe(executableDeployment().factory.toLowerCase());
     } finally {
       db.close();
     }
@@ -190,9 +224,9 @@ describe('handleMention verifies the SELECTED deployment', () => {
   it('a drift on the selected deployment stops the launch', async () => {
     const db = freshDb();
     try {
-      const deps: any = depsFor(db, deploymentById('pons-v1'), []);
+      const deps: any = depsFor(db, executableDeployment(), []);
       deps.verifyIdentity = async () => {
-        throw new Error('pons-v1 is not the contract the registry describes. Nothing was deployed.');
+        throw new Error('the factory is not the contract the registry describes. Nothing was deployed.');
       };
       const outcome = await handleMention(
         { tweetId: 't-drift', authorXUserId: 'u1', authorHandle: 'someone', text: 'launch Moon Coin MOON', createdAt: new Date().toISOString() },

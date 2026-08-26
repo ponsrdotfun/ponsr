@@ -781,8 +781,16 @@ describe('launching paired against an approved asset', () => {
       pairAssets: { resolve: async () => ({ ok: true, asset: AAPL }) },
     });
     expect(outcome.kind).toBe('launched');
-    expect(built).toHaveLength(1);
-    expect(built[0].pairAsset.symbol).toBe('AAPL');
+    /*
+     * TWO builds, not one, and the difference is the point.
+     *
+     * The orchestrator builds once against a PLACEHOLDER recipient purely to inspect where
+     * the transaction goes, before the splitter is deployed and paid for -- a target that
+     * declares the current factory and then builds elsewhere has to be caught before money
+     * moves, not after. The second build is the one that is sent.
+     */
+    expect(built).toHaveLength(2);
+    expect(built.at(-1)!.pairAsset.symbol).toBe('AAPL');
   });
 
   // Silence here would be the worst outcome: the person gets a token priced in
@@ -822,7 +830,7 @@ describe('launching paired against an approved asset', () => {
       pairAssets: { resolve: async () => { throw new Error('must not be consulted'); } },
     });
     expect(outcome.kind).toBe('launched');
-    expect(built[0].pairAsset).toMatchObject({ address: ETH_ASSET.address, symbol: 'ETH' });
+    expect(built.at(-1)!.pairAsset).toMatchObject({ address: ETH_ASSET.address, symbol: 'ETH' });
   });
 
   // A deployment with no registry configured must still launch, against ETH.
@@ -830,7 +838,7 @@ describe('launching paired against an approved asset', () => {
     const { built, target } = recordingTarget();
     const outcome = await run('AAPL', { launchTarget: target });
     expect(outcome.kind).toBe('launched');
-    expect(built[0].pairAsset.symbol).toBe('ETH');
+    expect(built.at(-1)!.pairAsset.symbol).toBe('ETH');
   });
 });
 

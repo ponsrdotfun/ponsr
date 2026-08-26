@@ -11,6 +11,7 @@ import { assertDeploymentIdentity } from './deploymentIdentity';
 import { executableDeployment, PonsDeployment } from './deployments';
 import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
 import { LaunchTarget, createLaunchTarget } from './launchTarget';
+import { assertLaunchAuthority, assertBuiltLaunchAuthority } from './launchAuthority';
 import { NATIVE_ETH, PairAsset, PairResolution } from './pairTokens';
 import { launchSalt, DecodedCurrentV2Launch, PONS_V2_CURRENT_ABI } from './ponsV2CurrentEncoder';
 import {
@@ -217,6 +218,28 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     return { kind: 'rejected', reason: 'PUBLIC_LAUNCH_PAUSED' };
   }
 
+  /**
+   * --- Step 1b: MAY THIS TARGET SPEND AT ALL? ---
+   *
+   * Asked here, before the parser is billed, because answering it needs nothing the
+   * parser produces. `createLaunchTarget` resolves from the registry and cannot return a
+   * superseded target -- but `deps.launchTarget` is an EXPORTED injection seam, and what
+   * used to be checked was only that the injected target NAMED a deployment. Present is
+   * not permitted: a target naming `pons-v1` passed, and every guard downstream then
+   * verified the identity of the deployment it named, which is a guard aimed exactly
+   * where the caller pointed it.
+   *
+   * The claim is released, so a correct target can handle the same mention later.
+   */
+  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
+  let selected: PonsDeployment;
+  try {
+    selected = assertLaunchAuthority(launchTarget);
+  } catch (err) {
+    deps.db.releaseTweetClaim(mention.tweetId);
+    throw err;
+  }
+
   // --- Step 1 continued: parse intent ---
   //
   // Guarded, because the claim above is already taken. Without this a parser failure
@@ -250,20 +273,9 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
   // v2 priced the launch from a contract it never called, and asked that contract's
   // permission instead of the one it needed.
   //
-  // One selected deployment, resolved once, carried through everything downstream:
-  // readiness, fee, identity, splitter type, escrow, calldata, send, receipt, provenance.
-  const launchTarget = deps.launchTarget ?? createLaunchTarget(deps.provider);
-  const selected = launchTarget.deployment;
-  if (!selected) {
-    // A target that cannot say which deployment it addresses is one no guard can be
-    // aimed at, and the only alternative -- falling back to a global -- is the defect
-    // this binding exists to remove. Refuse before the claim is consumed further.
-    deps.db.releaseTweetClaim(mention.tweetId);
-    throw new Error(
-      `launch target (${launchTarget.version}) names no deployment, so its identity cannot ` +
-        'be verified. Refusing before anything is deployed or spent.'
-    );
-  }
+  // One selected deployment, resolved and AUTHORISED once in step 1b, carried through
+  // everything downstream: readiness, fee, identity, splitter type, escrow, calldata,
+  // send, receipt, provenance.
 
   // --- Step 3: validation guard, against the SELECTED deployment ---
   const validation = await validateLaunchRequest(intent, mention.authorXUserId, mention.tweetId, {
@@ -390,6 +402,41 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
     // authorise a transaction to another.
     const verifyIdentity =
       deps.verifyIdentity ?? ((p: ethers.Provider) => assertDeploymentIdentity(selected, p));
+    /**
+     * A DRY BUILD, before the first thing anyone pays for.
+     *
+     * Step 1b proved the target NAMES and ADDRESSES the executable deployment. It ran
+     * before `build()` existed, so it cannot see a target that declares one factory and
+     * then builds a transaction to another -- and the splitter deploy below is already a
+     * signer request and already costs gas. Catching a lying target after that point
+     * means catching it after money has moved, which is not catching it.
+     *
+     * So the transaction is built once against a placeholder recipient purely to inspect
+     * where it goes, and thrown away. It runs BEFORE the second identity check, not
+     * between it and the deploy: that check exists precisely because nothing may sit in
+     * that window, and widening it to make room for this probe would trade one guard for
+     * another. The economics digest is deliberately NOT reused:
+     * the real build below reads it again immediately before sending, because a stale pin
+     * does not protect the launch, it reverts it.
+     */
+    {
+      const probe = await launchTarget.build(
+        {
+          tokenName,
+          tokenSymbol,
+          description,
+          splitterAddress: treasuryAddress,
+          tweetId: mention.tweetId,
+          pairAsset,
+        },
+        // Zero, deliberately. The probe inspects only WHERE the transaction goes and
+        // WHICH function it calls; neither depends on the fee, and reading the live fee
+        // early would either duplicate the read or tempt someone to reuse a stale one.
+        0n
+      );
+      assertBuiltLaunchAuthority(selected, probe);
+    }
+
     await verifyIdentity(deps.provider);
 
     /**
@@ -516,6 +563,13 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
         tokenParamsVersion: d.tokenParamsVersion,
       });
     }
+
+    // The same question asked of the BYTES, immediately before the signer.
+    //
+    // The pre-spend check in step 1b proved the target names and addresses the executable
+    // deployment. It ran before `build()` existed, so it cannot see a target that declares
+    // one factory and then builds a transaction to another. This can.
+    assertBuiltLaunchAuthority(selected, { to, data });
 
     const sent = await deps.treasurySigner.sendTransaction({ to, data, value });
 
