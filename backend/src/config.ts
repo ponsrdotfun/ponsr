@@ -105,6 +105,16 @@ const ConfigSchema = z.object({
 
   // -- Robinhood Chain RPC (Part 10: Alchemy free tier, or fallback public RPC) --
   RPC_URL: z.string().default('https://rpc.testnet.chain.robinhood.com'),
+  /**
+   * Additional RPC endpoints, comma-separated, tried in order after RPC_URL.
+   *
+   * Optional, and empty by default: one endpoint is the current behaviour and stays the
+   * behaviour until an operator deliberately adds another. Every entry is ADMITTED before
+   * it is allowed to answer -- chain id and factory bytecode must match the registry -- so
+   * a fallback cannot silently move the bot to a different chain or a forked state. See
+   * `rpcPool.ts` for why an unchecked fallback is worse than none.
+   */
+  RPC_FALLBACK_URLS: z.string().default(''),
   CHAIN_ID: z.coerce.number().default(46630), // testnet by default; 4663 for mainnet
 
   // -- pons factory. The real, verified ABI is checked in at src/abi/ponsLaunchFactory.json --
