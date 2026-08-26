@@ -92,9 +92,12 @@ describe('one budget covers acquisition AND reporting', () => {
     });
     const elapsed = Date.now() - started;
 
-    // Was 8 038 ms for this exact configuration. Generous tolerance; the point is that it
-    // is bounded by the budget rather than by 2 x 4000ms + the budget.
-    expect(elapsed).toBeLessThan(2500);
+    // Was 8 038 ms for this exact configuration.
+    //
+    // The tolerance is 800 ms of budget plus 300 ms of CI scheduling slack, deliberately
+    // NOT a multiple. Allowing 2 500 ms here would have passed against a 2 400 ms
+    // regression and proved only that the thing is contained, not that the bound holds.
+    expect(elapsed).toBeLessThan(1100);
     expect(report.state).toBe('down');
     expect(find(report, 'rpc')!.state).toBe('down');
   }, 30_000);
@@ -118,7 +121,8 @@ describe('one budget covers acquisition AND reporting', () => {
         }),
       { totalBudgetMs: 900 }
     );
-    expect(Date.now() - started).toBeLessThan(3000);
+    // 900 ms of budget plus 300 ms of slack, for the same reason as above.
+    expect(Date.now() - started).toBeLessThan(1200);
     expect(report.checks.length).toBeGreaterThan(0);
   }, 30_000);
 
@@ -154,16 +158,18 @@ describe('one budget covers acquisition AND reporting', () => {
     expect(detail).toMatch(/budget|did not answer/);
   }, 30_000);
 
-  it('reports a refused-for-budget endpoint as a budget problem, not an endpoint problem', async () => {
+  it('running out of budget says nothing about the endpoints, and blacklists none of them', async () => {
     const a = await chain({ hang: ['eth_chainId'] });
     const b = await chain();
     const pool = new RpcPool([a.url, b.url], { deployment: D, admissionTimeoutMs: 4000 });
     await assembleStatus(pool, (session) => sessionDeps(session), { totalBudgetMs: 300 });
 
-    const refusals = pool.status().endpoints.map((e) => e.refusedCode);
-    // "We ran out of time" must not be recorded as a judgement about the endpoint, and must
-    // not be cached: b is healthy and has to remain usable on the next request.
-    expect(refusals).toContain('budget-exhausted');
+    // "We ran out of time" is a fact about the CALLER. Recording it against an endpoint
+    // would let one slow response describe the pool for every response after it, and would
+    // overwrite a real admission's checkedAt.
+    for (const e of pool.status().endpoints) expect(e.refusedCode).not.toBe('budget-exhausted');
+
+    // And nothing is blacklisted: b is healthy and must still be usable.
     const healthy = await pool.acquire();
     expect(healthy).not.toBeNull();
   }, 30_000);
@@ -289,3 +295,175 @@ describe('an unknown rolling spend is not headroom', () => {
     expect(r.spend).toBeUndefined();
   });
 });
+
+/**
+ * Coalescing must share the network probe WITHOUT sharing the first caller's patience.
+ *
+ * `admit()` handed a later caller the in-flight promise as-is, so a newcomer waited under
+ * an allowance it never agreed to. Measured against the previous CODE END: a `/status`
+ * request with a 300 ms budget took 983 ms, because it inherited a stalled 1 000 ms probe
+ * started by a caller with no deadline at all. The overall status deadline was defeated by
+ * the optimisation sitting next to it, and every existing test started from an idle pool so
+ * none of them touched this path.
+ *
+ * Tolerances here are deliberately tight. Allowing 2.5 s for an 800 ms budget is evidence
+ * of containment, not of the bound being kept -- it would have admitted the 983 ms defect.
+ */
+describe('a shared admission does not share the first caller waiting budget', () => {
+  /** Status deps that depend on the session, with everything local answering instantly. */
+  const localOnly = (session: AcquiredSession | null) => sessionDeps(session, { rollingSpendLast24hWei: () => 0n });
+
+  it('bounds a later caller by ITS OWN deadline, not the in-flight one', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 1000 });
+
+    // Caller 1: no deadline at all. Starts the shared, stalled probe.
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const started = Date.now();
+    const report = await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+    const elapsed = Date.now() - started;
+
+    // Was 983 ms. The budget is 300 ms; 150 ms of CI scheduling slack on top of it is
+    // generous and still nowhere near the 1 000 ms probe allowance being inherited.
+    expect(elapsed).toBeLessThan(450);
+    expect(report.state).toBe('down');
+
+    c.release();
+    await first;
+  }, 20_000);
+
+  it('does not cancel or poison the shared probe when a waiter gives up', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 3000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+    await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+
+    // The impatient caller has gone. The probe is still there, still waiting.
+    expect(c.pending()).toBeGreaterThan(0);
+    c.release();
+
+    const session = await first;
+    expect(session).not.toBeNull();
+    expect(pool.status().endpoints[0].admitted).toBe(true);
+  }, 20_000);
+
+  it('issues exactly ONE admission probe for the endpoint', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 3000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+    await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+    await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+
+    // A shorter deadline must not cause a duplicate probe: the whole point of coalescing
+    // is one network conversation, and three requests must not become three.
+    expect(c.methods.filter((m) => m === 'eth_chainId').length).toBe(1);
+
+    c.release();
+    await first;
+  }, 20_000);
+
+  it('a short-budget caller still reaches a healthy second endpoint when time allows', async () => {
+    const slow = await chain({ hang: ['eth_chainId'] });
+    const good = await chain();
+    const pool = new RpcPool([slow.url, good.url], { deployment: D, admissionTimeoutMs: 3000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const started = Date.now();
+    const report = await assembleStatus(pool, localOnly, { totalBudgetMs: 2000 });
+    const elapsed = Date.now() - started;
+
+    // It gave up waiting on the stalled endpoint and moved on rather than failing outright.
+    expect(report.state).not.toBe('down');
+    expect(elapsed).toBeLessThan(2200);
+
+    slow.release();
+    await first;
+  }, 20_000);
+
+  it('keeps two concurrent short-budget callers individually bounded', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 2000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const started = Date.now();
+    await Promise.all([
+      assembleStatus(pool, localOnly, { totalBudgetMs: 300 }),
+      assembleStatus(pool, localOnly, { totalBudgetMs: 300 }),
+    ]);
+    // Concurrent, individually bounded -- not serialised behind one another and not
+    // inheriting the 2 000 ms probe.
+    expect(Date.now() - started).toBeLessThan(500);
+
+    c.release();
+    await first;
+  }, 20_000);
+
+  it('a late shared probe cannot rewrite a response that already returned', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 3000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+    const report = await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+
+    const before = JSON.stringify(report);
+    c.release();
+    await first;
+    await new Promise((r) => setTimeout(r, 60));
+
+    // The probe has since succeeded and the pool now says so. The returned document is a
+    // record of what was true when it was produced, and must not have changed under it.
+    expect(JSON.stringify(report)).toBe(before);
+    expect(report.spend?.observedThrough).toBeUndefined();
+    expect(pool.status().endpoints[0].admitted).toBe(true);
+
+    c.release();
+  }, 20_000);
+
+  it('a caller-local budget refusal is never recorded as a fact about the endpoint', async () => {
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([c.url], { deployment: D, admissionTimeoutMs: 3000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+    await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+
+    // Nothing about the endpoint was learned by one caller running out of time, so nothing
+    // about the endpoint may be written down. Two concurrent responses must not be able to
+    // describe the pool differently depending on which finished last.
+    expect(pool.status().endpoints[0].refusedCode).not.toBe('budget-exhausted');
+
+    c.release();
+    await first;
+    expect(pool.status().endpoints[0].admitted).toBe(true);
+  }, 20_000);
+
+  it('leaks no URL when a caller gives up on a shared probe', async () => {
+    const secret = 'SECRETKEY123456789abcdef';
+    const c = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([`${c.url}/v2/${secret}`], { deployment: D, admissionTimeoutMs: 2000 });
+
+    const first = pool.acquire();
+    await new Promise((r) => setTimeout(r, 30));
+    const report = await assembleStatus(pool, localOnly, { totalBudgetMs: 300 });
+
+    const published = JSON.stringify(report) + JSON.stringify(pool.status());
+    expect(published).not.toContain(secret);
+    expect(published).not.toContain(secret.slice(0, 8));
+    expect(published).not.toContain('/v2/');
+
+    c.release();
+    await first;
+  }, 20_000);
+});
+

@@ -263,18 +263,81 @@ export class RpcPool {
    * round trips would make adding a fallback measurably slower on the happy path, which is
    * a good way to ensure nobody ever configures one.
    */
+  /**
+   * A refusal that belongs to THIS CALLER, not to the endpoint.
+   *
+   * Deliberately not recorded. `budget-exhausted` says the caller ran out of time; storing
+   * it would publish a fact about one slow request as if it were a property of the endpoint,
+   * overwrite a real admission's `checkedAt`, and let two concurrent responses describe the
+   * pool differently depending on which finished last.
+   */
+  private notReached(index: number, why: string): EndpointAdmission {
+    return {
+      identity: describeRpcEndpoint(this.urls[index]),
+      admitted: false,
+      refusedCode: 'budget-exhausted',
+      refusedBecause: why,
+      probeMs: 0,
+      checkedAt: null,
+      ageMs: null,
+    };
+  }
+
+  /**
+   * Admission for ONE caller: shares the network probe, never the waiting budget.
+   *
+   * Coalescing used to hand a later caller the first caller's raw promise, so the newcomer
+   * waited under an allowance it never agreed to. Measured: a `/status` request with a
+   * 300 ms budget took 983 ms because it inherited a stalled 1 000 ms probe started by a
+   * caller with no deadline at all. The whole point of the overall status deadline was
+   * defeated by the optimisation sitting next to it.
+   *
+   * So there are two different clocks and they are kept apart:
+   *
+   *   the PROBE is bounded by `admissionTimeoutMs`, the pool's own unit of work. It is
+   *     shared, it is never cancelled by a waiter giving up, and it records the truth when
+   *     it finishes.
+   *   the WAIT is bounded by this caller's remaining deadline. Giving up on the wait
+   *     abandons nothing and poisons nothing; it only stops this response from blocking.
+   */
   private async admit(index: number, deadlineMs?: number): Promise<EndpointAdmission> {
     if (this.fresh(index)) return this.admissions[index]!;
+
     // Concurrent callers must not each start their own probe. Per-endpoint, so a second
     // endpoint's probe is never merged with the first's.
-    const running = this.inFlight[index];
-    if (running) return running;
+    let running = this.inFlight[index];
+    if (!running) {
+      // The probe takes no caller deadline. A shared unit of work bounded by whoever
+      // happened to start it would make its lifetime depend on an unrelated request.
+      running = this.probe(index).finally(() => {
+        this.inFlight[index] = null;
+      });
+      // A waiter that gives up leaves this promise unawaited; without a handler here that
+      // is an unhandled rejection, which in production is a warning and can be fatal.
+      running.catch(() => {});
+      this.inFlight[index] = running;
+    }
 
-    const probe = this.probe(index, deadlineMs).finally(() => {
-      this.inFlight[index] = null;
-    });
-    this.inFlight[index] = probe;
-    return probe;
+    const wait = this.allowance(this.admissionTimeoutMs, deadlineMs);
+    if (wait <= 0) {
+      return this.notReached(index, 'the status request ran out of budget before this endpoint was reached');
+    }
+    try {
+      return await bounded(running, wait);
+    } catch (err) {
+      if (err instanceof TimedOut) {
+        // The shared probe continues and will record its real verdict. This caller simply
+        // stops waiting for it.
+        return this.notReached(
+          index,
+          `the status request ran out of budget after waiting ${wait}ms for this endpoint`
+        );
+      }
+      // probe() resolves rather than rejects for every network outcome, so reaching here
+      // means something unexpected. Reported as a refusal rather than propagated, because a
+      // status page must produce a body.
+      return this.notReached(index, 'the admission probe failed unexpectedly');
+    }
   }
 
   /** What this call may still spend: the caller's remaining time, never more. */
@@ -283,7 +346,20 @@ export class RpcPool {
     return Math.min(configured, Math.max(0, deadlineMs - this.now()));
   }
 
-  private async probe(index: number, deadlineMs?: number): Promise<EndpointAdmission> {
+  /**
+   * An equal slice of the remaining budget for one of `candidatesLeft` candidates.
+   *
+   * Returns an absolute deadline, so it composes with `allowance` unchanged. Without it the
+   * first candidate consumes everything and a configured fallback can never be reached --
+   * which is the failure mode a fallback exists to cover.
+   */
+  private share(deadlineMs: number | undefined, candidatesLeft: number): number | undefined {
+    if (deadlineMs === undefined) return undefined;
+    const remaining = Math.max(0, deadlineMs - this.now());
+    return this.now() + Math.floor(remaining / Math.max(1, candidatesLeft));
+  }
+
+  private async probe(index: number): Promise<EndpointAdmission> {
     const url = this.urls[index];
     const identity = describeRpcEndpoint(url);
     const started = this.now();
@@ -304,12 +380,9 @@ export class RpcPool {
 
     if (!isIdentified(identity)) return refuse('url-unparseable', identity.problem);
 
-    const budget = this.allowance(this.admissionTimeoutMs, deadlineMs);
-    if (budget <= 0) {
-      // Not a judgement about the endpoint. Reported as its own category so an operator
-      // reading a refusal can tell "this endpoint is wrong" from "we ran out of time".
-      return refuse('budget-exhausted', 'the status request ran out of budget before this endpoint was probed');
-    }
+    // The pool's own unit of work, not any caller's. See admit() for why these are
+    // separate clocks.
+    const budget = this.admissionTimeoutMs;
 
     let provider: ethers.JsonRpcProvider;
     try {
@@ -399,8 +472,10 @@ export class RpcPool {
       ...this.urls.map((_, i) => i).filter((i) => i !== this.active),
     ];
 
-    for (const index of order) {
-      const admission = await this.admit(index, options.deadlineMs);
+    for (let position = 0; position < order.length; position++) {
+      const index = order[position];
+      const candidatesLeft = order.length - position;
+      const admission = await this.admit(index, this.share(options.deadlineMs, candidatesLeft));
       const where = isIdentified(admission.identity) ? admission.identity.origin : 'unparseable endpoint';
       if (!admission.admitted) {
         problems.push(`${where}: ${admission.refusedBecause}`);
@@ -411,7 +486,10 @@ export class RpcPool {
         problems.push(`${where}: admitted but has no provider`);
         continue;
       }
-      const opBudget = this.allowance(this.operationTimeoutMs, options.deadlineMs);
+      const opBudget = this.allowance(
+        this.operationTimeoutMs,
+        this.share(options.deadlineMs, candidatesLeft)
+      );
       if (opBudget <= 0) {
         problems.push(`${where}: the status request ran out of budget before this endpoint was tried`);
         continue;
@@ -459,11 +537,16 @@ export class RpcPool {
       ...(this.active !== null ? [this.active] : []),
       ...this.urls.map((_, i) => i).filter((i) => i !== this.active),
     ];
-    for (const index of order) {
-      // Every candidate shares the caller's ONE remaining budget. Previously each got the
-      // full admissionTimeoutMs, so N stalled endpoints cost N x 4000ms before the response
-      // it belongs to had started counting at all.
-      const admission = await this.admit(index, options.deadlineMs);
+    for (let position = 0; position < order.length; position++) {
+      const index = order[position];
+      // Every candidate shares the caller's ONE remaining budget -- and shares it FAIRLY.
+      //
+      // Giving the first candidate the whole remainder makes a fallback unreachable
+      // whenever the primary stalls: the budget is spent waiting on the endpoint that is
+      // already known to be slow, and the healthy one is never tried. So each remaining
+      // candidate gets an equal slice of what is left, and an early answer returns the rest
+      // of the budget to the candidates behind it.
+      const admission = await this.admit(index, this.share(options.deadlineMs, order.length - position));
       const provider = this.providers[index];
       if (admission.admitted && provider) {
         this.active = index;

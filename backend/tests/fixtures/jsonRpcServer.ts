@@ -40,6 +40,16 @@ export interface FakeChain {
   methods: string[];
   /** Mutable, so a test can change the endpoint's view after admission. */
   options: FakeChainOptions;
+  /**
+   * Answers every request currently held open by `hang`, and stops hanging.
+   *
+   * Needed to prove that a waiter giving up does not POISON a shared probe: without a way
+   * to release the stall, "the first caller can still complete" is untestable, and the
+   * difference between abandoning a wait and cancelling the work would go unasserted.
+   */
+  release(): void;
+  /** How many requests are being held open right now. */
+  pending(): number;
   close(): Promise<void>;
 }
 
@@ -74,6 +84,8 @@ export async function startFakeChain(options: FakeChainOptions = {}): Promise<Fa
     return { id: p.id, jsonrpc: '2.0', result: '0x' };
   };
 
+  const held: Array<() => void> = [];
+
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -82,9 +94,16 @@ export async function startFakeChain(options: FakeChainOptions = {}): Promise<Fa
       const batch = Array.isArray(parsed) ? parsed : [parsed];
       for (const p of batch) methods.push(p.method);
 
-      // A method listed in `hang` never answers. The request is simply abandoned, which
-      // is the common real failure -- a stall, not a rejection.
-      if (batch.some((p: any) => state.hang?.includes(p.method))) return;
+      // A method listed in `hang` never answers until released. The request is simply held
+      // open, which is the common real failure -- a stall, not a rejection.
+      if (batch.some((p: any) => state.hang?.includes(p.method))) {
+        held.push(() => {
+          const out = batch.map(answerOne);
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(Array.isArray(parsed) ? out : out[0]));
+        });
+        return;
+      }
 
       const out = batch.map(answerOne);
       const delay = Math.max(0, ...batch.map((p: any) => state.delays?.[p.method] ?? 0));
@@ -104,6 +123,11 @@ export async function startFakeChain(options: FakeChainOptions = {}): Promise<Fa
     url: `http://127.0.0.1:${port}`,
     methods,
     options: state,
+    release() {
+      state.hang = [];
+      while (held.length) held.pop()!();
+    },
+    pending: () => held.length,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();
