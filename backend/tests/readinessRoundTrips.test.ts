@@ -41,7 +41,20 @@ class RecordingProvider extends ethers.JsonRpcProvider {
       try {
         return { id: p.id, jsonrpc: '2.0', result: this.answers(p.method, p.params ?? []) };
       } catch (err: any) {
-        return { id: p.id, jsonrpc: '2.0', error: { code: 3, message: String(err?.message ?? err) } };
+        // The CODE decides how ethers classifies it, and the two classes mean opposite
+        // things here. 3 is `execution reverted` -- the contract answering -- which ethers
+        // surfaces as CALL_EXCEPTION. Anything else is the call not arriving. Hardcoding 3
+        // for every error made a "socket hang up" fixture indistinguishable from a revert,
+        // so a test for transport silence was actually exercising the revert path.
+        // Revert DATA is what distinguishes the contract answering from the node failing.
+        // Measured: with ethers 6.17 every eth_call failure is CALL_EXCEPTION, and a revert
+        // carrying no data is byte-for-byte indistinguishable from `-32000 server
+        // overloaded` -- both report shortMessage "missing revert data". Only data proves a
+        // revert, so a fixture that wants revert semantics must supply it.
+        const code = typeof err?.jsonRpcCode === 'number' ? err.jsonRpcCode : -32000;
+        const error: Record<string, unknown> = { code, message: String(err?.message ?? err) };
+        if (err?.revertData) error.data = err.revertData;
+        return { id: p.id, jsonrpc: '2.0', error };
       }
     });
   }
@@ -150,7 +163,13 @@ describe('launch-readiness round trips', () => {
     const p = new RecordingProvider((m, params) => {
       if (m === 'eth_call') {
         const name = abi.getFunction(params[0].data.slice(0, 10))?.name;
-        if (!name) throw new Error('execution reverted: InvalidLaunchConfigId');
+        if (!name) {
+          const e: any = new Error('execution reverted: InvalidLaunchConfigId');
+          e.jsonRpcCode = 3;
+          // The selector of a custom error, which is what the real factory returns.
+          e.revertData = '0x' + 'ab'.repeat(4);
+          throw e;
+        }
       }
       return healthy(m, params);
     });
@@ -268,4 +287,95 @@ describe('launch-readiness round trips', () => {
     expect(before.ms).toBeGreaterThan(BUDGET_MS);
     expect(after.ms).toBeLessThan(BUDGET_MS);
   }, 40_000);
+
+  /**
+   * Complete evidence, or no verdict.
+   *
+   * Every read below used to be allowed to fail into a default, and one default was
+   * actively dangerous: an unreadable `launchFee` became 0n, nothing in the verdict
+   * inspects the fee, so `/status` published `launchpad: ok` for a launch whose price
+   * nobody had managed to read.
+   */
+  describe('a missing input is not a permissive input', () => {
+    /** Fails one named call with a transport-shaped error: the call never arrived. */
+    const transportFailure = (target: string) =>
+      new RecordingProvider((m, params) => {
+        if (m === 'eth_call') {
+          const name = abi.getFunction(params[0].data.slice(0, 10))?.name;
+          if (name === target) throw new Error('socket hang up');
+        }
+        return healthy(m, params);
+      });
+
+    it.each(['launchFee', 'feeEscrow', 'launchEnabled', 'whitelistedLaunchers', 'canLaunch'])(
+      'produces NO verdict when %s did not answer',
+      async (target) => {
+        const probe = await probeLaunchPermission(transportFailure(target), TREASURY, 0n, ZERO, D);
+        expect(probe.verdict).toBeNull();
+        expect(probe.failure).toContain('UNKNOWN');
+        expect(probe.failure).toContain(target);
+      }
+    );
+
+    it('never synthesises an unreadable fee as zero', async () => {
+      const probe = await probeLaunchPermission(transportFailure('launchFee'), TREASURY, 0n, ZERO, D);
+      // The old code produced a verdict carrying feeWei 0n. A zero fee is a real, meaningful
+      // value -- pons could set one -- so inventing it is worse than refusing to answer.
+      expect(probe.verdict).toBeNull();
+    });
+
+    it('produces NO verdict when the launch config is unreadable for transport reasons', async () => {
+      const probe = await probeLaunchPermission(transportFailure('getLaunchConfig'), TREASURY, 0n, ZERO, D);
+      expect(probe.verdict).toBeNull();
+      expect(probe.failure).toContain('launch config could not be read');
+    });
+
+    it('produces NO verdict when the pair approval is unreadable', async () => {
+      // A non-native pair, so the approval map really is consulted.
+      const probe = await probeLaunchPermission(
+        transportFailure('approvedPairTokens'),
+        TREASURY,
+        0n,
+        '0x1111111111111111111111111111111111111111',
+        D
+      );
+      expect(probe.verdict).toBeNull();
+      expect(probe.failure).toContain('pair-token approval');
+    });
+
+    it('still answers when only launchConfigCount is missing but the config itself read', async () => {
+      // The count is corroboration, not the answer: getLaunchConfig succeeding IS the
+      // config being readable and enabled.
+      const probe = await probeLaunchPermission(transportFailure('launchConfigCount'), TREASURY, 0n, ZERO, D);
+      expect(probe.verdict).not.toBeNull();
+      expect(probe.verdict!.launchConfigUsable).toBe(true);
+      // But the gap is reported rather than dropped, so the page can degrade on it.
+      expect(probe.failure).toContain('answered with gaps');
+      expect(probe.failure).toContain('launchConfigCount');
+    });
+
+    it('distinguishes a REVERT from silence, and only the revert is an answer', async () => {
+      // A revert carries JSON-RPC code 3 with "execution reverted", which ethers surfaces
+      // as CALL_EXCEPTION. That is the contract speaking; a dead socket is not.
+      const reverting = new RecordingProvider((m, params) => {
+        if (m === 'eth_call') {
+          const name = abi.getFunction(params[0].data.slice(0, 10))?.name;
+          if (name === 'getLaunchConfig') {
+            const e: any = new Error('execution reverted: InvalidLaunchConfigId');
+            e.jsonRpcCode = 3;
+            e.revertData = '0x' + 'ab'.repeat(4);
+            throw e;
+          }
+        }
+        return healthy(m, params);
+      });
+      const probe = await probeLaunchPermission(reverting, TREASURY, 0n, ZERO, D);
+
+      expect(probe.verdict).not.toBeNull();
+      expect(probe.verdict!.launchConfigUsable).toBe(false);
+      expect(probe.verdict!.ready).toBe(false);
+      const t = probe.timings.find((x) => x.name === 'getLaunchConfig')!;
+      expect(t.reverted).toBe(true);
+    });
+  });
 });

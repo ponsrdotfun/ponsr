@@ -80,6 +80,15 @@ export interface CallTiming {
   ok: boolean;
   /** True when `ms` is the cost of a shared batch rather than of this call alone. */
   shared: boolean;
+  /**
+   * True when the CONTRACT answered by reverting, as opposed to the call never arriving.
+   *
+   * The difference decides whether a failure is evidence. `getLaunchConfig(99)` reverting
+   * is the chain telling us that config is unusable -- a real answer. The same call failing
+   * because the socket died tells us nothing, and reading it as "unusable" would publish a
+   * verdict about pons that was actually a verdict about the network.
+   */
+  reverted?: boolean;
   /** Present only on failure, truncated, never the raw provider payload. */
   error?: string;
 }
@@ -109,11 +118,25 @@ async function timed<T>(
     into.push({ name, ms: Date.now() - started, ok: true, shared });
     return v;
   } catch (err: any) {
+    // A revert is proven by REVERT DATA, not by the error code. Measured against ethers
+    // 6.17: `eth_call` failing for ANY reason yields CALL_EXCEPTION -- a genuine revert, a
+    // `-32000 server overloaded`, and a node returning nonsense all arrive identically, and
+    // the last two even share the shortMessage "missing revert data" with a revert that
+    // carried no data. So code alone would classify an overloaded node as the contract
+    // saying no.
+    //
+    // Revert data is the one thing only the contract can produce. Anything without it is
+    // UNKNOWN, which fails closed. Real out-of-range ids revert with the custom error
+    // `InvalidLaunchConfigId`, so the case this matters for does carry data -- and the
+    // primary proof is the id/count comparison, which needs no revert at all.
+    const data = err?.data;
+    const reverted = typeof data === 'string' && data.length > 2;
     into.push({
       name,
       ms: Date.now() - started,
       ok: false,
       shared,
+      reverted,
       error: String(err?.shortMessage ?? err?.message ?? err).slice(0, 120),
     });
     return undefined;
@@ -192,27 +215,73 @@ export async function probeLaunchPermission(
 
   const totalMs = Date.now() - started;
   const slowestMs = timings.reduce((a, t) => (t.ms > a ? t.ms : a), 0);
-
-  // A verdict needs every permission read to have answered. Partial data is not a partial
-  // verdict: a missing `canLaunch` with a present `launchEnabled` would otherwise read as
-  // "the gate is open", which is a statement about pons that nothing measured.
   const failed = timings.filter((t) => !t.ok);
-  if (launchEnabled === undefined || whitelisted === undefined || canLaunch === undefined) {
-    return {
-      verdict: null,
-      timings,
-      totalMs,
-      slowestMs,
-      batched: !serial,
-      failure: `launch permission could not be read: ${failed.map((t) => `${t.name} (${t.error})`).join('; ')}`,
-    };
+  const byTiming = new Map(timings.map((t) => [t.name, t]));
+
+  const noVerdict = (why: string): ReadinessProbe => ({
+    verdict: null,
+    timings,
+    totalMs,
+    slowestMs,
+    batched: !serial,
+    failure: why,
+  });
+
+  /**
+   * The COMPLETE evidence a launch verdict needs.
+   *
+   * This used to be three permission reads. Everything else was allowed to fail into a
+   * default, and one default was actively dangerous: an unreadable `launchFee` became 0n,
+   * `describeReadiness` never inspects the fee, and the page therefore published
+   * `launchpad: ok` on a launch whose price nobody had managed to read. `launchConfigCount`
+   * failing was invisible in the same way.
+   *
+   * A missing input is not a permissive input. Anything here that did not answer produces
+   * NO verdict at all.
+   */
+  const required = [
+    'launchEnabled',
+    'whitelistedLaunchers',
+    'canLaunch',
+    'launchFee',
+    'feeEscrow',
+  ] as const;
+  const missing = required.filter((n) => byTiming.get(n)?.ok !== true);
+  if (missing.length) {
+    return noVerdict(
+      `launch readiness is UNKNOWN: ${missing.join(', ')} did not answer` +
+        (failed.some((t) => t.reverted) ? ' (some calls reverted)' : '')
+    );
   }
 
-  // The config is allowed to have failed: a revert IS the answer for an id that does not
-  // exist, and the count is reported separately so an operator can tell the two apart.
+  /**
+   * Whether the configured launch config is usable, and whether that is even knowable.
+   *
+   * Three outcomes, not two. A revert is the contract answering; a transport failure is
+   * nobody answering; and only the first may be reported as "unusable".
+   */
+  const cfgTiming = byTiming.get('getLaunchConfig');
   const count = configCount === undefined ? null : BigInt(configCount.toString());
-  const inRange = count === null ? cfg !== undefined : launchConfigId < count;
-  const launchConfigUsable = inRange && cfg !== undefined && Boolean(cfg.enabled);
+  let launchConfigUsable: boolean;
+  if (count !== null && launchConfigId >= count) {
+    // Proven out of range by a successful count read. The revert is expected and does not
+    // need to have happened.
+    launchConfigUsable = false;
+  } else if (cfg !== undefined) {
+    launchConfigUsable = Boolean(cfg.enabled);
+  } else if (cfgTiming?.reverted) {
+    // The contract refused to describe it. Out of range or disabled -- either way unusable,
+    // and either way an answer from the chain.
+    launchConfigUsable = false;
+  } else {
+    return noVerdict('launch readiness is UNKNOWN: the launch config could not be read');
+  }
+
+  // Native ETH resolved without a call. Otherwise an unreadable approval map is UNKNOWN --
+  // silently treating it as unapproved would report a refusal pons never made.
+  if (!nativePair && approved === undefined) {
+    return noVerdict('launch readiness is UNKNOWN: the pair-token approval could not be read');
+  }
 
   const readiness: CurrentReadiness = {
     launchEnabled: Boolean(launchEnabled),
@@ -220,28 +289,25 @@ export async function probeLaunchPermission(
     canLaunch: Boolean(canLaunch),
     launchConfigUsable,
     pairApproved: Boolean(approved),
-    feeWei: feeWei === undefined ? 0n : BigInt(feeWei.toString()),
-    escrowMatches:
-      escrow !== undefined && String(escrow).toLowerCase() === deployment.feeEscrow.toLowerCase(),
-    // Asked on its own budget, by probeDeploymentIdentity. Stated as true here so this
-    // verdict describes permission only; the caller reports identity as its own check.
+    // Never synthesised: the guard above guarantees this read succeeded.
+    feeWei: BigInt(feeWei!.toString()),
+    escrowMatches: String(escrow).toLowerCase() === deployment.feeEscrow.toLowerCase(),
+    // Asked on its own budget by IdentityWatch. Stated as true here so this verdict
+    // describes permission only; the caller reports identity as its own check.
     identityMatches: true,
     identityMismatches: [],
   };
 
-  // A fee or escrow that did not answer must not read as satisfied. `escrowMatches` is
-  // already false when the read failed, which describeReadiness refuses on -- but say so
-  // in the failure line too, so the status page can distinguish "pons moved the escrow"
-  // from "we never managed to ask".
-  const unreadable = failed.filter((t) => t.name !== 'getLaunchConfig');
   return {
     verdict: describeReadiness(readiness),
     timings,
     totalMs,
     slowestMs,
     batched: !serial,
-    failure: unreadable.length
-      ? `${unreadable.map((t) => t.name).join(', ')} did not answer`
+    // A verdict was reachable, but something still did not answer -- for example the
+    // config count while getLaunchConfig itself succeeded. Reported rather than dropped.
+    failure: failed.length
+      ? `answered with gaps: ${failed.map((t) => `${t.name}${t.reverted ? ' (reverted)' : ''}`).join(', ')}`
       : undefined,
   };
 }
