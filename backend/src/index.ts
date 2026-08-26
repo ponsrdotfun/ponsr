@@ -9,6 +9,10 @@ import { PrivyWalletResolver } from './walletResolver';
 import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
+import { probeLaunchPermission } from './readinessProbe';
+import { RpcPool, parseEndpointList } from './rpcPool';
+import { RpcEndpointDescription } from './rpcIdentity';
+import { IdentityWatch } from './identityWatch';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation, ReconcilerHandle } from './reconciler';
@@ -17,7 +21,8 @@ import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
-import { buildStatus, statusHttpCode } from './statusReport';
+import { statusHttpCode } from './statusReport';
+import { assembleStatus } from './statusSession';
 import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
@@ -85,6 +90,29 @@ function reportStorage(): void {
 reportStorage();
 const db = new Db(config.DATABASE_PATH);
 const provider = createProvider();
+
+/**
+ * A second opinion for the READ path only, and deliberately not for the launch path.
+ *
+ * Every endpoint is admitted before it answers -- chain id and factory bytecode must match
+ * the registry -- so a fallback cannot move the bot onto a different chain or a forked
+ * state. Empty by default: one endpoint remains the behaviour until an operator adds one.
+ *
+ * The launch path keeps the single pinned `provider` above, on purpose. Failing over
+ * mid-launch means a nonce reserved against one node and a transaction broadcast through
+ * another, and the canary's whole ambiguity model assumes one view of the chain. Making
+ * that path resilient is a financial-path change and needs its own review, not a quiet
+ * ride-along with a status-page fix.
+ */
+const rpcPool = new RpcPool(parseEndpointList(config.RPC_URL, config.RPC_FALLBACK_URLS));
+
+/** The fingerprint of whichever endpoint answered, for binding caches and labelling views. */
+function endpointFingerprint(e: RpcEndpointDescription): string {
+  return e.fingerprint;
+}
+
+/** Deployment identity, cached with a published age, off the launchpad check's deadline. */
+const identityWatch = new IdentityWatch();
 const treasurySigner = createTreasurySigner(provider);
 const treasuryPolicy = treasuryPolicyFromConfig();
 
@@ -285,33 +313,80 @@ app.get('/health', (_req, res) => {
  */
 app.get('/status', async (_req, res) => {
   try {
-    const report = await buildStatus({
+    /**
+     * ONE endpoint for this whole response.
+     *
+     * Chain id, block, fee, balance, readiness and identity used to arrive through two
+     * different providers -- the pinned one and whatever the pool happened to pick -- while
+     * the page labelled the result with the POOL's endpoint. That produced a document whose
+     * `rpc-endpoint` line named B above evidence gathered from A, with nothing on the page
+     * able to say so. Pinned here, once, so "one request, one observed truth" is true of the
+     * endpoint as well as of the chain read.
+     *
+     * Null when nothing can be admitted. The chain checks then fail as they should, and
+     * `rpc-endpoint` reports why each candidate was refused.
+     */
+    const report = await assembleStatus(rpcPool, (session) => {
+      const readProvider = session?.provider;
+      const unavailable = () => {
+        throw new Error('no admitted RPC endpoint is available to serve this status request');
+      };
+
+      return {
       expectedChainId: config.CHAIN_ID,
-      getChainId: async () => Number((await provider.getNetwork()).chainId),
-      getBlockNumber: () => provider.getBlockNumber(),
-      getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
-      getLiveFeeWei: deps.getLiveFeeWei,
+      getChainId: async () =>
+        readProvider ? Number((await readProvider.getNetwork()).chainId) : unavailable(),
+      getBlockNumber: () => (readProvider ? readProvider.getBlockNumber() : unavailable()),
+      getTreasuryBalanceWei: async () =>
+        readProvider ? getBalanceWei(readProvider, await treasurySigner.address()) : unavailable(),
+      getLiveFeeWei: async () =>
+        readProvider ? getLiveFeeWei(readProvider, launchTarget.deployment) : unavailable(),
       // Read from the deployment the bot launches through, using that contract's own
       // canLaunch predicate. Reading a superseded factory is precisely how /status
       // reported the launchpad closed for a week while it was open.
       getLaunchReadiness: async () => {
         const d = launchTarget.deployment;
-        if (!d) return deps.getLaunchReadiness();
-        const r = await readCurrentReadiness(
-          provider,
-          await treasurySigner.address(),
+        if (!d || !readProvider) return deps.getLaunchReadiness();
+        // ONE round trip, and each call timed. This used to be readCurrentReadiness, which
+        // makes four sequential trips -- a 48 KB bytecode download, then feeEscrow alone,
+        // then the permission batch, then the launch config -- inside a single 5 000 ms
+        // deadline. It did not fail because the launchpad was closed or the RPC was
+        // broken; it failed whenever one round trip cost more than about a second.
+        const launcher = await treasurySigner.address();
+        const probe = await probeLaunchPermission(
+          readProvider,
+          launcher,
           config.PONS_LAUNCH_CONFIG_ID,
           '0x0000000000000000000000000000000000000000',
           d
         );
+        const r = probe.verdict;
+        if (!r) {
+          // A required read did not answer. Thrown rather than reported as a closed
+          // launchpad: not knowing is not the same as being refused.
+          throw new Error(probe.failure ?? 'launch readiness could not be determined');
+        }
         return {
           launchEnabled: r.launchEnabled,
           whitelisted: r.whitelisted,
           canLaunch: r.canLaunch,
+          canLaunchOnChain: r.canLaunchOnChain,
           durable: r.durable,
           detail: r.reason ? `${r.reason}` : r.detail,
+          timings: probe.timings,
+          totalMs: probe.totalMs,
+          // Carried through rather than dropped. A verdict reached with gaps in the
+          // evidence is not the same claim as one reached with all of it.
+          incomplete: probe.failure,
         };
       },
+      // Bound to the endpoint that actually answered, and it is the SAME endpoint every
+      // other chain read above used.
+      getDeploymentIdentity: () =>
+        readProvider && session
+          ? identityWatch.check(readProvider, session.endpoint.fingerprint)
+          : Promise.reject(new Error('no admitted RPC endpoint is available')),
+      describeRpc: () => rpcPool.status(),
       /**
        * The UTC CALENDAR DAY, for the human-facing line only.
        *
@@ -356,6 +431,7 @@ app.get('/status', async (_req, res) => {
       // Free at twitterapi.io, and it answers while data calls are being refused.
       readCredits: () => (deps.xClient as { getReadCredits?: () => Promise<{ credits: number; bonus: number } | null> }).getReadCredits?.() ?? Promise.resolve(null),
       sweepStaleAfterMs: Math.max(config.MENTION_POLL_SECONDS * 3, 900) * 1000,
+      };
     });
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {

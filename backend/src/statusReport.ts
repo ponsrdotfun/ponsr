@@ -43,6 +43,14 @@ export interface StatusSpend {
    * budget it is checking is the budget it will draw from.
    */
   chainId: number;
+  /**
+   * Fingerprint of the endpoint that observed the chain id above.
+   *
+   * A response used to gather chain/block/fee/balance through one provider and readiness
+   * through another, then label the whole page with the second. A consumer binding a spend
+   * decision to `chainId` could not tell a coherent envelope from a spliced one.
+   */
+  observedThrough?: string;
   deploymentId?: string;
   factory?: string;
   treasury?: string;
@@ -78,8 +86,82 @@ export interface StatusDeps {
      *  rather than inferred: Ponsr spent a week deriving this from a superseded
      *  contract's fields and was confidently wrong the whole time. */
     canLaunch?: boolean;
+    /**
+     * What `canLaunch()` returned before any local narrowing.
+     *
+     * `canLaunch` above is narrowed to fail closed on unrelated conditions -- a mismatched
+     * fee escrow makes it false even when pons would happily accept the launch. That is
+     * right for a gate and wrong for a report: an operator reading `canLaunch: false` goes
+     * looking for a closed launchpad. Both are published so the page can say which it is.
+     */
+    canLaunchOnChain?: boolean;
     durable?: boolean;
     detail?: string;
+    /**
+     * Set when a verdict was reachable but some evidence was still missing.
+     *
+     * Discarding this was a real defect: an unreadable launchFee became 0n, nothing in the
+     * verdict inspects the fee, and the page published `launchpad: ok` for a launch whose
+     * price nobody had managed to read.
+     */
+    incomplete?: string;
+    /**
+     * Per-call evidence for WHY this check was slow.
+     *
+     * The outage that motivated this had `launchpad: down -- did not answer within 5000ms`
+     * and nothing else. That sentence is compatible with a closed launchpad, a slow RPC, a
+     * wrong endpoint and a bug, and distinguishing them needed access nobody watching the
+     * page had.
+     */
+    timings?: Array<{ name: string; ms: number; ok: boolean; shared: boolean; error?: string }>;
+    totalMs?: number;
+  }>;
+  /**
+   * Which RPC endpoints exist and which are allowed to answer -- identity, never the URL.
+   *
+   * `RPC_URL` is a Fly secret whose value cannot be read back, so "is the backend pointed
+   * at the endpoint I just tested?" was unanswerable by anyone, including the operator who
+   * set it. This publishes enough to compare and not enough to call.
+   */
+  describeRpc?: () => {
+    endpoints: Array<{
+      identity: { origin: string | null; fingerprint: string; credentialed?: boolean };
+      admitted: boolean;
+      refusedBecause?: string;
+      probeMs: number;
+    }>;
+    activeIndex: number | null;
+  };
+  /**
+   * Fingerprint of the ONE endpoint every chain observation in this response came from.
+   *
+   * Published inside the spend envelope, because a consumer binding a spend decision to an
+   * observed chain needs to know which view produced it. Absent when no endpoint could be
+   * admitted -- and the envelope is then omitted entirely rather than sourced from nowhere.
+   */
+  observedThrough?: string;
+  /**
+   * Index into `describeRpc().endpoints` of the endpoint THIS response actually used.
+   *
+   * Carried by value rather than read from `activeIndex` at render time. The pool's
+   * preferred endpoint is mutable global state: a concurrent request can move it between
+   * this response acquiring endpoint A and rendering its `rpc-endpoint` line, so the page
+   * could publish `observedThrough=A` in the machine-readable envelope while telling a
+   * human that B was serving. Two answers to the same question, in one document.
+   */
+  sessionEndpointIndex?: number;
+  /**
+   * Deployment identity, on its own budget and cadence.
+   *
+   * Split out of the launchpad check because a 48 KB bytecode download sharing a deadline
+   * with the permission reads meant a slow transfer published `launchpad: down` -- a claim
+   * about pons produced by a file transfer.
+   */
+  getDeploymentIdentity?: () => Promise<{
+    result: { ok: boolean; mismatches: string[] } | null;
+    ageMs: number | null;
+    fromCache: boolean;
+    unreadable?: string;
   }>;
   /** Which registry entry the bot launches through, so the page names the contract
    *  it is actually reading rather than "the launchpad". */
@@ -145,7 +227,14 @@ async function within<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
     return await Promise.race([
       p,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not answer within ${ms}ms`)), ms);
+        // Distinguished on purpose. "The check timed out" and "the response had already
+        // spent its whole budget before reaching this check" send an operator to different
+        // places, and reporting the second as the first blames the wrong dependency.
+        const message =
+          ms <= 0
+            ? `${label} was not reached: the status request had already used its whole budget`
+            : `${label} did not answer within ${ms}ms`;
+        timer = setTimeout(() => reject(new Error(message)), ms);
       }),
     ]);
   } finally {
@@ -167,6 +256,53 @@ function eth(wei: bigint, dp = 4): string {
 
 export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<StatusReport> {
   const checks: StatusCheck[] = [];
+
+  /**
+   * ONE budget for the whole response, not one per check.
+   *
+   * Every dependency below used to get its own full `timeoutMs`, awaited in sequence, so a
+   * page nominally bounded at five seconds could take five checks times five seconds. Under
+   * an uptime monitor polling every thirty seconds that also accumulates orphaned in-flight
+   * work, because racing a timer does not cancel the request underneath it.
+   *
+   * Two changes. Every network dependency is STARTED up front, so they travel concurrently
+   * and ethers batches what it can. And each await is bounded by the time actually
+   * remaining, so the total is bounded by `timeoutMs` rather than by a multiple of it.
+   */
+  const deadline = Date.now() + timeoutMs;
+  const remaining = () => Math.max(0, deadline - Date.now());
+
+  /**
+   * Started here, awaited later.
+   *
+   * A rejection on a promise nobody is awaiting yet is an unhandled rejection, which in
+   * production is a process-level warning and in some configurations a crash -- from a
+   * status page, which is the one component that must never take the bot down. Attaching a
+   * no-op catch now keeps the rejection for the real await below.
+   */
+  const start = <T>(make: () => Promise<T>): Promise<T> => {
+    let p: Promise<T>;
+    try {
+      p = make();
+    } catch (err) {
+      // A dependency that throws SYNCHRONOUSLY -- a missing function, a bad config read --
+      // must become a failed check, not an exception that takes the whole status page down.
+      // This is the one component that has to keep answering when everything else is broken.
+      p = Promise.reject(err);
+    }
+    p.catch(() => {});
+    return p;
+  };
+
+  const inflight = {
+    chain: start(() => Promise.all([deps.getChainId(), deps.getBlockNumber()])),
+    fee: start(() => deps.getLiveFeeWei()),
+    readiness: start(() => deps.getLaunchReadiness()),
+    balance: start(() => deps.getTreasuryBalanceWei()),
+    identity: deps.getDeploymentIdentity ? start(deps.getDeploymentIdentity) : undefined,
+    pairAssets: deps.listPairAssets ? start(deps.listPairAssets) : undefined,
+    credits: deps.readCredits ? start(deps.readCredits) : undefined,
+  };
   /**
    * Machine-readable, and it names its own window.
    *
@@ -199,11 +335,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   let observed: { chainId: number; block: number } | null = null;
   let observedError: unknown = null;
   try {
-    const [chainId, block] = await within(
-      Promise.all([deps.getChainId(), deps.getBlockNumber()]),
-      timeoutMs,
-      'RPC'
-    );
+    const [chainId, block] = await within(inflight.chain, remaining(), 'RPC');
     observed = { chainId, block };
   } catch (err) {
     observedError = err;
@@ -219,6 +351,9 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
           currentUtcDayWei: deps.spentTodayWei().toString(),
           // Observed, not configured.
           chainId: observedChainId,
+          // Which endpoint saw that chain. Without it, a consumer cannot tell a coherent
+          // envelope from one assembled out of two different views.
+          observedThrough: deps.observedThrough,
           deploymentId: deps.deploymentId,
           factory: deps.deploymentFactory,
           treasury: deps.treasuryAddress,
@@ -259,7 +394,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   }
 
   try {
-    feeWei = await within(deps.getLiveFeeWei(), timeoutMs, 'launchFee()');
+    feeWei = await within(inflight.fee, remaining(), 'launchFee()');
     checks.push({ name: 'launch-fee', state: 'ok', detail: eth(feeWei) });
   } catch (err) {
     // The fee is read live before every launch and is owner-settable on pons's
@@ -275,11 +410,78 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     });
   }
 
+  // Where the traffic goes, published before anything that depends on it. An operator
+  // debugging a slow readiness check needs this first, not buried under the consequences.
+  if (deps.describeRpc) {
+    const pool = deps.describeRpc();
+    // THIS response's endpoint when one was pinned; the pool's preferred one only as a
+    // fallback for callers that do not pin a session. Never the mutable value when a
+    // pinned one exists.
+    const usedIndex = deps.sessionEndpointIndex ?? pool.activeIndex;
+    const active = usedIndex === null || usedIndex === undefined ? null : pool.endpoints[usedIndex];
+    const refused = pool.endpoints.filter((e) => e.refusedBecause && e.refusedBecause !== 'not probed yet');
+    const where = active
+      ? `${active.identity.origin ?? 'unparseable'} (fingerprint ${active.identity.fingerprint})`
+      : 'none admitted yet';
+    const extra = [
+      `${pool.endpoints.length} configured`,
+      ...refused.map(
+        (e) => `REFUSED ${e.identity.origin ?? 'unparseable'}: ${e.refusedBecause}`
+      ),
+    ];
+    checks.push({
+      name: 'rpc-endpoint',
+      // A refused endpoint is not an outage: the primary may be serving perfectly while a
+      // misconfigured fallback sits refused beside it. Reported, not escalated.
+      state: active ? 'ok' : 'degraded',
+      detail:
+        `${where}; ${extra.join('; ')}` +
+        // Said explicitly, because "the pool prefers B" and "this page was built from B"
+        // are different claims and only the second one belongs on this response.
+        (deps.sessionEndpointIndex !== undefined ? '; served this response' : ''),
+    });
+  }
+
   try {
-    const r = await within(deps.getLaunchReadiness(), timeoutMs, 'launch readiness');
+    const r = await within(inflight.readiness, remaining(), 'launch readiness');
     // canLaunch is the contract's own answer where it exists; the older deployments
     // have no such helper, so the inference is the fallback rather than the rule.
     const permitted = r.canLaunch ?? (r.launchEnabled || r.whitelisted);
+
+    // Appended to whichever detail is chosen below. Present on the healthy path too: a
+    // check that only reports its cost once it has already failed gives an operator no
+    // baseline to compare against, which is how a four-round-trip check sat unnoticed.
+    const cost: string[] = [];
+    if (typeof r.totalMs === 'number') cost.push(`read in ${r.totalMs}ms`);
+    if (r.timings?.length) {
+      const slowest = r.timings.reduce((a, t) => (t.ms > a.ms ? t : a));
+      cost.push(
+        r.timings.every((t) => t.shared)
+          ? `${r.timings.length} calls in one batch`
+          : `slowest call ${slowest.name} ${slowest.ms}ms`
+      );
+      const failed = r.timings.filter((t) => !t.ok).map((t) => t.name);
+      if (failed.length) cost.push(`did not answer: ${failed.join(', ')}`);
+    }
+    // Only when the two disagree -- which is exactly when the narrowed field misleads.
+    if (r.canLaunchOnChain !== undefined && r.canLaunchOnChain !== r.canLaunch) {
+      cost.push(
+        `canLaunch() on chain is ${r.canLaunchOnChain}; refused locally for another reason`
+      );
+    }
+    const suffix = cost.length ? ` [${cost.join('; ')}]` : '';
+
+    // A verdict reached with gaps is not a clean pass. Reported as degraded rather than ok:
+    // "we could not read part of this" and "everything is fine" must not look identical.
+    if (permitted && r.incomplete) {
+      checks.push({
+        name: 'launchpad',
+        state: 'degraded',
+        detail:
+          `${r.detail ?? 'this deployment would accept a launch'} -- but the evidence is incomplete: ` +
+          `${r.incomplete}${suffix}`,
+      });
+    } else
     checks.push(
       permitted
         ? {
@@ -289,21 +491,58 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
             // gate works exactly as well as one riding on a whitelist, right up until
             // the gate closes -- and only one of those is worth planning around.
             detail:
-              r.detail ??
-              (r.whitelisted ? 'whitelisted on this deployment' : 'open via the public gate'),
+              (r.detail ??
+                (r.whitelisted ? 'whitelisted on this deployment' : 'open via the public gate')) +
+              suffix,
           }
         : {
             name: 'launchpad',
             state: 'degraded',
-            detail: r.detail ?? 'this deployment would refuse a launch from this address',
+            detail: (r.detail ?? 'this deployment would refuse a launch from this address') + suffix,
           }
     );
   } catch (err) {
     checks.push({ name: 'launchpad', state: 'down', detail: reason(err) });
   }
 
+  if (deps.getDeploymentIdentity) {
+    try {
+      const id = await within(inflight.identity!, remaining(), 'deployment identity');
+      const age =
+        id.ageMs === null ? 'never measured' : `measured ${Math.round(id.ageMs / 1000)}s ago`;
+      if (!id.result) {
+        checks.push({
+          name: 'deployment-identity',
+          state: 'degraded',
+          detail: id.unreadable ? `not verified yet: ${id.unreadable}` : 'not verified yet',
+        });
+      } else if (!id.result.ok) {
+        // The most serious thing this page can say: the contract being addressed is not
+        // the one the registry describes. Never softened by a cache -- mismatches are
+        // re-read every time.
+        checks.push({
+          name: 'deployment-identity',
+          state: 'down',
+          detail: `does NOT match the registry (${age}) -- ${id.result.mismatches.join('; ')}`,
+        });
+      } else {
+        checks.push({
+          name: 'deployment-identity',
+          // A pass that could not be refreshed is still a pass, but its age is stated so
+          // nobody reads a remembered answer as a fresh one.
+          state: id.unreadable ? 'degraded' : 'ok',
+          detail: id.unreadable
+            ? `matched the registry (${age}), but the latest attempt failed: ${id.unreadable}`
+            : `matches the registry (${id.fromCache ? age : 'measured just now'})`,
+        });
+      }
+    } catch (err) {
+      checks.push({ name: 'deployment-identity', state: 'degraded', detail: reason(err) });
+    }
+  }
+
   try {
-    const balance = await within(deps.getTreasuryBalanceWei(), timeoutMs, 'treasury balance');
+    const balance = await within(inflight.balance, remaining(), 'treasury balance');
     if (feeWei && feeWei > 0n) {
       // Stated in launches rather than ETH, because the fee moves and a number of
       // launches is the thing an operator actually needs to decide on.
@@ -321,17 +560,55 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   }
 
   // Local state below: no network, so these answer even when the chain does not.
-  const spent = deps.spentTodayWei();
+  //
+  // THE FIGURE THAT GATES LAUNCHES, NOT THE ONE THAT READS NICELY.
+  //
+  // This check reported the UTC CALENDAR day while validator.ts admits against
+  // db.totalSpendLast24h(), a ROLLING window. They agree for most of the day and diverge
+  // exactly when it is expensive: at 00:01 UTC the calendar figure resets to zero while the
+  // breaker still counts yesterday's spend. So the page could say `daily-cap: ok` with a
+  // full cap of apparent headroom while every launch was being refused -- and the old text
+  // said refusals last "until midnight UTC", which is the calendar boundary and not when a
+  // rolling window actually frees up.
+  const calendarSpent = deps.spentTodayWei();
+  const rollingSpent = deps.rollingSpendLast24hWei?.();
   const cap = deps.dailyCapWei;
-  const pct = cap > 0n ? Number((spent * 100n) / cap) : 0;
-  checks.push({
-    name: 'daily-cap',
-    // Hitting the cap is the circuit breaker working, not a fault -- but it does
-    // mean every further launch is refused until midnight UTC, which is exactly
-    // the thing someone would otherwise spend an hour failing to explain.
-    state: pct >= 100 ? 'degraded' : 'ok',
-    detail: `${eth(spent)} of ${eth(cap)} spent today (${pct}%), ${deps.launchesToday()} launch(es)`,
-  });
+
+  if (rollingSpent === undefined) {
+    /**
+     * UNKNOWN IS NOT HEADROOM.
+     *
+     * This used to fall back to the calendar figure and report `ok` whenever that was under
+     * cap. But the calendar figure is not what admits a launch -- the rolling one is -- so a
+     * missing rolling value with a quiet calendar day produced a confident green light for a
+     * breaker whose state nobody had read. That is the same defect as an unreadable launch
+     * fee becoming zero, in a different file.
+     */
+    checks.push({
+      name: 'daily-cap',
+      state: 'degraded',
+      detail:
+        `the rolling 24h spend could not be read, so the operative cap state is UNKNOWN. ` +
+        `${eth(calendarSpent)} of ${eth(cap)} is the UTC-day figure and is accounting only -- ` +
+        `it is not what the circuit breaker admits against`,
+    });
+  } else {
+    const pct = cap > 0n ? Number((rollingSpent * 100n) / cap) : 0;
+    checks.push({
+      name: 'daily-cap',
+      // Hitting the cap is the circuit breaker working, not a fault -- but it does mean
+      // every further launch is refused, and it is worth saying when that ends. A rolling
+      // window frees up gradually as the oldest spend ages out, not all at once at midnight.
+      state: pct >= 100 ? 'degraded' : 'ok',
+      detail:
+        `${eth(rollingSpent)} of ${eth(cap)} spent in the last rolling 24h (${pct}%), ` +
+        `${deps.launchesToday()} launch(es) today; UTC-day figure ${eth(calendarSpent)} is ` +
+        `accounting only` +
+        (pct >= 100
+          ? '. Launches are refused until enough of the oldest spend ages out of the 24h window'
+          : ''),
+    });
+  }
 
   checks.push({
     name: 'treasury-cold',
@@ -343,7 +620,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
 
   if (deps.factoryVersion === 'v2' && deps.listPairAssets) {
     try {
-      const symbols = await within(deps.listPairAssets(), timeoutMs, 'pair assets');
+      const symbols = await within(inflight.pairAssets!, remaining(), 'pair assets');
       checks.push({
         name: 'pair-assets',
         // An empty set is not an outage -- it is pons having approved nothing -- but
@@ -417,7 +694,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
    */
   if (deps.readCredits) {
     try {
-      const c = await within(deps.readCredits(), timeoutMs, 'read credits');
+      const c = await within(inflight.credits!, remaining(), 'read credits');
       if (c === null) {
         checks.push({ name: 'read-credits', state: 'ok', detail: 'provider reports no balance' });
       } else {

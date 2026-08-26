@@ -18,6 +18,14 @@ function deps(over: Partial<StatusDeps> = {}): StatusDeps {
     getLiveFeeWei: async () => FEE,
     getLaunchReadiness: async () => ({ launchEnabled: true, whitelisted: false }),
     spentTodayWei: () => 0n,
+    /**
+     * Supplied because production supplies it, and because its ABSENCE is now meaningful.
+     *
+     * The rolling 24h figure is what validator.ts admits against. When it cannot be read,
+     * daily-cap reports UNKNOWN rather than falling back to the calendar day -- unknown is
+     * not headroom. These tests are about other things, so they provide it.
+     */
+    rollingSpendLast24hWei: () => 0n,
     dailyCapWei: ETH / 100n,
     launchesToday: () => 0,
     coldAddressSet: true,
@@ -123,7 +131,11 @@ describe('buildStatus', () => {
   // The breaker firing is the system working. It is reported because otherwise
   // every launch is refused for a reason nobody can see.
   it('says so when the daily cap is spent', async () => {
-    const r = await buildStatus(deps({ spentTodayWei: () => ETH / 100n, launchesToday: () => 20 }));
+    // The ROLLING figure is the one that refuses launches, so it is the one that must be
+    // at cap for the page to say the breaker is spent.
+    const r = await buildStatus(
+      deps({ rollingSpendLast24hWei: () => ETH / 100n, spentTodayWei: () => ETH / 100n, launchesToday: () => 20 })
+    );
     expect(find(r, 'daily-cap').state).toBe('degraded');
     expect(find(r, 'daily-cap').detail).toContain('(100%)');
   });

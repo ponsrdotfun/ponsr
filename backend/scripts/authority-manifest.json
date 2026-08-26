@@ -134,6 +134,16 @@
       "explicitGate": null
     },
     {
+      "script": "rpc-diagnose.ts",
+      "authority": "read-only",
+      "effects": [
+        "sends eth_call and eth_getCode to an RPC endpoint",
+        "counts round trips and times each readiness call",
+        "constructs no signer, reads no credential, broadcasts nothing"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
       "script": "run-eval.ts",
       "authority": "read-only",
       "effects": [

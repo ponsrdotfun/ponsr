@@ -261,6 +261,92 @@ invalidates any earlier dry run.
 NO-GO pending independent audit and renewed explicit financial authorisation. See
 `PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
 
+**The canary execute was ATTEMPTED and ABORTED at preflight on 2026-08-25**, twice, with no
+signature and no broadcast. The authorisation is **unused, not consumed**. It stopped because
+`/status` was returning 503 with `launchpad` down, which fails gates 2, 6 and 9. The reviewer's
+independent verification found 8/8 requests failing afterwards, so the brief recovery observed
+during the attempt was a lucky window, not a fix. Reports: `PONSR-CANARY-EXECUTE-ABORTED-REPORT.txt`,
+`PONSR-CANARY-EXECUTE-ABORT-AND-LAUNCHPAD-FINDING.txt`.
+
+**ROOT CAUSE FOUND 2026-08-26, and it was NOT the upstream RPC.** That diagnosis — recorded in
+the abort reports and repeated here — was wrong. The launch-readiness check made **four
+sequential HTTP round trips** inside a single 5 000 ms deadline: `eth_getCode` for 24 177 bytes
+of runtime bytecode, then `feeEscrow()` alone, then the batched permission reads, then
+`getLaunchConfig` waiting on the count from the trip before it. That divides the budget into
+~1 250 ms slices, so the check failed whenever ONE round trip cost over a second and passed only
+when the network happened to be fast. Measured live in the same minute: **pre-fix 7 354 ms,
+post-fix 1 561 ms, identical verdict**. The lesson is the same one §11 of the findings teaches —
+`rpc: ok` sitting beside `launchpad: down` was read as a statement about pons, when nothing had
+measured pons at all.
+
+Fixed by `readinessProbe.ts` (one round trip, per-call timings marked `shared` because batching
+destroys attribution), `identityWatch.ts` (the bytecode check on its own budget and cadence,
+never weakened on the launch path), `rpcIdentity.ts` (publish WHICH endpoint answered without
+publishing the URL — `RPC_URL` is an unreadable Fly secret, and that missing fact is why this
+was misdiagnosed), and `rpcPool.ts` (a bounded fallback that admits an endpoint only if its
+chain id and factory bytecode match the registry, wired to the read path only). Not yet
+deployed. See `PONSR-READINESS-OBSERVABILITY-REPORT.txt`.
+
+**An independent audit of PR #20 (2026-08-26) found nine defects in that work, and the
+first one is the most important lesson in this file after §11 of the findings.**
+
+`rpcPool`'s wrong-chain admission gate **did nothing at all**. It asked
+`provider.getNetwork()`, but `new JsonRpcProvider(url, chainId, { staticNetwork: true })`
+answers that from the CONFIGURED value and sends no request. Reproduced: a server answering
+chain 46630, a pool expecting 4663, **zero methods reaching the transport**, endpoint
+**ADMITTED**. The gate compared a constant to itself.
+
+Every wrong-chain test passed, because they supplied a fake provider whose `getNetwork()`
+returned whatever the test wanted. **A mock placed above the layer under test can only
+report the author's expectations back** — and this repository had already written that
+sentence down, in `readinessRoundTrips.test.ts`, before making the mistake in the file next
+to it. The eight tests were deleted rather than repaired: adding a `send` stub would have
+made them green again and rebuilt the same false comfort. They are replaced by
+`rpcPoolTransport.test.ts`, which drives a real `JsonRpcProvider` against a real local
+JSON-RPC server and asserts on the methods that server was **actually asked for**.
+
+The other eight are recorded in `PONSR-PR20-AUDIT-CLOSURE-REPORT.txt`. Three are worth
+carrying forward as general rules:
+
+- **A revert is proven by revert DATA, not by an error code.** With ethers 6.17 every
+  `eth_call` failure is `CALL_EXCEPTION`, and a revert carrying no data is indistinguishable
+  from `-32000 server overloaded` down to the same `missing revert data` message. Code alone
+  would classify an overloaded node as the contract saying no.
+- **A missing input is not a permissive input.** An unreadable `launchFee` became `0n`,
+  nothing in the verdict inspects the fee, and `/status` published `launchpad: ok` for a
+  launch whose price nobody had managed to read.
+- **`/status` reported the UTC calendar day while `validator.ts` admits against a rolling
+  24h window.** At 00:01 UTC the page showed a full cap of headroom while every launch was
+  being refused — and it told the operator refusals end "at midnight UTC", which is not when
+  a rolling window frees up.
+
+**A third review (2026-08-26) found three more, all at the STATUS BOUNDARY rather than in
+any single unit, and the first one carries its own lesson.**
+
+`buildStatus` was bounded and tested as bounded. The ROUTE was not: it called
+`await rpcPool.acquire()` first, and acquisition admits candidates serially at the full
+admission timeout. Measured: **8 020 ms of acquisition before the "one budget for the whole
+response" even started**, 8 023 ms total against a claimed 5 000 ms. **The unit test passed
+the entire time, because it called `buildStatus` directly.** A bound that holds for a
+function says nothing about the composition that calls it, and nothing was testing the
+composition. It is `statusSession.ts` now, and the tests drive it: 4 767 ms for the same
+scenario, with a body still returned.
+
+The other two: **an unknown rolling spend was falling back to the calendar day**, so a
+missing authoritative figure plus a quiet calendar day published `daily-cap: ok` — the same
+"missing input treated as permissive" defect as the launch fee, in a different file. And
+**`rpc-endpoint` read the pool's mutable preferred endpoint at render time**, so a
+concurrent request could leave one response carrying `observedThrough=A` in the envelope
+while telling a human that B was serving.
+
+**A fifth review (2026-08-26) found the fix's own optimisation defeating it.** The pool
+coalesces concurrent admissions, and `admit()` handed a later caller the in-flight promise
+as-is — so a `/status` request with a **300 ms budget took 983 ms**, waiting under a stalled
+1 000 ms probe started by a caller with no deadline at all. Every existing test began from an
+idle pool, so nothing touched the concurrency path. The lesson rhymes with the one above: a
+bound is only as good as the compositions you actually exercise, and an optimisation that
+shares work must not also share the waiting. Probe and wait are separate clocks now.
+
 **The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
 table; the journal is operator state outside the container, deliberately, so a deploy cannot
 erase a record of transactions that are still on chain. Migrations to it — such as the
