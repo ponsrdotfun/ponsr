@@ -87,6 +87,9 @@ export const CORE_PROBLEMS = [
   'spend-unknown',
   'spend-exhausted',
   'core-deadline-exceeded',
+  'clock-unusable',
+  'cap-unreadable',
+  'assembly-failed',
 ] as const;
 
 export type CoreProblem = (typeof CORE_PROBLEMS)[number];
@@ -203,6 +206,59 @@ export interface CoreOptions {
 }
 
 export const DEFAULT_CORE_BUDGET_MS = 2500;
+
+/**
+ * A clock that cannot poison the evidence it timestamps.
+ *
+ * The injected `now` was read unguarded four times. A clock that THREW rejected the whole
+ * function with its raw message; a clock returning NaN, Infinity or a negative produced
+ * `ok: true` with `elapsedMs: NaN` and a 1970 timestamp -- a document asserting freshness
+ * from a reading that means nothing.
+ *
+ * So every read is checked, and a bad clock is a FAILURE rather than a substitution. The
+ * internal fallback exists only so bookkeeping can finish and a closed body can be
+ * returned; `clock-unusable` is recorded, `ok` is false, and nothing pretends the timings
+ * are real.
+ *
+ * THE BOUNDARY, STATED HONESTLY: this defends against a caller-supplied clock, because that
+ * is an injectable seam. It does not claim totality against arbitrary malicious objects
+ * substituted for typed internal dependencies. What IS guaranteed is that the public routes
+ * never leak raw text and always return a closed response.
+ */
+class GuardedClock {
+  private broken = false;
+  private last: number | null = null;
+  constructor(private readonly source: () => number) {}
+
+  /** Never throws, never returns a value that is not a usable epoch millisecond. */
+  read(): number {
+    try {
+      const v = this.source();
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+        // MONOTONIC, or it is not a clock. A source that moves backward makes every
+        // elapsed measurement and every deadline comparison meaningless -- each individual
+        // reading looks like a perfectly ordinary epoch millisecond, which is exactly why
+        // it has to be caught here rather than by the arithmetic downstream.
+        if (this.last !== null && v < this.last) {
+          this.broken = true;
+        } else {
+          this.last = v;
+          return v;
+        }
+      } else {
+        this.broken = true;
+      }
+    } catch {
+      // Nothing from the error is retained.
+      this.broken = true;
+    }
+    return Date.now();
+  }
+
+  get failed(): boolean {
+    return this.broken;
+  }
+}
 /** A cached identity pass older than this is not fresh evidence for a spend decision. */
 export const DEFAULT_IDENTITY_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -265,7 +321,8 @@ export async function buildCoreEvidence(
   deps: CoreDeps,
   options: CoreOptions = {}
 ): Promise<CoreEvidence> {
-  const now = options.now ?? (() => Date.now());
+  const clock = new GuardedClock(options.now ?? (() => Date.now()));
+  const now = () => clock.read();
   const budget = options.budgetMs ?? DEFAULT_CORE_BUDGET_MS;
   const identityMaxAge = options.identityMaxAgeMs ?? DEFAULT_IDENTITY_MAX_AGE_MS;
   const startedAt = now();
@@ -280,13 +337,22 @@ export async function buildCoreEvidence(
   // can throw; `new Date(...).toISOString()` throws on a non-finite value. None of those
   // should be possible with the declared types, but "should be impossible" is exactly the
   // claim that was wrong twice already, so the boundary is real rather than asserted.
-  const capString = (() => {
-    try {
-      return deps.capWei.toString();
-    } catch {
-      return '0';
-    }
-  })();
+  //
+  // A CAP THAT CANNOT BE READ IS NOT A CAP OF ZERO. Substituting '0' published a fabricated
+  // limit as if it had been observed -- and zero is the most permissive possible reading of
+  // a field whose entire job is to refuse. It is a failure now, and `capWei` carries the
+  // empty string rather than a number anyone could act on.
+  let capString = '';
+  let capUsable = false;
+  let capValue: bigint | null = null;
+  try {
+    if (typeof deps.capWei !== 'bigint') throw new Error('cap is not a bigint');
+    capValue = deps.capWei;
+    capString = capValue.toString();
+    capUsable = true;
+  } catch {
+    capUsable = false;
+  }
   const stamp = (at: number): string => {
     try {
       return new Date(at).toISOString();
@@ -309,11 +375,24 @@ export async function buildCoreEvidence(
   };
 
   const finish = (fields: Partial<CoreEvidence>): CoreEvidence => {
-    const dependencies = rec.seal(CORE_DEPENDENCIES);
-    const elapsedMs = now() - startedAt;
+    // The remaining synchronous work, held to the same standard rather than assumed total.
+    let dependencies: DependencyTiming[] = [];
+    try {
+      dependencies = rec.seal(CORE_DEPENDENCIES);
+    } catch {
+      if (!problems.includes('assembly-failed')) problems.push('assembly-failed');
+    }
+    const finishedAt = now();
+    let elapsedMs = finishedAt - startedAt;
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) elapsedMs = 0;
     if (elapsedMs > budget && !problems.includes('core-deadline-exceeded')) {
       problems.push('core-deadline-exceeded');
     }
+    // Recorded LAST, so a clock that broke at any point in the response is reported even
+    // if every dependency answered. Freshness and deadline evidence built on an unusable
+    // clock is not evidence.
+    if (clock.failed && !problems.includes('clock-unusable')) problems.push('clock-unusable');
+    if (!capUsable && !problems.includes('cap-unreadable')) problems.push('cap-unreadable');
     return {
       ...base,
       ok: problems.length === 0,
@@ -493,7 +572,10 @@ export async function buildCoreEvidence(
   if (rolling === undefined) problems.push('spend-unknown');
   else {
     rolling24hWei = rolling.toString();
-    if (rolling >= deps.capWei) problems.push('spend-exhausted');
+    // Compared against the VALIDATED cap. `rolling >= deps.capWei` on a non-bigint invokes
+    // its `toString`/`valueOf`, so a hostile cap object could throw from inside the
+    // comparison -- which is where the raw message actually escaped, not the serialisation.
+    if (capUsable && capValue !== null && rolling >= capValue) problems.push('spend-exhausted');
   }
 
   // A READABLE ZERO IS NOT FUNDING.

@@ -21,7 +21,7 @@ import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
-import { statusHttpCode } from './statusReport';
+import { statusHandler, statusCoreHandler } from './statusRoutes';
 import { assembleCore, assembleStatus, AcquiredSession } from './statusSession';
 import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
@@ -478,68 +478,17 @@ const statusDepsFor = (session: AcquiredSession | null) => {
       };
 };
 
-app.get('/status', async (_req, res) => {
-  try {
-    const report = await assembleStatus(rpcPool, statusDepsFor);
-    res.status(statusHttpCode(report)).json(report);
-  } catch (err) {
-    /**
-     * A CLOSED SHAPE, never the exception text.
-     *
-     * This published `error: String(err.message)`. `buildStatus` is written not to throw,
-     * but a synchronous throw from any injected dependency reached here -- and the message
-     * can carry an internal filesystem path or a credential-bearing URL. One integration
-     * bug was enough to leak either through a public endpoint.
-     *
-     * Saying so still beats a bare 500 with no body, which is indistinguishable from the
-     * process being gone. It just says so in a fixed vocabulary.
-     */
-    void err;
-    res.status(503).json({ state: 'down', problem: 'status-could-not-be-assembled' });
-  }
-});
-
 /**
- * The authoritative core alone: read-only, and structurally unable to wait on optional
- * telemetry.
+ * Both status routes, mounted from the ONE extracted definition.
  *
- * A NOTE ON "KEYLESS", STATED PRECISELY.
- * The validator and its script are keyless, and this route performs no signing, requests no
- * signature and broadcasts nothing. But this route is hosted inside a process that
- * constructs a treasury signer at startup for the launch path, so the PROCESS is
- * signer-capable. Serving status no longer resolves an address through the signer -- it
- * uses the public pinned address -- but calling the deployed endpoint "keyless" would be
- * false at the composition boundary, and that claim is not made.
- *
- * WHY A SEPARATE ROUTE AND NOT ONLY A FIELD ON /status
- * ---------------------------------------------------
- * Ordering is a promise; structure is a guarantee. `/status` produces the core first and
- * only then starts optional telemetry, which already keeps a third-party credits API off
- * the chain facts. This route never STARTS that work, so there is nothing to order and
- * nothing for a later edit to get wrong.
- *
- * It is what a canary-readiness validator reads. It loads no signer, no Turnkey credential
- * and no private key, and broadcasts nothing. A green answer is evidence about the chain at
- * a moment -- not permission to spend. The launch path keeps every one of its own direct
- * preflight checks regardless of what this says.
- *
- * 200 when the core is ok, 503 when it is not, so a consumer reading only the status line
- * still fails closed.
+ * They used to be written inline here, and a test that mirrored a sanitised copy of the
+ * core handler passed while this file still published `detail: String(err.message)`. A test
+ * standing next to the thing instead of on it confirms only what its author believed. There
+ * is one copy now, in `statusRoutes.ts`, and the tests import it.
  */
-app.get('/status/core', async (_req, res) => {
-  try {
-    const core = await assembleCore(rpcPool, statusDepsFor);
-    res.status(core.ok ? 200 : 503).json(core);
-  } catch (err) {
-    res.status(503).json({
-      schema: 'ponsr.status-core',
-      version: 1,
-      ok: false,
-      problems: ['core-deadline-exceeded'],
-      detail: String((err as Error)?.message ?? err).slice(0, 160),
-    });
-  }
-});
+const statusRouteDeps = { pool: rpcPool, makeDeps: statusDepsFor };
+app.get('/status', statusHandler(statusRouteDeps));
+app.get('/status/core', statusCoreHandler(statusRouteDeps));
 
 function startOfUtcDay(): string {
   const d = new Date();

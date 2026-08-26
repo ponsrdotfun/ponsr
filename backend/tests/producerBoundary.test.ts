@@ -2,7 +2,8 @@ import express from 'express';
 import type { AddressInfo } from 'net';
 import { buildCoreEvidence, CoreDeps, CORE_PROBLEMS } from '../src/statusCore';
 import { assembleCore, assembleStatus, AcquiredSession, StatusPool } from '../src/statusSession';
-import { StatusDeps, statusHttpCode } from '../src/statusReport';
+import { StatusDeps } from '../src/statusReport';
+import { statusHandler, statusCoreHandler, coreFailureBody } from '../src/statusRoutes';
 import { validateCoreEvidence } from '../src/coreValidator';
 import { parseTimestamp } from '../src/strictParse';
 import { executableDeployment } from '../src/deployments';
@@ -159,16 +160,81 @@ describe('a synchronous throw from any dependency cannot escape the producer', (
     }
   }, 20_000);
 
-  it('survives a caller-supplied clock that throws', async () => {
-    const core = await buildCoreEvidence(coreDeps(), {
-      budgetMs: 400,
-      now: () => {
-        throw new Error('SECRET_CLOCK');
-      },
-    }).catch((e) => e as Error);
-    // Either it resolved, or it failed without carrying the secret -- but it must not
-    // publish the message either way.
+  /**
+   * A CORRECTED TEST ORACLE.
+   *
+   * The previous version caught the rejection and asserted
+   * `JSON.stringify(error).not.toContain('SECRET')`. But `JSON.stringify(new Error('x'))`
+   * is `{}` -- Error's own properties are not enumerable -- so that assertion passed while
+   * the function was still rejecting with the secret sitting in `error.message`. It proved
+   * nothing at all, which is worse than having no test: it reported the boundary as closed.
+   *
+   * The oracle is `resolves`, plus `error.message`, `String(error)` and the stack read
+   * directly.
+   */
+  it.each([
+    ['throws on the first read', () => { throw new Error('SECRET_CLOCK_RAW'); }],
+    ['NaN', () => NaN],
+    ['Infinity', () => Infinity],
+    ['negative', () => -1],
+    ['moves backward', (() => { let t = 1_000_000; return () => (t -= 1000); })()],
+  ])('a clock that %s fails closed and never rejects', async (_label, now) => {
+    const started = Date.now();
+    // `resolves`, not `.catch(Error)`. The old shape could not tell a rejection from a pass.
+    const core = await buildCoreEvidence(coreDeps(), { budgetMs: 300, now: now as () => number });
+
+    // Bounded real wall time, whatever the injected clock claims.
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(core.ok).toBe(false);
+    expect(core.problems).toContain('clock-unusable');
+    // Timings from an unusable clock are not published as if they were real.
+    expect(Number.isFinite(core.elapsedMs)).toBe(true);
+    expect(core.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(core)).not.toContain('SECRET_CLOCK');
+  });
+
+  it('a clock that throws MID-request still resolves fail-closed', async () => {
+    let reads = 0;
+    let thrown: unknown;
+    const core = await buildCoreEvidence(coreDeps(), {
+      budgetMs: 300,
+      now: () => {
+        reads += 1;
+        if (reads > 2) throw new Error('SECRET_CLOCK_MID');
+        return Date.now();
+      },
+    }).catch((e) => {
+      thrown = e;
+      return null;
+    });
+
+    // Asserted on the real surfaces, not on JSON.stringify of an Error.
+    expect(thrown).toBeUndefined();
+    expect(core).not.toBeNull();
+    expect(core!.ok).toBe(false);
+    expect(core!.problems).toContain('clock-unusable');
+    expect(JSON.stringify(core)).not.toContain('SECRET_CLOCK_MID');
+  });
+
+  it('a deterministic fake clock still works, so the test seam survives', async () => {
+    let t = 1_700_000_000_000;
+    const core = await buildCoreEvidence(coreDeps(), { budgetMs: 5000, now: () => (t += 10) });
+    expect(core.problems).not.toContain('clock-unusable');
+    expect(core.ok).toBe(true);
+    expect(core.generatedAt.startsWith('2023-')).toBe(true);
+  });
+
+  it.each([
+    ['not a bigint', 42 as unknown as bigint],
+    ['a throwing object', { toString() { throw new Error('SECRET_CAP'); } } as unknown as bigint],
+    ['null', null as unknown as bigint],
+  ])('a cap that is %s fails closed rather than becoming zero', async (_label, capWei) => {
+    const core = await buildCoreEvidence(coreDeps({ capWei }), { budgetMs: 300 });
+    expect(core.ok).toBe(false);
+    expect(core.problems).toContain('cap-unreadable');
+    // Zero is the most PERMISSIVE reading of a field whose whole job is to refuse.
+    expect(core.capWei).not.toBe('0');
+    expect(JSON.stringify(core)).not.toContain('SECRET_CAP');
   });
 });
 
@@ -312,35 +378,19 @@ describe('the real routes publish a closed shape and no raw text', () => {
     };
   }
 
-  /** The two routes, wired exactly as index.ts wires them. */
+  /**
+   * The REAL handlers, imported -- not a mirrored copy.
+   *
+   * The previous version of this test built its own express app with a sanitised copy of
+   * the core catch. It passed while `index.ts` still published `detail:
+   * String(err.message)`. A test standing next to the thing instead of on it can only
+   * confirm what its author already believed.
+   */
   async function withServer<T>(run: (base: string) => Promise<T>): Promise<T> {
     const app = express();
-    const pool = poisonedPool();
-    const make = () => poisonedDeps();
-
-    app.get('/status', async (_req, res) => {
-      try {
-        const report = await assembleStatus(pool, make, { totalBudgetMs: 800 });
-        res.status(statusHttpCode(report)).json(report);
-      } catch (err) {
-        void err;
-        res.status(503).json({ state: 'down', problem: 'status-could-not-be-assembled' });
-      }
-    });
-    app.get('/status/core', async (_req, res) => {
-      try {
-        const core = await assembleCore(pool, make, { totalBudgetMs: 800 });
-        res.status(core.ok ? 200 : 503).json(core);
-      } catch (err) {
-        void err;
-        res.status(503).json({
-          schema: 'ponsr.status-core',
-          version: 1,
-          ok: false,
-          problems: ['core-deadline-exceeded'],
-        });
-      }
-    });
+    const routeDeps = { pool: poisonedPool(), makeDeps: poisonedDeps, options: { totalBudgetMs: 800 } };
+    app.get('/status', statusHandler(routeDeps));
+    app.get('/status/core', statusCoreHandler(routeDeps));
 
     const server = app.listen(0, '127.0.0.1');
     await new Promise<void>((r) => server.once('listening', () => r()));

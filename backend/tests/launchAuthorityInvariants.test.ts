@@ -127,10 +127,11 @@ describe('the fallback pool is wired to the read path only', () => {
     // is the status path and nothing else.
     for (const u of operational) expect(u).toBeGreaterThan(builderAt);
 
-    // The builder itself is consumed only by the two status routes.
+    // The builder is declared once and handed to the route deps once. The handlers live in
+    // statusRoutes.ts now, so this counts the wiring rather than the call sites.
     const consumers = [...src.matchAll(/statusDepsFor/g)].map((m) => m.index!);
-    expect(consumers.length).toBe(3); // the declaration plus the two routes
-    for (const c of consumers.slice(1)) expect(c).toBeGreaterThan(statusAt);
+    expect(consumers.length).toBe(2); // the declaration plus the route-deps object
+    for (const c of consumers.slice(1)) expect(c).toBeGreaterThan(builderAt);
 
     // And no alias escapes under a different name.
     expect(src).not.toMatch(/const\s+\w+\s*=\s*rpcPool\s*;/);
@@ -308,6 +309,40 @@ describe('the core evidence path imports nothing that can spend', () => {
     // it names.
     const constructions = [...src.matchAll(/createTreasurySigner\s*\(/g)];
     expect(constructions.length).toBe(1);
+  });
+
+  it('index.ts mounts the EXTRACTED handlers rather than writing its own', () => {
+    // The previous round reported both route catches sanitised. Only /status was: the real
+    // /status/core catch here still published `detail: String(err.message)`, while the test
+    // that was meant to prove otherwise built its own express app and mirrored a sanitised
+    // copy. A test standing next to the thing instead of on it confirms only what its
+    // author believed. There is one copy now, and this asserts index.ts uses it.
+    const src = code('src/index.ts');
+    expect(src).toContain("app.get('/status', statusHandler(");
+    expect(src).toContain("app.get('/status/core', statusCoreHandler(");
+    // And no inline handler survives beside them.
+    expect(src).not.toMatch(/app\.get\('\/status[^']*',\s*async/);
+  });
+
+  it('no HTTP route handler publishes exception text', () => {
+    // A source invariant, because a mirrored test cannot speak about production wiring.
+    //
+    // SCOPED TO THE ROUTE SURFACE, deliberately. `reportFatal` in index.ts DOES send a
+    // stack trace -- to the operator's alert channel, on the way to exiting the process.
+    // That is the one place a stack belongs: an operator debugging a crash loop needs it,
+    // and a Telegram alert is not a public HTTP response. The rule is about what a stranger
+    // can read over the wire, not about whether the string exists anywhere in the file.
+    const routes = code('src/statusRoutes.ts');
+    for (const forbidden of [/detail:\s*String\(/, /error:\s*String\(/, /message:\s*String\(/, /\.stack/]) {
+      expect(routes).not.toMatch(forbidden);
+    }
+    // `void err` is the shape that says the value is deliberately discarded.
+    expect(routes.match(/catch \(err\)/g)?.length).toBe(routes.match(/void err/g)?.length);
+
+    // And index.ts must not have grown a handler of its own beside the mounted ones.
+    const src = code('src/index.ts');
+    const inline = src.match(/app\.get\('\/status[^']*',\s*async/g);
+    expect(inline).toBeNull();
   });
 
   it('the core route asks the endpoint for its chain id rather than reading configuration', () => {

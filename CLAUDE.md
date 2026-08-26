@@ -381,6 +381,18 @@ an internal path through a public endpoint. It also found the producer publishin
 an authoritative endpoint has to be internally valid before anybody reads it, because a
 second opinion is not a substitute for being right.
 
+A **seventh review (2026-08-26) found two of my own claims false at the exact place I was
+most confident**, and both are worth keeping. The report said "both route catches are
+sanitised": only `/status` was, and the real `/status/core` catch still published
+`detail: String(err.message)` — while the test meant to prove otherwise **built its own
+express app and mirrored a sanitised copy**, so it passed against production source that
+was still vulnerable. The handlers live in `statusRoutes.ts` now, `index.ts` mounts those,
+and the tests import those. And a test asserting `JSON.stringify(error).not.toContain(...)`
+proved **nothing at all** — `JSON.stringify(new Error('SECRET'))` is `{}`, because Error's
+properties are not enumerable, so the assertion passed while the function was still
+rejecting with the secret in `error.message`. A test with a broken oracle is worse than no
+test: it reports the boundary as closed.
+
 Three general rules came out of it. **A limit must never be evidence about itself** —
 every quantity a verdict depends on is caller-pinned now. **A promise that never throws is
 worth nothing if a plain function call beside it can.** And **`getNetwork()` under
