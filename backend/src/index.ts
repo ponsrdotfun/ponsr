@@ -22,7 +22,7 @@ import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
 import { statusHttpCode } from './statusReport';
-import { assembleStatus } from './statusSession';
+import { assembleCore, assembleStatus, AcquiredSession } from './statusSession';
 import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
@@ -311,22 +311,19 @@ app.get('/health', (_req, res) => {
  * the only way to authenticate a URL somebody opens in a browser is to put a
  * secret in a query string, which writes it into every proxy log in between.
  */
-app.get('/status', async (_req, res) => {
-  try {
-    /**
-     * ONE endpoint for this whole response.
-     *
-     * Chain id, block, fee, balance, readiness and identity used to arrive through two
-     * different providers -- the pinned one and whatever the pool happened to pick -- while
-     * the page labelled the result with the POOL's endpoint. That produced a document whose
-     * `rpc-endpoint` line named B above evidence gathered from A, with nothing on the page
-     * able to say so. Pinned here, once, so "one request, one observed truth" is true of the
-     * endpoint as well as of the chain read.
-     *
-     * Null when nothing can be admitted. The chain checks then fail as they should, and
-     * `rpc-endpoint` reports why each candidate was refused.
-     */
-    const report = await assembleStatus(rpcPool, (session) => {
+/**
+ * The dependency set for one status response, built once and shared by BOTH routes.
+ *
+ * `/status` and `/status/core` must never be able to describe different worlds. A core
+ * endpoint reading the chain through its own definition would be a second source of truth,
+ * which is the shape of every defect in this file's history.
+ *
+ * ONE endpoint per response, pinned by the caller. Chain id, block, fee, balance, readiness
+ * and identity used to arrive through two different providers -- the pinned one and whatever
+ * the pool happened to pick -- while the page labelled the result with the POOL's endpoint.
+ * Null session means nothing could be admitted; the chain checks then fail as they should.
+ */
+const statusDepsFor = (session: AcquiredSession | null) => {
       const readProvider = session?.provider;
       const unavailable = () => {
         throw new Error('no admitted RPC endpoint is available to serve this status request');
@@ -432,12 +429,50 @@ app.get('/status', async (_req, res) => {
       readCredits: () => (deps.xClient as { getReadCredits?: () => Promise<{ credits: number; bonus: number } | null> }).getReadCredits?.() ?? Promise.resolve(null),
       sweepStaleAfterMs: Math.max(config.MENTION_POLL_SECONDS * 3, 900) * 1000,
       };
-    });
+};
+
+app.get('/status', async (_req, res) => {
+  try {
+    const report = await assembleStatus(rpcPool, statusDepsFor);
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {
     // buildStatus is written not to throw; if it does, saying so beats a 500 with
     // no body, which is indistinguishable from the process being gone.
     res.status(503).json({ state: 'down', error: String((err as Error)?.message ?? err) });
+  }
+});
+
+/**
+ * The authoritative core alone: keyless, read-only, and structurally unable to wait on
+ * optional telemetry.
+ *
+ * WHY A SEPARATE ROUTE AND NOT ONLY A FIELD ON /status
+ * ---------------------------------------------------
+ * Ordering is a promise; structure is a guarantee. `/status` produces the core first and
+ * only then starts optional telemetry, which already keeps a third-party credits API off
+ * the chain facts. This route never STARTS that work, so there is nothing to order and
+ * nothing for a later edit to get wrong.
+ *
+ * It is what a canary-readiness validator reads. It loads no signer, no Turnkey credential
+ * and no private key, and broadcasts nothing. A green answer is evidence about the chain at
+ * a moment -- not permission to spend. The launch path keeps every one of its own direct
+ * preflight checks regardless of what this says.
+ *
+ * 200 when the core is ok, 503 when it is not, so a consumer reading only the status line
+ * still fails closed.
+ */
+app.get('/status/core', async (_req, res) => {
+  try {
+    const core = await assembleCore(rpcPool, statusDepsFor);
+    res.status(core.ok ? 200 : 503).json(core);
+  } catch (err) {
+    res.status(503).json({
+      schema: 'ponsr.status-core',
+      version: 1,
+      ok: false,
+      problems: ['core-deadline-exceeded'],
+      detail: String((err as Error)?.message ?? err).slice(0, 160),
+    });
   }
 });
 

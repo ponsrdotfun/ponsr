@@ -23,6 +23,9 @@
  *    URL parameter would put a real secret into every proxy log for nothing.
  */
 
+import { CoreEvidence } from './statusCore';
+import { DependencyName, DependencyTiming, TimingRecorder } from './dependencyTiming';
+
 export type CheckState = 'ok' | 'degraded' | 'down';
 
 export interface StatusCheck {
@@ -71,6 +74,22 @@ export interface StatusReport {
   checks: StatusCheck[];
   /** Absent when the rolling figure is unavailable. Absent refuses; invented would admit. */
   spend?: StatusSpend;
+  /**
+   * The authoritative core, produced under its OWN deadline before any optional telemetry.
+   *
+   * Embedded so an operator reading one document sees one coherent answer, and so the
+   * dedicated `/status/core` endpoint and this page cannot drift apart in shape. Absent
+   * only when the caller did not supply core dependencies.
+   */
+  core?: CoreEvidence;
+  /**
+   * Per-dependency cost for THIS response. Diagnostics; nothing is decided from them.
+   *
+   * Added because the deploy report had to record the tail as UNKNOWN: the page published
+   * per-call timing for the launchpad check and nothing else, so four unattributable
+   * seconds could not be explained from outside.
+   */
+  dependencies?: DependencyTiming[];
 }
 
 export interface StatusDeps {
@@ -150,6 +169,18 @@ export interface StatusDeps {
    * human that B was serving. Two answers to the same question, in one document.
    */
   sessionEndpointIndex?: number;
+  /** Scheme and host of the endpoint that served this response. Never path or query. */
+  endpointOrigin?: string;
+  /**
+   * Pre-computed authoritative core, produced by the caller under its OWN deadline.
+   *
+   * Passed in rather than built here, so the core can be produced BEFORE optional telemetry
+   * is even started -- which is the whole point of the split. `/status/core` builds the same
+   * structure and serves it alone, so the two cannot drift apart in shape.
+   */
+  core?: CoreEvidence;
+  /** Timings already recorded while producing the core, so one response has one ledger. */
+  coreDependencies?: DependencyTiming[];
   /**
    * Deployment identity, on its own budget and cadence.
    *
@@ -273,6 +304,15 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   const remaining = () => Math.max(0, deadline - Date.now());
 
   /**
+   * Cost evidence for the OPTIONAL dependencies this function starts.
+   *
+   * The core's own timings arrive already recorded, because the core ran before this
+   * function was called. Merged at the end so one response carries one ledger.
+   */
+  const optionalRecorder = new TimingRecorder(Date.now());
+  const OPTIONAL: readonly DependencyName[] = ['pair-assets', 'read-credits'];
+
+  /**
    * Started here, awaited later.
    *
    * A rejection on a promise nobody is awaiting yet is an unhandled rejection, which in
@@ -300,9 +340,15 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     readiness: start(() => deps.getLaunchReadiness()),
     balance: start(() => deps.getTreasuryBalanceWei()),
     identity: deps.getDeploymentIdentity ? start(deps.getDeploymentIdentity) : undefined,
-    pairAssets: deps.listPairAssets ? start(deps.listPairAssets) : undefined,
-    credits: deps.readCredits ? start(deps.readCredits) : undefined,
+    pairAssets: deps.listPairAssets
+      ? optionalRecorder.track('pair-assets', start(deps.listPairAssets))
+      : undefined,
+    credits: deps.readCredits
+      ? optionalRecorder.track('read-credits', start(deps.readCredits))
+      : undefined,
   };
+  if (!deps.listPairAssets) optionalRecorder.absent('pair-assets');
+  if (!deps.readCredits) optionalRecorder.absent('read-credits');
   /**
    * Machine-readable, and it names its own window.
    *
@@ -713,7 +759,21 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     }
   }
 
-  return { state: worst(checks), at: new Date().toISOString(), checks, ...(spend ? { spend } : {}) };
+  // One ledger for the whole response: the core's timings, recorded before this function
+  // was called, merged with the optional ones started here. Sealed, so a dependency that
+  // settles later cannot rewrite a document that has already been returned.
+  const dependencies = [...(deps.coreDependencies ?? []), ...optionalRecorder.seal(OPTIONAL)].sort(
+    (a, b) => b.ms - a.ms
+  );
+
+  return {
+    state: worst(checks),
+    at: new Date().toISOString(),
+    checks,
+    ...(spend ? { spend } : {}),
+    ...(deps.core ? { core: deps.core } : {}),
+    dependencies,
+  };
 }
 
 /** 200 unless something is actually down, so an uptime monitor can watch this.

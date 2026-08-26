@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import { RpcEndpointDescription } from './rpcIdentity';
 import { PoolStatus } from './rpcPool';
 import { StatusDeps, StatusReport, buildStatus } from './statusReport';
+import { CoreDeps, CoreEvidence, DEFAULT_CORE_BUDGET_MS, buildCoreEvidence } from './statusCore';
+import { TimingRecorder } from './dependencyTiming';
 
 /**
  * Assembling one `/status` response: acquire an endpoint, then report, under ONE deadline.
@@ -44,6 +46,14 @@ export interface StatusPool {
 export interface AssembleOptions {
   /** Total wall clock for the WHOLE response, acquisition included. */
   totalBudgetMs?: number;
+  /**
+   * The core's own deadline, nested inside the total.
+   *
+   * The core must not be able to spend the whole response budget waiting for chain reads
+   * either -- it is smaller than the total on purpose, so optional telemetry still gets a
+   * chance to answer and the page stays useful to an operator.
+   */
+  coreBudgetMs?: number;
   now?: () => number;
 }
 
@@ -58,6 +68,78 @@ export const DEFAULT_STATUS_BUDGET_MS = 5000;
  * body that says what happened.
  */
 export const REPORTING_FLOOR_MS = 250;
+
+/**
+ * Turns the status dependency set into the core's narrower one.
+ *
+ * Kept as a projection rather than a second dependency set so the two cannot describe
+ * different worlds: every core field is read from exactly the same function the page reads.
+ */
+export function coreDepsFrom(
+  deps: StatusDeps,
+  session: AcquiredSession | null,
+  endpointOrigin: string | null
+): CoreDeps {
+  return {
+    expectedChainId: deps.expectedChainId,
+    capWei: deps.dailyCapWei,
+    publicLaunchEnabled: deps.publicLaunchEnabled,
+    deploymentId: deps.deploymentId,
+    deploymentFactory: deps.deploymentFactory,
+    treasuryAddress: deps.treasuryAddress,
+    observedThrough: session ? session.endpoint.fingerprint : undefined,
+    endpointOrigin: endpointOrigin ?? undefined,
+    endpointAvailable: Boolean(session),
+    getChainId: () => deps.getChainId(),
+    getBlockNumber: () => deps.getBlockNumber(),
+    getLiveFeeWei: () => deps.getLiveFeeWei(),
+    getTreasuryBalanceWei: () => deps.getTreasuryBalanceWei(),
+    getLaunchReadiness: () => deps.getLaunchReadiness(),
+    getDeploymentIdentity: deps.getDeploymentIdentity
+      ? () => deps.getDeploymentIdentity!()
+      : undefined,
+    rollingSpendLast24hWei: deps.rollingSpendLast24hWei,
+  };
+}
+
+/** The origin of an acquired endpoint, or null. Never a path or query. */
+function originOf(session: AcquiredSession | null): string | null {
+  const id = session?.endpoint as { origin?: string | null } | undefined;
+  return id?.origin ?? null;
+}
+
+/**
+ * Acquires an endpoint and produces ONLY the authoritative core.
+ *
+ * This is what `/status/core` serves. It never starts pair discovery or the read-provider
+ * credits call, so no third party can make it slow -- which is the structural version of
+ * the guarantee, stronger than ordering the work inside one function.
+ */
+export async function assembleCore(
+  pool: StatusPool,
+  makeDeps: (session: AcquiredSession | null) => StatusDeps,
+  options: AssembleOptions = {}
+): Promise<CoreEvidence> {
+  const now = options.now ?? (() => Date.now());
+  const total = options.totalBudgetMs ?? DEFAULT_STATUS_BUDGET_MS;
+  const startedAt = now();
+  const deadline = startedAt + total;
+
+  const acquisitionDeadline = Math.max(startedAt, deadline - REPORTING_FLOOR_MS);
+  let session: AcquiredSession | null = null;
+  try {
+    session = await pool.acquire({ deadlineMs: acquisitionDeadline });
+  } catch {
+    session = null;
+  }
+
+  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
+  return buildCoreEvidence(coreDepsFrom(makeDeps(session), session, originOf(session)), {
+    budgetMs: Math.min(options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS, remaining),
+    now,
+    recorder: new TimingRecorder(now(), now),
+  });
+}
 
 export async function assembleStatus(
   pool: StatusPool,
@@ -83,8 +165,27 @@ export async function assembleStatus(
     session = null;
   }
 
-  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
   const deps = makeDeps(session);
+
+  /**
+   * THE CORE RUNS FIRST, under its own deadline, before any optional telemetry starts.
+   *
+   * Ordering is the guarantee: a third-party credits API cannot delay a chain fact that was
+   * already read and recorded. Sampled on v36, `read-credits` was the non-ok check on two
+   * of three slow responses and on none of the twenty-two fast ones.
+   */
+  const coreRecorder = new TimingRecorder(now(), now);
+  const coreBudget = Math.min(
+    options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS,
+    Math.max(REPORTING_FLOOR_MS, deadline - now())
+  );
+  const core = await buildCoreEvidence(coreDepsFrom(deps, session, originOf(session)), {
+    budgetMs: coreBudget,
+    now,
+    recorder: coreRecorder,
+  });
+
+  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
 
   return buildStatus(
     {
@@ -100,6 +201,9 @@ export async function assembleStatus(
        */
       sessionEndpointIndex: session?.index,
       observedThrough: session ? sessionFingerprint(session) : undefined,
+      endpointOrigin: originOf(session) ?? undefined,
+      core,
+      coreDependencies: core.dependencies,
     },
     remaining
   );
