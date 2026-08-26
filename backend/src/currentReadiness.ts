@@ -52,6 +52,21 @@ export interface CurrentReadiness {
 export interface ReadinessVerdict extends CurrentReadiness {
   /** True only when every condition holds. */
   ready: boolean;
+  /**
+   * What `canLaunch(address)` ACTUALLY returned, untouched.
+   *
+   * `canLaunch` below is deliberately not that. It is narrowed to `canLaunch && !reason`
+   * so that callers gating a launch on it -- `validator.ts` and `phase-b-launch.ts` --
+   * fail closed on any condition, including ones the factory's predicate knows nothing
+   * about. That is load-bearing and stays.
+   *
+   * The cost is that a field named after a contract predicate stops reporting the contract
+   * predicate, which is fine for a gate and actively misleading on a status page: an
+   * operator debugging `launchpad` sees `canLaunch: false` and goes looking for a closed
+   * gate, when what actually happened was an escrow mismatch or an unreadable ABI file.
+   * So the raw answer is carried alongside rather than recovered by inference.
+   */
+  canLaunchOnChain: boolean;
   /** Whether permission survives the public gate closing. */
   durable: boolean;
   reason?: string;
@@ -99,7 +114,15 @@ export function describeReadiness(r: CurrentReadiness): ReadinessVerdict {
       ? 'launching rests on the public gate, which is open to everyone and can be closed without notice'
       : 'the public gate is closed and this address is not whitelisted';
 
-  return { ...r, ready: !reason, canLaunch: r.canLaunch && !reason, durable, reason, detail };
+  return {
+    ...r,
+    ready: !reason,
+    canLaunchOnChain: r.canLaunch,
+    canLaunch: r.canLaunch && !reason,
+    durable,
+    reason,
+    detail,
+  };
 }
 
 /**
