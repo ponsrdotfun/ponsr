@@ -3,59 +3,88 @@ import { PonsDeployment, executableDeployment } from './deployments';
 import { RpcEndpointDescription, describeRpcEndpoint, isIdentified } from './rpcIdentity';
 
 /**
- * More than one RPC endpoint, with the failover BOUNDED and every candidate proven to be
- * the same chain and the same factory before it is allowed to answer anything.
+ * More than one RPC endpoint, with the failover BOUNDED and every candidate proven -- by
+ * asking it -- to be the same chain and the same factory before it may answer anything.
  *
  * WHY A FALLBACK AT ALL
  * ---------------------
  * The backend and the canary both read a single public endpoint. When it slows down there
- * is no second opinion, and the whole launch path stalls behind one host that nobody at
- * Ponsr operates.
+ * is no second opinion, and the whole read path stalls behind one host nobody at Ponsr
+ * operates.
  *
- * WHY A FALLBACK IS ALSO DANGEROUS, AND WHAT THAT COSTS HERE
- * ----------------------------------------------------------
- * A naive fallback is strictly worse than no fallback. `ethers.FallbackProvider` and every
- * hand-rolled "try the next URL" loop share one assumption: that the endpoints are
- * interchangeable. If the second URL is testnet, or a fork, or an archive node lagging by
- * an hour, the bot does not stop -- it keeps going against a different world, and every
- * guard in this repository returns a confident answer about somewhere else.
+ * WHY A FALLBACK IS ALSO DANGEROUS
+ * --------------------------------
+ * A naive fallback is strictly worse than none. `ethers.FallbackProvider` and every
+ * hand-rolled "try the next URL" loop assume the endpoints are interchangeable. If the
+ * second URL is testnet, a fork, or an archive node lagging by an hour, the bot does not
+ * stop -- it keeps going against a different world, and every guard in this repository
+ * returns a confident answer about somewhere else. Not hypothetical: `backend/.env`
+ * already holds a testnet URL, and there this factory address holds no contract at all.
  *
- * That is not hypothetical here. `backend/.env` points at testnet by design while the
- * executable deployment is a mainnet contract, so the single most likely thing to end up
- * in a fallback slot is the testnet URL that is already sitting in the file. On testnet
- * the factory address holds no contract at all, `launchEnabled` reverts, and a launch
- * would be built for a chain the treasury has no funds on.
+ * THE BUG THIS FILE WAS REWRITTEN TO FIX, WHICH IS WORTH STATING PLAINLY
+ * ---------------------------------------------------------------------
+ * The first version asked `provider.getNetwork()` for the endpoint's chain id. With
+ * `new JsonRpcProvider(url, chainId, { staticNetwork: true })` that returns the CONFIGURED
+ * value and sends nothing. Measured: a server answering chain 46630, a pool expecting
+ * 4663, zero methods reaching the transport, and the endpoint ADMITTED. The gate compared
+ * a constant to itself.
  *
- * So an endpoint is ADMITTED before it is used, never after:
+ * The tests did not catch it because they supplied a fake provider whose `getNetwork()`
+ * returned whatever the test wanted -- a mock above the layer under test, which reports
+ * the author's expectations back to them. The chain id is now read with an explicit
+ * `eth_chainId` over the wire, parsed strictly, and the suite asserts that the method
+ * actually appears in the server's received-method log.
  *
- *   chain id         must equal the deployment's chain. A different chain is a different
- *                    world, and the same address on it is a different contract.
- *   factory bytecode must hash to the registry's `runtimeBytecodeSha256`. This is the axis
- *                    that catches a fork, a stale archive node, and an endpoint that is
- *                    technically the right chain but serving a superseded state.
+ * WHAT IS CHECKED BEFORE AN ENDPOINT MAY ANSWER
+ * ---------------------------------------------
+ *   chain id         from `eth_chainId`, over the wire, strictly parsed
+ *   factory bytecode must hash to the registry's `runtimeBytecodeSha256` -- the axis that
+ *                    catches a fork, a lagging archive node, and an endpoint on the right
+ *                    chain serving superseded state
  *
- * An endpoint that fails admission is not "tried anyway with a warning". It is refused for
- * this process, and the refusal is reported. A fallback that can silently be wrong offers
- * availability by giving up correctness, which is the wrong trade for a component that
- * spends money.
+ * Anything unreadable is a refusal, not a pass: an endpoint that will not say what chain
+ * it is on has not proven it is the right one.
  *
- * WHY BOUNDED
- * -----------
- * Failover is capped at the number of configured endpoints, tried at most once each, per
- * operation. There is no retry loop and no backoff schedule, deliberately: the caller here
- * is a status check with a deadline, and an unbounded retry inside a bounded deadline just
- * spends the whole budget failing more times. If every endpoint is refused or exhausted,
- * that is an answer -- `down` -- and it is returned rather than waited on.
+ * SECRECY
+ * -------
+ * Provider errors routinely contain the request URL, and RPC URLs routinely contain an API
+ * key. So NO external error text is ever copied into a published field. Failures are
+ * mapped to a closed set of categories, and the only variable data allowed alongside them
+ * is already public: an observed chain id, a bytecode hash, a byte length.
  */
+
+/** The complete set of reasons an endpoint can be unusable. Closed on purpose. */
+export type RefusalCode =
+  | 'url-unparseable'
+  | 'provider-construction-failed'
+  | 'admission-timed-out'
+  | 'chain-id-unreadable'
+  | 'chain-id-mismatch'
+  | 'no-contract-at-factory'
+  | 'runtime-unreadable'
+  | 'runtime-mismatch'
+  | 'operation-timed-out'
+  | 'operation-failed';
+
+/** True for reasons that are a property of the endpoint rather than of the moment. */
+function isPermanent(code: RefusalCode): boolean {
+  return code === 'chain-id-mismatch' || code === 'runtime-mismatch' || code === 'url-unparseable';
+}
 
 export interface EndpointAdmission {
   identity: RpcEndpointDescription;
   admitted: boolean;
-  /** Present when refused, naming the axis that disagreed. */
+  /** Machine-readable and non-secret. Absent when admitted. */
+  refusedCode?: RefusalCode;
+  /** Human-readable, built here from public facts only -- never from provider text. */
   refusedBecause?: string;
   observedChainId?: number;
   /** Round-trip cost of the admission probe, which doubles as a first latency sample. */
   probeMs: number;
+  /** When this verdict was measured. Null when the endpoint has not been probed. */
+  checkedAt: string | null;
+  /** Age of the verdict. An admission that is remembered must be visible as remembered. */
+  ageMs: number | null;
 }
 
 export interface PoolStatus {
@@ -82,21 +111,65 @@ export function parseEndpointList(primary: string, fallbacks?: string | null): s
   return [...new Set(all)];
 }
 
+/**
+ * Strict `eth_chainId`, with every loose reading refused.
+ *
+ * `Number(raw)` would accept `''` as 0, `parseInt` would accept `'4663junk'`, and neither
+ * notices a value past 2^53 where equality silently stops meaning anything. An endpoint
+ * that cannot state its chain id in the one format the JSON-RPC spec defines has not
+ * identified itself, and guessing on its behalf is how the wrong chain gets admitted.
+ */
+export function parseChainId(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null;
+  if (!/^0x[0-9a-fA-F]+$/.test(raw)) return null;
+  const value = BigInt(raw);
+  if (value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(value);
+}
+
 export interface RpcPoolOptions {
   deployment?: PonsDeployment;
   /** Bound on a single admission probe. Separate from the caller's own deadline. */
   admissionTimeoutMs?: number;
-  /** Injected so tests do not need a chain. */
+  /**
+   * Bound on ONE endpoint's attempt at the caller's operation.
+   *
+   * Without this a hung request never fails over: the most common real RPC failure is a
+   * stall, not a rejection, so a fallback that only engages on rejection does not engage on
+   * the failure it was bought for.
+   */
+  operationTimeoutMs?: number;
+  /**
+   * How long a successful admission may be reused before the endpoint is re-checked.
+   *
+   * A pass used to be kept for the lifetime of the process, so an endpoint that later
+   * forked or fell behind kept being used without ever being asked again.
+   */
+  admissionTtlMs?: number;
+  /** Injected so tests can supply a broken provider without a network. */
   makeProvider?: (url: string, chainId: number) => ethers.JsonRpcProvider;
+  now?: () => number;
 }
 
-async function within<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+export const DEFAULT_ADMISSION_TTL_MS = 5 * 60 * 1000;
+export const DEFAULT_OPERATION_TIMEOUT_MS = 2500;
+
+class TimedOut extends Error {}
+
+/**
+ * Bounds a promise WITHOUT propagating anything from it.
+ *
+ * The rejection is swallowed rather than re-thrown: whatever the underlying provider says
+ * on the way down may contain the request URL, and this function's callers publish what
+ * they are given. A separate marker type is thrown instead.
+ */
+async function bounded<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       p,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not answer within ${ms}ms`)), ms);
+        timer = setTimeout(() => reject(new TimedOut()), ms);
       }),
     ]);
   } finally {
@@ -107,10 +180,20 @@ async function within<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 export class RpcPool {
   private readonly deployment: PonsDeployment;
   private readonly admissionTimeoutMs: number;
+  private readonly operationTimeoutMs: number;
+  private readonly admissionTtlMs: number;
   private readonly makeProvider: (url: string, chainId: number) => ethers.JsonRpcProvider;
+  private readonly now: () => number;
   private readonly providers: Array<ethers.JsonRpcProvider | null>;
   private readonly admissions: Array<EndpointAdmission | null>;
+  private readonly admittedAt: Array<number | null>;
+  private readonly inFlight: Array<Promise<EndpointAdmission> | null>;
   private active: number | null = null;
+  /**
+   * Incremented for every `run`. A timed-out attempt that finishes later carries a stale
+   * token and is refused the right to record itself as the active endpoint.
+   */
+  private generation = 0;
 
   constructor(
     private readonly urls: string[],
@@ -118,113 +201,161 @@ export class RpcPool {
   ) {
     this.deployment = options.deployment ?? executableDeployment();
     this.admissionTimeoutMs = options.admissionTimeoutMs ?? 4000;
+    this.operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
+    this.admissionTtlMs = options.admissionTtlMs ?? DEFAULT_ADMISSION_TTL_MS;
+    this.now = options.now ?? (() => Date.now());
     this.makeProvider =
       options.makeProvider ??
       ((url, chainId) => new ethers.JsonRpcProvider(url, chainId, { staticNetwork: true }));
     this.providers = urls.map(() => null);
     this.admissions = urls.map(() => null);
+    this.admittedAt = urls.map(() => null);
+    this.inFlight = urls.map(() => null);
+  }
+
+  private fresh(index: number): boolean {
+    const a = this.admissions[index];
+    const at = this.admittedAt[index];
+    if (!a || at === null) return false;
+    // A permanent refusal is kept: a wrong chain is a property of the endpoint, not of the
+    // moment, and re-probing it every request buys nothing. Everything else -- including a
+    // transient outage -- must be able to recover without a restart.
+    if (!a.admitted) return a.refusedCode ? isPermanent(a.refusedCode) : false;
+    return this.now() - at < this.admissionTtlMs;
+  }
+
+  private record(index: number, a: Omit<EndpointAdmission, 'checkedAt' | 'ageMs'>): EndpointAdmission {
+    const at = this.now();
+    this.admittedAt[index] = at;
+    const full: EndpointAdmission = { ...a, checkedAt: new Date(at).toISOString(), ageMs: 0 };
+    this.admissions[index] = full;
+    return full;
   }
 
   /**
    * Proves one endpoint is the chain and the factory the registry describes.
    *
-   * Both reads go in one batch. An admission probe that costs two round trips would make
-   * adding a fallback measurably slower on the happy path, which is a good way to ensure
-   * nobody ever configures one.
+   * Both reads are issued together so ethers batches them: an admission probe costing two
+   * round trips would make adding a fallback measurably slower on the happy path, which is
+   * a good way to ensure nobody ever configures one.
    */
   private async admit(index: number): Promise<EndpointAdmission> {
-    const existing = this.admissions[index];
-    if (existing) return existing;
+    if (this.fresh(index)) return this.admissions[index]!;
+    // Concurrent callers must not each start their own probe. Per-endpoint, so a second
+    // endpoint's probe is never merged with the first's.
+    const running = this.inFlight[index];
+    if (running) return running;
 
+    const probe = this.probe(index).finally(() => {
+      this.inFlight[index] = null;
+    });
+    this.inFlight[index] = probe;
+    return probe;
+  }
+
+  private async probe(index: number): Promise<EndpointAdmission> {
     const url = this.urls[index];
     const identity = describeRpcEndpoint(url);
-    const started = Date.now();
+    const started = this.now();
 
-    const refuse = (why: string, observedChainId?: number): EndpointAdmission => {
-      const a: EndpointAdmission = {
+    const refuse = (
+      refusedCode: RefusalCode,
+      refusedBecause: string,
+      observedChainId?: number
+    ): EndpointAdmission =>
+      this.record(index, {
         identity,
         admitted: false,
-        refusedBecause: why,
+        refusedCode,
+        refusedBecause,
         observedChainId,
-        probeMs: Date.now() - started,
-      };
-      this.admissions[index] = a;
-      return a;
-    };
+        probeMs: this.now() - started,
+      });
 
-    if (!isIdentified(identity)) return refuse(identity.problem);
+    if (!isIdentified(identity)) return refuse('url-unparseable', identity.problem);
 
     let provider: ethers.JsonRpcProvider;
     try {
       provider = this.makeProvider(url, this.deployment.chainId);
-    } catch (err: any) {
-      return refuse(`provider could not be constructed: ${String(err?.message ?? err).slice(0, 80)}`);
+    } catch {
+      // Nothing from the thrown error is reported. A construction failure message is one of
+      // the likeliest places for the URL -- and therefore the key -- to appear.
+      return refuse('provider-construction-failed', 'the provider could not be constructed');
     }
 
+    let rawChainId: unknown;
+    let code: string;
     try {
-      const [network, code] = await within(
-        Promise.all([provider.getNetwork(), provider.getCode(this.deployment.factory)]),
-        this.admissionTimeoutMs,
-        `admission probe for ${identity.origin}`
+      // eth_chainId over the wire, NOT provider.getNetwork(): with a configured static
+      // network that answers from configuration and sends nothing. This is the line the
+      // whole rewrite exists for.
+      [rawChainId, code] = await bounded(
+        Promise.all([
+          provider.send('eth_chainId', []) as Promise<unknown>,
+          provider.getCode(this.deployment.factory),
+        ]),
+        this.admissionTimeoutMs
       );
-
-      const observed = Number(network.chainId);
-      if (observed !== this.deployment.chainId) {
-        return refuse(
-          `chain id is ${observed}, but ${this.deployment.id} is on ${this.deployment.chainId}`,
-          observed
-        );
+    } catch (err) {
+      if (err instanceof TimedOut) {
+        return refuse('admission-timed-out', `the endpoint did not answer within ${this.admissionTimeoutMs}ms`);
       }
-      if (!code || code === '0x') {
-        return refuse(
-          `no contract at ${this.deployment.factory} -- this endpoint does not serve ${this.deployment.id}`,
-          observed
-        );
-      }
-      const hash = ethers.sha256(code).slice(2);
-      if (hash.toLowerCase() !== this.deployment.runtimeBytecodeSha256.toLowerCase()) {
-        return refuse(
-          `the factory's runtime bytecode hashes to ${hash.slice(0, 16)}..., but the registry ` +
-            `records ${this.deployment.runtimeBytecodeSha256.slice(0, 16)}... for ${this.deployment.id}`,
-          observed
-        );
-      }
-
-      this.providers[index] = provider;
-      const a: EndpointAdmission = {
-        identity,
-        admitted: true,
-        observedChainId: observed,
-        probeMs: Date.now() - started,
-      };
-      this.admissions[index] = a;
-      return a;
-    } catch (err: any) {
-      // Unreachable is refused for now but NOT remembered: an endpoint that was down at
-      // boot must be able to come back without a restart, whereas a wrong chain is a
-      // permanent property and stays refused.
-      const a: EndpointAdmission = {
-        identity,
-        admitted: false,
-        refusedBecause: `could not be probed: ${String(err?.shortMessage ?? err?.message ?? err).slice(0, 100)}`,
-        probeMs: Date.now() - started,
-      };
-      return a;
+      return refuse('chain-id-unreadable', 'the endpoint did not return a usable chain id and runtime');
     }
+
+    const observed = parseChainId(rawChainId);
+    if (observed === null) {
+      // Deliberately does not echo the value: a malformed chain id is attacker-influenced
+      // text arriving from a remote host.
+      return refuse('chain-id-unreadable', 'the endpoint returned a chain id that is not a valid hex quantity');
+    }
+    if (observed !== this.deployment.chainId) {
+      return refuse(
+        'chain-id-mismatch',
+        `chain id is ${observed}, but ${this.deployment.id} is on ${this.deployment.chainId}`,
+        observed
+      );
+    }
+    if (!code || code === '0x') {
+      return refuse(
+        'no-contract-at-factory',
+        `no contract at ${this.deployment.factory} -- this endpoint does not serve ${this.deployment.id}`,
+        observed
+      );
+    }
+    const hash = ethers.sha256(code).slice(2);
+    if (hash.toLowerCase() !== this.deployment.runtimeBytecodeSha256.toLowerCase()) {
+      return refuse(
+        'runtime-mismatch',
+        `the factory's runtime bytecode hashes to ${hash.slice(0, 16)}..., but the registry ` +
+          `records ${this.deployment.runtimeBytecodeSha256.slice(0, 16)}... for ${this.deployment.id}`,
+        observed
+      );
+    }
+
+    this.providers[index] = provider;
+    return this.record(index, {
+      identity,
+      admitted: true,
+      observedChainId: observed,
+      probeMs: this.now() - started,
+    });
   }
 
   /**
    * Runs `op` against the first endpoint that answers, trying each at most once.
    *
    * The bound is the point: at most `urls.length` attempts, no retries within an endpoint,
-   * no backoff. A caller with a deadline gets an answer or a refusal inside it.
+   * no backoff, and each attempt itself bounded so a stall cannot consume the caller's
+   * whole deadline.
    */
   async run<T>(
     op: (provider: ethers.JsonRpcProvider, endpoint: RpcEndpointDescription) => Promise<T>
   ): Promise<T> {
+    const token = ++this.generation;
     const problems: string[] = [];
-    // The endpoint that worked last time goes first, so a healthy fallback does not pay
-    // for the primary's failure on every subsequent call.
+    // The endpoint that worked last time goes first, so a healthy fallback does not pay for
+    // the primary's failure on every subsequent call. Admission is unaffected by ordering.
     const order = [
       ...(this.active !== null ? [this.active] : []),
       ...this.urls.map((_, i) => i).filter((i) => i !== this.active),
@@ -243,14 +374,19 @@ export class RpcPool {
         continue;
       }
       try {
-        // The endpoint identity travels WITH the provider. A caller that caches anything
-        // derived from a read has to be able to bind it to the node that answered, and
-        // asking the pool afterwards would race with the next failover.
-        const value = await op(provider, admission.identity);
-        this.active = index;
+        const value = await bounded(op(provider, admission.identity), this.operationTimeoutMs);
+        // A stale generation means this caller already gave up and something else has since
+        // run. Recording `active` here would let an abandoned attempt reassign the pool
+        // behind a later caller's back.
+        if (token === this.generation) this.active = index;
         return value;
-      } catch (err: any) {
-        problems.push(`${where}: ${String(err?.shortMessage ?? err?.message ?? err).slice(0, 100)}`);
+      } catch (err) {
+        const timedOut = err instanceof TimedOut;
+        problems.push(
+          `${where}: ${timedOut ? `the operation did not answer within ${this.operationTimeoutMs}ms` : 'the operation failed'}`
+        );
+        // Nothing from `err` is retained. The operation callback is application code that
+        // wraps provider errors, and those carry the request URL.
       }
     }
 
@@ -260,18 +396,53 @@ export class RpcPool {
     );
   }
 
+  /**
+   * Pins ONE admitted endpoint, so everything in a single response comes from one view.
+   *
+   * `run` picks per call and may fail over between calls. That is right for independent
+   * reads and wrong for a status page: /status was reading chain id, block, fee and balance
+   * through the pinned provider while readiness and identity came through the pool, and
+   * then labelling the whole response with the POOL's endpoint. A reader would see endpoint
+   * B named as active above evidence that came from A -- one document, two worlds, and no
+   * way to tell from the page.
+   *
+   * Returns null rather than throwing when nothing can be admitted: the caller is a status
+   * page whose job is to report that, not to fail.
+   */
+  async acquire(): Promise<{ provider: ethers.JsonRpcProvider; endpoint: RpcEndpointDescription } | null> {
+    const order = [
+      ...(this.active !== null ? [this.active] : []),
+      ...this.urls.map((_, i) => i).filter((i) => i !== this.active),
+    ];
+    for (const index of order) {
+      const admission = await this.admit(index);
+      const provider = this.providers[index];
+      if (admission.admitted && provider) {
+        this.active = index;
+        return { provider, endpoint: admission.identity };
+      }
+    }
+    return null;
+  }
+
   /** What each endpoint is and whether it was allowed to answer. Never includes a URL. */
   status(): PoolStatus {
     return {
-      endpoints: this.urls.map(
-        (url, i) =>
-          this.admissions[i] ?? {
+      endpoints: this.urls.map((url, i) => {
+        const a = this.admissions[i];
+        if (!a) {
+          return {
             identity: describeRpcEndpoint(url),
             admitted: false,
             refusedBecause: 'not probed yet',
             probeMs: 0,
-          }
-      ),
+            checkedAt: null,
+            ageMs: null,
+          };
+        }
+        const at = this.admittedAt[i];
+        return { ...a, ageMs: at === null ? null : this.now() - at };
+      }),
       activeIndex: this.active,
     };
   }

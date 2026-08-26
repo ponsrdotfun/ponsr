@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { describeRpcEndpoint, fingerprintUrl, isIdentified, summariseRpcEndpoint } from '../src/rpcIdentity';
 import { IdentityWatch, summariseIdentity } from '../src/identityWatch';
-import { RpcPool, parseEndpointList } from '../src/rpcPool';
+import { parseEndpointList } from '../src/rpcPool';
 import { executableDeployment } from '../src/deployments';
 
 const D = executableDeployment();
@@ -116,165 +116,29 @@ describe('endpoint list parsing', () => {
   });
 });
 
-/** A provider whose chain id and factory bytecode are dictated by the test. */
-function fakeProvider(chainId: number, code: string): any {
-  return {
-    getNetwork: async () => ({ chainId: BigInt(chainId) }),
-    getCode: async () => code,
-    marker: `${chainId}:${code.slice(0, 10)}`,
-  };
-}
+/**
+ * The pool's admission tests USED to live here, against a hand-made provider object whose
+ * `getNetwork()` returned whatever the test asked for. Every one of them passed while the
+ * gate did nothing at all: with `staticNetwork: true`, `getNetwork()` answers from the
+ * configured value and sends no request, so the check compared 4663 to 4663 and admitted a
+ * testnet endpoint. Measured: zero methods reached the transport.
+ *
+ * They were deleted rather than repaired. Adding a `send` stub to the fake would have made
+ * them pass again and restored exactly the false comfort that hid the defect -- a mock
+ * placed above the layer under test can only report the author's expectations back.
+ *
+ * The same properties, and considerably more, are now asserted in
+ * tests/rpcPoolTransport.test.ts against a real JsonRpcProvider talking to a real local
+ * JSON-RPC server, with assertions on the methods that server was actually asked for.
+ */
 
-const REAL_CODE = '0x' + '60'.repeat(D.runtimeBytecodeLength);
+const MATCHING_CODE = '0x' + '60'.repeat(D.runtimeBytecodeLength);
+const REAL_CODE = MATCHING_CODE;
 const REAL_HASH = ethers.sha256(REAL_CODE).slice(2);
 
-/** A pool whose deployment expects exactly the bytecode the fake serves. */
-function poolWith(urls: string[], providers: Record<string, any>) {
-  return new RpcPool(urls, {
-    deployment: { ...D, runtimeBytecodeSha256: REAL_HASH },
-    makeProvider: (url) => providers[url],
-  });
-}
-
-describe('bounded fallback with consistency admission', () => {
-  it('uses the primary when it is consistent, and never probes the fallback', async () => {
-    const fallback = fakeProvider(D.chainId, REAL_CODE);
-    const pool = poolWith(['https://a.example', 'https://b.example'], {
-      'https://a.example': fakeProvider(D.chainId, REAL_CODE),
-      'https://b.example': fallback,
-    });
-
-    const seen = await pool.run(async (p: any) => p.marker);
-    expect(seen).toBe(`${D.chainId}:${REAL_CODE.slice(0, 10)}`);
-    expect(pool.status().activeIndex).toBe(0);
-    // Not probed at all: admission is lazy, so a healthy primary costs nothing extra.
-    expect(pool.status().endpoints[1].refusedBecause).toBe('not probed yet');
-  });
-
-  it('REFUSES a fallback on the wrong chain instead of quietly using it', async () => {
-    // The likeliest misconfiguration by far: backend/.env already holds a testnet URL, and
-    // on testnet this factory address holds no contract and the treasury has no funds.
-    const pool = poolWith(['https://bad.example'], {
-      'https://bad.example': fakeProvider(46630, REAL_CODE),
-    });
-
-    await expect(pool.run(async () => 'used it')).rejects.toThrow(/chain id is 46630/);
-    expect(pool.status().endpoints[0].admitted).toBe(false);
-    expect(pool.status().activeIndex).toBeNull();
-  });
-
-  it('REFUSES an endpoint serving different bytecode at the factory address', async () => {
-    // A fork, or an archive node lagging behind a redeployment. Right chain, wrong state.
-    const pool = poolWith(['https://fork.example'], {
-      'https://fork.example': fakeProvider(D.chainId, '0x' + 'ab'.repeat(D.runtimeBytecodeLength)),
-    });
-
-    await expect(pool.run(async () => 'used it')).rejects.toThrow(/runtime bytecode hashes to/);
-    expect(pool.status().endpoints[0].admitted).toBe(false);
-  });
-
-  it('REFUSES an endpoint with no contract at the factory address', async () => {
-    const pool = poolWith(['https://empty.example'], {
-      'https://empty.example': fakeProvider(D.chainId, '0x'),
-    });
-    await expect(pool.run(async () => 'used it')).rejects.toThrow(/no contract at/);
-  });
-
-  it('falls over to a consistent fallback when the primary call fails', async () => {
-    const good = fakeProvider(D.chainId, REAL_CODE);
-    good.marker = 'the fallback';
-    const bad = fakeProvider(D.chainId, REAL_CODE);
-
-    const pool = poolWith(['https://a.example', 'https://b.example'], {
-      'https://a.example': bad,
-      'https://b.example': good,
-    });
-
-    let attempt = 0;
-    const value = await pool.run(async (p: any) => {
-      attempt += 1;
-      if (p === bad) throw new Error('upstream 503');
-      return p.marker;
-    });
-
-    expect(value).toBe('the fallback');
-    expect(attempt).toBe(2);
-    expect(pool.status().activeIndex).toBe(1);
-  });
-
-  it('sticks to the endpoint that worked, rather than re-paying for the broken one', async () => {
-    const bad = fakeProvider(D.chainId, REAL_CODE);
-    const good = fakeProvider(D.chainId, REAL_CODE);
-    const pool = poolWith(['https://a.example', 'https://b.example'], {
-      'https://a.example': bad,
-      'https://b.example': good,
-    });
-
-    const tried: any[] = [];
-    const op = async (p: any) => {
-      tried.push(p);
-      if (p === bad) throw new Error('upstream 503');
-      return 'ok';
-    };
-    await pool.run(op);
-    tried.length = 0;
-    await pool.run(op);
-
-    // Second call goes straight to the survivor: one attempt, not two.
-    expect(tried).toEqual([good]);
-  });
-
-  it('is BOUNDED: each endpoint is tried at most once and then it gives up', async () => {
-    const a = fakeProvider(D.chainId, REAL_CODE);
-    const b = fakeProvider(D.chainId, REAL_CODE);
-    const pool = poolWith(['https://a.example', 'https://b.example'], {
-      'https://a.example': a,
-      'https://b.example': b,
-    });
-
-    let attempts = 0;
-    await expect(
-      pool.run(async () => {
-        attempts += 1;
-        throw new Error('upstream 503');
-      })
-    ).rejects.toThrow(/no RPC endpoint could serve the request/);
-
-    // Two endpoints, two attempts. A caller with a deadline gets a refusal inside it
-    // instead of a retry loop spending the whole budget failing repeatedly.
-    expect(attempts).toBe(2);
-  });
-
-  it('does not put a URL into the error it throws', async () => {
-    const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
-    const url = `https://rpc.example.com/v2/${secret}`;
-    const pool = poolWith([url], { [url]: fakeProvider(46630, REAL_CODE) });
-
-    // The failure path is exactly where a URL tends to get logged for debugging.
-    await expect(pool.run(async () => 'x')).rejects.toThrow(
-      expect.objectContaining({ message: expect.not.stringContaining(secret) })
-    );
-  });
-
-  it('remembers a wrong chain but not an outage', async () => {
-    let reachable = false;
-    const flaky: any = {
-      getNetwork: async () => {
-        if (!reachable) throw new Error('ECONNREFUSED');
-        return { chainId: BigInt(D.chainId) };
-      },
-      getCode: async () => REAL_CODE,
-      marker: 'recovered',
-    };
-    const pool = poolWith(['https://flaky.example'], { 'https://flaky.example': flaky });
-
-    await expect(pool.run(async () => 'x')).rejects.toThrow(/could not be probed/);
-    reachable = true;
-    // An endpoint that was down at boot has to be able to come back without a restart --
-    // unlike a wrong chain, which is a permanent property and stays refused.
-    await expect(pool.run(async (p: any) => p.marker)).resolves.toBe('recovered');
-  });
-});
+/** Two distinct endpoint fingerprints, so cache binding can be exercised. */
+const FP_A = 'aaaaaaaaaaaa';
+const FP_B = 'bbbbbbbbbbbb';
 
 /**
  * A real JsonRpcProvider whose transport is the test.
@@ -326,10 +190,6 @@ class FakeChain extends ethers.JsonRpcProvider {
     });
   }
 }
-
-/** Two distinct endpoint fingerprints, so cache binding can be exercised. */
-const FP_A = 'aaaaaaaaaaaa';
-const FP_B = 'bbbbbbbbbbbb';
 
 /** The registry entry this fake chain genuinely satisfies. */
 const MATCHING = { ...D, runtimeBytecodeSha256: REAL_HASH };
