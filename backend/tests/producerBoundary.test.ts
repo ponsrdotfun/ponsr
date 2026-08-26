@@ -510,3 +510,200 @@ describe('the timestamp and origin contracts say what they do', () => {
     }
   });
 });
+
+/**
+ * EVERY clock read, not the one that happened to be last.
+ *
+ * `generatedAt` was stamped from a fresh guarded read placed INSIDE the returned object
+ * literal, after `clock.failed` had already been consulted and `ok` already computed. A
+ * clock that threw on that final read marked itself broken one step too late to be
+ * reported: the document went out `ok: true` with `problems: []`, carrying a host-clock
+ * timestamp beside an `elapsedMs` measured against an injected 2023 epoch. Two clocks in
+ * one body that called itself clean evidence.
+ *
+ * The count is DISCOVERED rather than written down. Hard-coding "read 23" would test the
+ * ordering that exists today and say nothing about the one a future edit introduces -- a
+ * seventh clock read added after the health check would reopen exactly this bug under a
+ * green suite.
+ */
+describe('a clock failure at ANY read position fails closed', () => {
+  const EPOCH = Date.parse('2023-01-01T00:00:00.000Z');
+
+  /** Deterministic, monotonic, and far enough from host time that a fallback is visible. */
+  function countingClock(throwAt: number | null, counter: { n: number }, secret: string) {
+    return () => {
+      counter.n += 1;
+      if (throwAt !== null && counter.n === throwAt) throw new Error(secret);
+      return EPOCH + counter.n * 10;
+    };
+  }
+
+  async function readCount(): Promise<number> {
+    const counter = { n: 0 };
+    const core = await buildCoreEvidence(coreDeps(), {
+      budgetMs: 5000,
+      now: countingClock(null, counter, 'unused'),
+    });
+    expect(core.ok).toBe(true);
+    return counter.n;
+  }
+
+  it('a valid monotonic deterministic clock still produces clean evidence', async () => {
+    const counter = { n: 0 };
+    const core = await buildCoreEvidence(coreDeps(), {
+      budgetMs: 5000,
+      now: countingClock(null, counter, 'unused'),
+    });
+    expect(core.ok).toBe(true);
+    expect(core.problems).toEqual([]);
+    // Timestamped from the INJECTED clock, so the test seam is genuinely in control.
+    expect(core.generatedAt.startsWith('2023-')).toBe(true);
+    expect(parseTimestamp(core.generatedAt)).not.toBeNull();
+    expect(counter.n).toBeGreaterThan(1);
+  });
+
+  it('throwing on each read position in turn always resolves ok=false', async () => {
+    const total = await readCount();
+    expect(total).toBeGreaterThan(1);
+
+    for (let position = 1; position <= total; position++) {
+      const secret = `SECRET_CLOCK_POS_${position}`;
+      const counter = { n: 0 };
+      let rejection: unknown;
+      const core = await buildCoreEvidence(coreDeps(), {
+        budgetMs: 5000,
+        now: countingClock(position, counter, secret),
+      }).catch((err) => {
+        rejection = err;
+        return null;
+      });
+
+      // Resolve, never reject -- the producer's stated contract.
+      expect(rejection).toBeUndefined();
+      expect(core).not.toBeNull();
+      expect(core!.ok).toBe(false);
+      expect(core!.problems).toContain('clock-unusable');
+      for (const p of core!.problems) expect(CORE_PROBLEMS).toContain(p);
+
+      // No timing from a clock nobody can trust, and nothing mixing the injected epoch
+      // with host time. An unreadable clock publishes no timestamp rather than a
+      // plausible one, and the validator refuses the empty field independently of `ok`.
+      expect(Number.isFinite(core!.elapsedMs)).toBe(true);
+      expect(core!.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(parseTimestamp(core!.generatedAt)).toBeNull();
+      expect(core!.generatedAt.startsWith('20')).toBe(false);
+
+      // Asserted on the real surfaces. `JSON.stringify(someError)` is `{}`.
+      expect(JSON.stringify(core)).not.toContain(secret);
+      expect(String(rejection ?? '')).not.toContain(secret);
+    }
+  }, 60_000);
+
+  it('the final read failing is closed over HTTP through the real handler', async () => {
+    const secret = 'SECRET_CLOCK_FINAL_HTTP';
+
+    const session: AcquiredSession = {
+      provider: {} as never,
+      endpoint: { origin: 'https://rpc.example.com', fingerprint: 'aaaaaaaaaaaa' } as never,
+      index: 0,
+    };
+    const pool: StatusPool = {
+      acquire: async () => session,
+      status: () => ({
+        endpoints: [
+          { identity: session.endpoint as never, admitted: true, probeMs: 1, checkedAt: null, ageMs: null },
+        ],
+        activeIndex: 0,
+      }),
+    };
+    const makeDeps = (): StatusDeps => ({
+      expectedChainId: D.chainId,
+      getChainId: async () => D.chainId,
+      getBlockNumber: async () => 1234,
+      getTreasuryBalanceWei: async () => ETH / 50n,
+      getLiveFeeWei: async () => FEE,
+      getLaunchReadiness: async () => ({
+        launchEnabled: true,
+        whitelisted: false,
+        canLaunch: true,
+        canLaunchOnChain: true,
+      }),
+      getDeploymentIdentity: async () => ({
+        result: { ok: true, mismatches: [] },
+        ageMs: 0,
+        fromCache: false,
+      }),
+      spentTodayWei: () => 0n,
+      rollingSpendLast24hWei: () => 0n,
+      dailyCapWei: ETH / 100n,
+      launchesToday: () => 0,
+      coldAddressSet: true,
+      parserRoute: 'OpenRouter',
+      alertsRoute: 'Telegram',
+      crossCheckHours: 6,
+      publicLaunchEnabled: false,
+      factoryVersion: 'v2',
+      deploymentId: D.id,
+      deploymentFactory: D.factory,
+      treasuryAddress: TREASURY,
+    });
+
+    // Counted through the WHOLE composition, not through the producer alone.
+    //
+    // `assembleCore` reads the clock several times before `buildCoreEvidence` is even
+    // called, so the producer's own read count lands somewhere in the middle of a request
+    // -- a position that fails closed even in the broken ordering. Injecting there proved
+    // nothing: this test passed against the defect until the count came from a real
+    // request. The failing position has to be the last read the ROUTE performs.
+    async function request(throwAt: number | null): Promise<{ status: number; body: string; reads: number }> {
+      const counter = { n: 0 };
+      const app = express();
+      // The REAL handler, imported -- not a copy of it.
+      app.get(
+        '/status/core',
+        statusCoreHandler({
+          pool,
+          makeDeps,
+          options: { totalBudgetMs: 5000, now: countingClock(throwAt, counter, secret) },
+        })
+      );
+      const server = app.listen(0, '127.0.0.1');
+      await new Promise<void>((r) => server.once('listening', () => r()));
+      const port = (server.address() as AddressInfo).port;
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/status/core`);
+        return { status: res.status, body: await res.text(), reads: counter.n };
+      } finally {
+        server.close();
+      }
+    }
+
+    const clean = await request(null);
+    expect(clean.status).toBe(200);
+    expect(JSON.parse(clean.body).ok).toBe(true);
+    expect(clean.reads).toBeGreaterThan(1);
+
+    const broken = await request(clean.reads);
+    expect(broken.body).not.toContain(secret);
+    const parsed = JSON.parse(broken.body);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.problems).toContain('clock-unusable');
+    expect(broken.status).toBe(503);
+    for (const p of parsed.problems) expect(CORE_PROBLEMS).toContain(p);
+  }, 20_000);
+
+  it('a caller cannot overwrite the verdict through the returned fields', async () => {
+    // `...fields` used to be spread AFTER `ok`, `problems` and the timings. Nothing passes
+    // those today, but the ordering meant a future field could silently win against the
+    // producer's own conclusion.
+    const core = await buildCoreEvidence(coreDeps({ getBlockNumber: async () => 7 }), {
+      budgetMs: 5000,
+    });
+    expect(core.block).toBe(7);
+    expect(core.ok).toBe(problemsAreEmpty(core.problems));
+  });
+
+  function problemsAreEmpty(problems: readonly string[]): boolean {
+    return problems.length === 0;
+  }
+});

@@ -382,22 +382,44 @@ export async function buildCoreEvidence(
     } catch {
       if (!problems.includes('assembly-failed')) problems.push('assembly-failed');
     }
+    // EVERY remaining clock read happens HERE, before the health of the clock is judged.
+    //
+    // `generatedAt` used to be stamped from a fresh read inside the returned object literal
+    // -- AFTER `clock.failed` had been consulted and `ok` computed. A clock that threw on
+    // that final read marked itself broken a moment too late to be reported: the body went
+    // out `ok: true` with `problems: []`, carrying a host-clock timestamp beside an elapsed
+    // figure measured on the injected clock. Two epochs in one document that called itself
+    // clean evidence. The reads are snapshotted first now, and the clock is never touched
+    // again after its health is evaluated.
     const finishedAt = now();
-    let elapsedMs = finishedAt - startedAt;
-    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) elapsedMs = 0;
-    if (elapsedMs > budget && !problems.includes('core-deadline-exceeded')) {
-      problems.push('core-deadline-exceeded');
-    }
-    // Recorded LAST, so a clock that broke at any point in the response is reported even
-    // if every dependency answered. Freshness and deadline evidence built on an unusable
-    // clock is not evidence.
-    if (clock.failed && !problems.includes('clock-unusable')) problems.push('clock-unusable');
+    const generatedAtMs = now();
+    const clockBroken = clock.failed;
+    if (clockBroken && !problems.includes('clock-unusable')) problems.push('clock-unusable');
     if (!capUsable && !problems.includes('cap-unreadable')) problems.push('cap-unreadable');
+
+    // A BROKEN CLOCK PUBLISHES NO TIMINGS AT ALL, rather than mixed-epoch ones. The internal
+    // fallback to host time exists only so bookkeeping can finish, and subtracting a host
+    // millisecond from an injected start produced a plausible-looking `elapsedMs` of 115
+    // billion. Nobody can act on that, and `clock-unusable` already says why it is absent.
+    let elapsedMs = 0;
+    if (!clockBroken) {
+      elapsedMs = finishedAt - startedAt;
+      if (!Number.isFinite(elapsedMs) || elapsedMs < 0) elapsedMs = 0;
+      if (elapsedMs > budget && !problems.includes('core-deadline-exceeded')) {
+        problems.push('core-deadline-exceeded');
+      }
+    }
+    // The empty string, for the same reason `capWei` carries one when the cap is unreadable:
+    // it is a value no consumer can mistake for an observation, and `parseTimestamp` refuses
+    // it, so a validator downstream fails the document independently of `ok`.
+    const generatedAt = clockBroken ? '' : stamp(generatedAtMs);
+
+    // `ok` is computed after the last operation that can add a problem, and the fields the
+    // caller supplies are spread BEFORE it so they can never overwrite the verdict, the
+    // problem list or the timings this function is responsible for.
+    const ok = problems.length === 0;
     return {
       ...base,
-      ok: problems.length === 0,
-      generatedAt: stamp(now()),
-      elapsedMs,
       chainId: null,
       block: null,
       identity: null,
@@ -405,9 +427,12 @@ export async function buildCoreEvidence(
       readiness: null,
       treasuryBalanceWei: null,
       rolling24hWei: null,
+      ...fields,
+      ok,
+      generatedAt,
+      elapsedMs,
       problems,
       dependencies,
-      ...fields,
     };
   };
 
