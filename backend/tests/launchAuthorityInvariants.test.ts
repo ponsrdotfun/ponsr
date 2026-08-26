@@ -96,19 +96,18 @@ describe('the fallback pool is wired to the read path only', () => {
     expect(found.sort()).toEqual(['src/index.ts', 'src/rpcPool.ts', 'src/statusSession.ts']);
   });
 
-  it('reaches the pool only inside the /status handler', () => {
+  it('is reached only from the status path, never from the launch or orchestrator wiring', () => {
+    // Positional "after app.get('/status')" was the old rule and it is no longer the right
+    // one: the dependency builder is shared by BOTH status routes and is declared above
+    // them. The property that matters is unchanged -- the pool is reachable only from the
+    // status path -- so the rule now names that path instead of a line number.
+    const builderAt = src.indexOf('const statusDepsFor');
     const statusAt = src.indexOf("app.get('/status'");
-    expect(statusAt).toBeGreaterThan(-1);
+    const coreAt = src.indexOf("app.get('/status/core'");
+    expect(builderAt).toBeGreaterThan(-1);
+    expect(statusAt).toBeGreaterThan(builderAt);
+    expect(coreAt).toBeGreaterThan(statusAt);
 
-    // Every mention of the pool instance, wherever it appears, including aliases created
-    // by assignment. The construction line is the one legitimate exception.
-    const uses: number[] = [];
-    let at = src.indexOf('rpcPool');
-    while (at !== -1) {
-      uses.push(at);
-      at = src.indexOf('rpcPool', at + 1);
-    }
-    // Two legitimate mentions outside the handler: the import, and the construction.
     const importAt = src.indexOf("from './rpcPool'");
     const construction = src.indexOf('const rpcPool = new RpcPool');
     expect(importAt).toBeGreaterThan(-1);
@@ -116,12 +115,24 @@ describe('the fallback pool is wired to the read path only', () => {
     const isDeclaration = (u: number) =>
       (u > importAt - 60 && u < importAt + 20) || (u > construction - 5 && u < construction + 40);
 
+    const uses: number[] = [];
+    let at = src.indexOf('rpcPool');
+    while (at !== -1) {
+      uses.push(at);
+      at = src.indexOf('rpcPool', at + 1);
+    }
     const operational = uses.filter((u) => !isDeclaration(u));
     expect(operational.length).toBeGreaterThan(0);
-    // Every actual USE sits inside the /status handler.
-    for (const u of operational) expect(u).toBeGreaterThan(statusAt);
+    // Every actual USE sits inside the shared status dependency builder or below it, which
+    // is the status path and nothing else.
+    for (const u of operational) expect(u).toBeGreaterThan(builderAt);
 
-    // And no alias escapes the handler under a different name.
+    // The builder itself is consumed only by the two status routes.
+    const consumers = [...src.matchAll(/statusDepsFor/g)].map((m) => m.index!);
+    expect(consumers.length).toBe(3); // the declaration plus the two routes
+    for (const c of consumers.slice(1)) expect(c).toBeGreaterThan(statusAt);
+
+    // And no alias escapes under a different name.
     expect(src).not.toMatch(/const\s+\w+\s*=\s*rpcPool\s*;/);
   });
 
@@ -229,5 +240,61 @@ describe('rpc-diagnose loads no credential or signer module', () => {
     expect(stdout).toContain('read-only, nothing is signed or broadcast');
     expect(stdout).toContain('http://127.0.0.1:1');
     expect(stdout).not.toContain('nothing-is-listening');
+  });
+});
+
+/**
+ * The core endpoint and its consumer are readers. Asserted against the shipped sources,
+ * because "it does not sign" is the kind of claim that stays true only while someone keeps
+ * checking.
+ */
+describe('the core evidence path imports nothing that can spend', () => {
+  const FORBIDDEN = [
+    '@turnkey',
+    'treasurySigner',
+    'signedTxFlow',
+    'canaryJournal',
+    'createTreasurySigner',
+    'broadcastTransaction',
+    'sendTransaction',
+    'signTransaction',
+  ];
+
+  it.each(['src/statusCore.ts', 'src/coreValidator.ts', 'src/dependencyTiming.ts'])(
+    '%s imports no signer, credential loader or broadcast path',
+    (file) => {
+      const src = code(file);
+      for (const forbidden of FORBIDDEN) expect(src).not.toContain(forbidden);
+      // src/config calls dotenv at module load and parses every credential field, so
+      // importing it IS reading the credentials whether or not they are used.
+      expect(src).not.toMatch(/from '\.\/config'/);
+    }
+  );
+
+  it.each(['scripts/check-core-readiness.ts', 'scripts/sample-status-latency.ts'])(
+    '%s is a reader: no signer, no credential, no write to the chain',
+    (file) => {
+      const src = code(file);
+      for (const forbidden of FORBIDDEN) expect(src).not.toContain(forbidden);
+      expect(src).not.toContain('--execute');
+      expect(src).not.toMatch(/from '\.\.\/src\/config'/);
+    }
+  );
+
+  it('the launch path does not import the core validator as a substitute for its own checks', () => {
+    // The endpoint may become an ADDITIONAL gate. It must never become a weaker one: an
+    // endpoint that says yes is easier to satisfy than a chain that does.
+    const launch = code('scripts/phase-b-launch.ts');
+    expect(launch).not.toContain('coreValidator');
+    expect(launch).not.toContain('fetchAndValidateCore');
+    expect(launch).not.toContain('/status/core');
+  });
+
+  it('phase-b-launch still performs its own live preflight, unchanged', () => {
+    const launch = code('scripts/phase-b-launch.ts');
+    // The direct checks that must not be replaced by a status endpoint.
+    expect(launch).toContain('assertDeploymentIdentity');
+    expect(launch).toContain('getLaunchReadiness');
+    expect(launch).toContain('getLiveFeeWei');
   });
 });

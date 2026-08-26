@@ -23,6 +23,16 @@
       "explicitGate": "--execute"
     },
     {
+      "script": "check-core-readiness.ts",
+      "authority": "read-only",
+      "effects": [
+        "issues one HTTP GET to a backend status endpoint",
+        "validates the authoritative core evidence and exits non-zero on failure",
+        "constructs no signer, reads no credential, broadcasts nothing"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
       "script": "check-providers.ts",
       "authority": "local-write",
       "effects": [
@@ -148,6 +158,16 @@
       "authority": "read-only",
       "effects": [
         "calls the configured parser model and reports eval results"
+      ],
+      "defaultMode": "read-only"
+    },
+    {
+      "script": "sample-status-latency.ts",
+      "authority": "read-only",
+      "effects": [
+        "issues HTTP GETs to /status and /status/core on an interval",
+        "writes only the sample files the operator names",
+        "discards no sample and retries nothing"
       ],
       "defaultMode": "read-only"
     },
