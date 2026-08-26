@@ -1,15 +1,15 @@
 import { ethers } from 'ethers';
 import { preflightEnv } from './preflightEnv';
-import { EMPTY_SOCIALS, buildLaunchCalldata, extractLaunchedTokenAddress, saltForTweet } from './ponsEncoder';
+import { EMPTY_SOCIALS } from './ponsEncoder';
 import {
   PONS_V2_CURRENT_ABI,
   buildCurrentV2LaunchCalldata,
   extractCurrentV2LaunchDetails,
   launchSalt,
 } from './ponsV2CurrentEncoder';
-import { PonsDeployment, executableDeployment, deploymentById } from './deployments';
+import { PonsDeployment, executableDeployment } from './deployments';
 import { assertEscrowMatches } from './splitterDeployer';
-import { NATIVE_ETH, PairAsset } from './pairTokens';
+import { PairAsset } from './pairTokens';
 
 /**
  * The one place that knows v1 and v2 are different functions.
@@ -50,7 +50,8 @@ export interface BuiltLaunch {
 }
 
 export interface LaunchTarget {
-  version: 'v1' | 'v2' | 'v2-current';
+  /** One value, because there is one executable deployment. */
+  version: 'v2-current';
   /**
    * Which registry entry this builds for. REQUIRED, and that is the point.
    *
@@ -70,65 +71,24 @@ export interface LaunchTarget {
   extractToken(logs: readonly ethers.Log[]): string | null;
 }
 
-class V1Target implements LaunchTarget {
-  version = 'v1' as const;
-  /**
-   * Rollback, stated explicitly.
-   *
-   * `pons-v1` is `executable: false` and stays that way -- it is not where launches go.
-   * Carrying it here says which contract THIS target addresses, which is a different
-   * question from which deployment the registry routes to by default. Representing
-   * rollback as its own deployment beats bypassing the registry's invariant.
-   */
-  deployment = deploymentById('pons-v1');
-  factoryAddress = deploymentById('pons-v1').factory;
-  supportsPairing = false;
-
-  async build(req: LaunchRequest, launchFeeWei: bigint): Promise<BuiltLaunch> {
-    // v1 takes its pairing from the launch config, not from a parameter. Accepting a
-    // request for anything else and launching against WETH regardless would be a
-    // launch nobody asked for, permanently.
-    if (req.pairAsset.address.toLowerCase() !== NATIVE_ETH) {
-      throw new Error(
-        `v1 cannot pair against ${req.pairAsset.symbol}: its pairing comes from the launch config. ` +
-          'Set PONS_FACTORY_VERSION=v2 to launch against an approved asset.'
-      );
-    }
-    const { data, value } = buildLaunchCalldata(
-      {
-        tokenName: req.tokenName,
-        tokenSymbol: req.tokenSymbol,
-        logo: '',
-        description: req.description ?? '',
-        socials: EMPTY_SOCIALS,
-        feeWallet: req.splitterAddress,
-        launchConfigId: preflightEnv().PONS_LAUNCH_CONFIG_ID,
-        dexId: preflightEnv().PONS_DEX_ID,
-        salt: saltForTweet(req.tweetId),
-      },
-      launchFeeWei
-    );
-    return { to: this.factoryAddress, data, value };
-  }
-
-  extractToken(logs: readonly ethers.Log[]): string | null {
-    return extractLaunchedTokenAddress(logs);
-  }
-}
-
 /*
- * `V2Target` -- the target for the SUPERSEDED v2 factory -- was deleted on 2026-08-20.
+ * `V2Target` (the SUPERSEDED v2 factory) was deleted on 2026-08-20, and `V1Target` on
+ * 2026-08-26. Neither is a place a launch may go.
  *
- * It had been unreachable since `createLaunchTarget` started routing everything except
- * v1 to the registry, so it changed no behaviour. It was removed anyway, because what
- * it still held was `config.PONS_V2_FACTORY_ADDRESS` -- a setting whose default is the
- * factory pons replaced -- inside a class that looks maintained and deliberate.
+ * V1Target outlived its usefulness by a long way. It was described here as "rollback",
+ * and that description was wrong in a way that cost money: ROLLBACK IS AN EXACT PREVIOUS
+ * APPLICATION IMAGE, not runtime routing to a superseded factory. Deploying old code and
+ * pointing new code at an old contract are different acts with different failure modes,
+ * and only one of them is reversible.
  *
- * Dead code carrying a superseded address is not neutral. It reads as something kept
- * for a reason, and the next person to need a "v2 target" finds one already written.
+ * It was reachable because `PONS_FACTORY_VERSION` let an environment variable answer a
+ * question the registry already answers -- and the variable DEFAULTED TO v1, so a missing
+ * value selected the superseded factory in silence. Two production launches on 2026-08-12
+ * went to v1 through exactly that path.
  *
- * The superseded deployment stays in `deployments.ts` and stays indexable; what is gone
- * is the ability to LAUNCH through it. Rollback is v1, which is still selectable.
+ * The superseded deployments stay in `deployments.ts` and stay indexable: a launch made
+ * through an old factory did not stop existing when pons moved on, and the board and the
+ * reconciler still have to read them. What is gone is the ability to SEND to them.
  */
 
 /**
@@ -200,10 +160,14 @@ class CurrentV2Target implements LaunchTarget {
   }
 }
 
+/**
+ * The one target, resolved from the one source of truth.
+ *
+ * No environment value is consulted. `executableDeployment()` already enforces that
+ * exactly one deployment is executable and THROWS otherwise, so there is nothing left for
+ * a setting to disagree with. Changing which factory launches go to is a one-line change
+ * to the registry, which that invariant polices.
+ */
 export function createLaunchTarget(provider: ethers.Provider): LaunchTarget {
-  // v1 stays selectable for rollback and for the suites that exercise it. Everything
-  // else routes to whichever deployment the registry marks executable, so the target
-  // cannot drift from the ABI the way a bare address setting allowed.
-  if (preflightEnv().PONS_FACTORY_VERSION === 'v1') return new V1Target();
   return new CurrentV2Target(provider);
 }

@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { config } from '../src/config';
+import { executableDeployment } from '../src/deployments';
 
 const EXECUTE = process.argv.includes('--execute');
 const valueFor = (name: string): string | undefined => {
@@ -76,7 +77,7 @@ function writeRecovery(state: Recovery) {
   console.log(`  organization             ${organizationId}`);
   console.log(`  user                     ${userName}`);
   console.log(`  policy                   ${policyName}`);
-  console.log(`  factory                  ${config.PONS_FACTORY_ADDRESS}`);
+  console.log(`  factory                  ${executableDeployment().factory}`);
   console.log('  root credentials         input only; never written to .env or output files');
   console.log('  bot credential           separate operator-only file; never written to .env');
   console.log('  recovery                 non-secret ids and partial-failure state only');
@@ -147,7 +148,7 @@ function writeRecovery(state: Recovery) {
       apiPrivateKey: keyPair.privateKey,
     }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 
-    const factory = String(config.PONS_FACTORY_ADDRESS).toLowerCase();
+    const factory = executableDeployment().factory.toLowerCase();
     const policy = await client.createPolicy({
       organizationId,
       policyName,

@@ -35,7 +35,7 @@ Credential modules are loaded by `await import(...)` **after** the `--execute` g
 Keyless dry run. Nothing is signed, nothing is sent, and `backend/.env` is never opened:
 
 ```bash
-cd backend && RPC_URL=… CHAIN_ID=4663 PONS_FACTORY_VERSION=v2 TREASURY_ADDRESS=0x… npm run launch:canary
+cd backend && RPC_URL=… CHAIN_ID=4663 TREASURY_ADDRESS=0x… npm run launch:canary
 ```
 
 Those values may live in `backend/.env.canary` instead, which must contain **no secrets** —

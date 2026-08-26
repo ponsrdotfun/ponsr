@@ -240,7 +240,6 @@ async function runCanary(opts: {
       PONSR_PROBE_OUT: probeOut,
       RPC_URL: opts.rpcUrl,
       CHAIN_ID: '4663',
-      PONS_FACTORY_VERSION: 'v2',
       TREASURY_ADDRESS: TEST_TREASURY,
       CANARY_JOURNAL: path.join(journalDir, 'canary.sqlite'),
       DAILY_SPEND_CAP_WEI: STATUS_CAP_WEI,
@@ -407,7 +406,11 @@ describe('the secret-free source refuses to serve credentials', () => {
   it('accepts every documented non-secret field', async () => {
     const { preflightEnv } = await import('../src/preflightEnv');
     const names = Object.keys(preflightEnv());
-    expect(names).toEqual(expect.arrayContaining(['RPC_URL', 'CHAIN_ID', 'PONS_FACTORY_VERSION']));
+    expect(names).toEqual(expect.arrayContaining(['RPC_URL', 'CHAIN_ID', 'PONS_LAUNCH_CONFIG_ID']));
+    // Removed on 2026-08-26, with the launch destination. A canary that could be pointed at
+    // a superseded factory by an environment file is a canary measuring the wrong contract.
+    expect(names).not.toContain('PONS_FACTORY_VERSION');
+    expect(names).not.toContain('PONS_FACTORY_ADDRESS');
   });
 
   it('refuses a .env.canary that smuggles a credential in', async () => {
@@ -429,8 +432,8 @@ describe('the secret-free source refuses to serve credentials', () => {
     try {
       const run = await runCanary({
         rpcUrl: rpc.url,
-        envCanary: 'PONS_FACTORY_VERSION=v2\n',
-        extraEnv: { PONS_FACTORY_VERSION: '' },
+        envCanary: 'PONS_LAUNCH_CONFIG_ID=0\n',
+        extraEnv: { PONS_LAUNCH_CONFIG_ID: '' },
       });
       expect(openedMixedEnv(run.report, run.envPath)).toBe(false);
       expect(run.stdout).toContain('DRY RUN');

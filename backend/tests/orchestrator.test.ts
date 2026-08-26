@@ -7,28 +7,72 @@ import { MockXClient } from '../src/xClient';
 import { TreasurySigner } from '../src/treasurySigner';
 import { handleMention } from '../src/orchestrator';
 import { InboundMention, ParsedIntent } from '../src/types';
-import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
+import { PONS_FACTORY_ABI, EMPTY_SOCIALS } from '../src/ponsEncoder';
+import {
+  PONS_V2_CURRENT_ABI,
+  buildCurrentV2LaunchCalldata,
+  decodeCurrentV2Launch,
+  extractCurrentV2LaunchDetails,
+  launchSalt,
+} from '../src/ponsV2CurrentEncoder';
 import { config } from '../src/config';
-import { deploymentById } from '../src/deployments';
+import { deploymentById, executableDeployment } from '../src/deployments';
 
 const TEST_DB_PATH = './data/test-orchestrator.sqlite';
 
 /**
- * These tests exercise the v1 launch path, and say so rather than inheriting it.
+ * These tests exercise the orchestrator, and INJECT the launch target rather than letting
+ * one be chosen for them.
  *
- * Left ambient, PONS_FACTORY_VERSION decided which factory the orchestrator built
- * for: under v1 everything passed, and under v2 the build reached for
- * previewLaunchEconomics on a stubbed provider, threw an error carrying a BigInt, and
- * took the entire suite down with a jest serialization failure -- 24 tests silently
- * not running. Aligning a developer's .env with production was enough to trigger it.
+ * They used to pin `PONS_FACTORY_VERSION=v1` at the top of the file, because left ambient
+ * the variable decided which factory the orchestrator built for: under v1 everything
+ * passed, and under v2 the build reached for previewLaunchEconomics on a stubbed provider,
+ * threw an error carrying a BigInt, and took the entire suite down with a jest
+ * serialization failure -- 24 tests silently not running. Aligning a developer's .env with
+ * production was enough to trigger it.
  *
  * A test suite whose result depends on an environment variable does not mean the same
- * thing on two machines. The v2 path has its own coverage in launchTarget.test.ts and
- * in the pairing block at the bottom of this file, both of which inject a target.
+ * thing on two machines. The variable is gone; the injection is the fix that outlives it.
  */
-const REAL_FACTORY_VERSION = process.env.PONS_FACTORY_VERSION;
-beforeAll(() => { process.env.PONS_FACTORY_VERSION = 'v1'; });
-afterAll(() => { if (REAL_FACTORY_VERSION === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = REAL_FACTORY_VERSION; });
+
+/**
+ * The launch target these tests INJECT, so the suite does not depend on module selection.
+ *
+ * It is bound to the executable deployment -- the orchestrator verifies THAT deployment's
+ * identity, and a target naming one contract while addressing another is the exact defect
+ * this migration removed. The calldata is v1-SHAPED only because `FakeTreasurySigner`
+ * decodes what it is handed to synthesise a receipt; the encoding itself is covered by
+ * `ponsEncoder.test.ts` and `ponsV2CurrentEncoder.test.ts`, not here.
+ */
+function injectedTarget(): any {
+  const d = executableDeployment();
+  return {
+    version: 'v2-current' as const,
+    deployment: d,
+    factoryAddress: d.factory,
+    supportsPairing: true,
+    build: async (req: any, fee: bigint) =>
+      buildCurrentV2LaunchCalldata(
+        {
+          tokenName: req.tokenName,
+          tokenSymbol: req.tokenSymbol,
+          logo: '',
+          description: req.description ?? '',
+          socials: EMPTY_SOCIALS,
+          feeWallet: req.splitterAddress,
+          launchConfigId: 0n,
+          pairToken: req.pairAsset.address,
+          creatorTaxBps: 0,
+          buybackEnabled: false,
+          expectedEconomics: '0x' + 'ab'.repeat(32),
+          salt: launchSalt(d, req.tweetId),
+        },
+        fee,
+        d
+      ),
+    extractToken: (logs: readonly any[]) => extractCurrentV2LaunchDetails(logs)?.token ?? null,
+  };
+}
 
 /** A fully in-memory fake of the treasury signer that simulates the two kinds of
  * transactions the orchestrator sends (splitter deployment, launchToken call) without
@@ -47,7 +91,16 @@ function fakeAddress(seed: string): string {
 class FakeTreasurySigner implements TreasurySigner {
   public sentTransactions: { to: string; data: string; value: bigint }[] = [];
   public shouldRevertLaunch = false;
+  /** What the factory would tell anyone who asked later, kept consistent with what was sent. */
+  private readonly records = new Map<string, any>();
   private nonce = 0;
+
+  launchRecord(token: string): any {
+    const found = this.records.get(String(token).toLowerCase());
+    if (!found) throw new Error('no launch record for that token');
+    return found;
+  }
+
   private readonly treasuryAddress = fakeAddress('fake-treasury');
 
   async address(): Promise<string> {
@@ -68,36 +121,48 @@ class FakeTreasurySigner implements TreasurySigner {
       };
     }
 
-    // launchToken() call -- decode the calldata to build a realistic TokenLaunched event.
-    const iface = new ethers.Interface(PONS_FACTORY_ABI);
-    const decoded = iface.decodeFunctionData('launchToken', tx.data);
+    // launchToken() on the CURRENT factory. The event shape follows the deployment the
+    // injected target names -- a fake emitting v1's event for v2-shaped calldata would be
+    // a receipt from a contract that does not exist.
+    const iface = new ethers.Interface(PONS_V2_CURRENT_ABI);
 
     if (this.shouldRevertLaunch) {
       return { hash, wait: async () => ({ status: 0, logs: [] } as any) };
     }
 
+    // DECODED from the calldata, not invented. The orchestrator reconciles three sources
+    // -- what was sent, what the event announced, and what the factory records -- and a
+    // fake that announces a different pair token than it was asked for is testing the
+    // reconciliation rather than the pipeline.
+    const sent = decodeCurrentV2Launch(tx.data, executableDeployment());
     const tokenAddress = fakeAddress(`fake-token-${this.nonce}`);
-    const poolAddress = fakeAddress(`fake-pool-${this.nonce}`);
-    // The real event, in the real order: token, deployer, dexFactory, pairToken, pool,
-    // dexId, launchConfigId, positionId, restrictionsEndBlock, initialBuyAmount.
-    // initialBuyAmount is asserted as 0 below -- the treasury must never buy into a
-    // launch it created, and with this ABI that is enforced by sending exactly the fee.
+    const curveAddress = fakeAddress(`fake-curve-${this.nonce}`);
+    this.records.set(tokenAddress.toLowerCase(), {
+      token: tokenAddress,
+      curve: curveAddress,
+      deployer: this.treasuryAddress,
+      creatorFeeRecipient: sent.creatorFeeRecipient,
+      pairToken: sent.pairToken,
+      exists: true,
+    });
+    // token, curve, deployer, pairToken, launchConfigId, graduationThreshold.
     const log = iface.encodeEventLog('TokenLaunched', [
       tokenAddress,
+      curveAddress,
       this.treasuryAddress,
-      fakeAddress('fake-dex-factory'),
-      fakeAddress('fake-pair-token'),
-      poolAddress,
-      decoded[2], // dexId
-      decoded[1], // launchConfigId
-      42n, // positionId
-      0n, // restrictionsEndBlock
-      0n, // initialBuyAmount
+      sent.pairToken,
+      sent.launchConfigId,
+      42n,
     ]);
 
     return {
       hash,
-      wait: async () => ({ status: 1, logs: [{ topics: log.topics, data: log.data }] } as any),
+      // `address` matters: the orchestrator scopes the receipt to the SELECTED factory
+      // before reading it, so a log from nowhere is correctly read as no launch at all.
+      wait: async () => ({
+        status: 1,
+        logs: [{ address: executableDeployment().factory, topics: log.topics, data: log.data }],
+      } as any),
     };
   }
 }
@@ -162,7 +227,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: wallet,
       xClient,
       treasurySigner,
-      provider: {} as any,
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       getLiveFeeWei: async () => { chainCalls += 1; return LIVE_FEE; },
       getTreasuryBalanceWei: async () => { chainCalls += 1; return FUNDED_TREASURY; },
       getLaunchReadiness: async () => { chainCalls += 1; return { canLaunch: true, launchConfigUsable: true }; },
@@ -204,7 +269,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner: signer,
-      provider: {} as any,
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       verifyIdentity: async () => {
         order.push('verify');
       },
@@ -228,7 +293,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any,
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       verifyIdentity: async () => {
         throw new Error(
           'pons-v2-current-7ed (0x7eD598…) is not the contract the registry describes. ' +
@@ -259,7 +324,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver,
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => FUNDED_TREASURY,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -273,7 +338,7 @@ describe('handleMention -- full pipeline integration', () => {
     // Two transactions should have been sent: splitter deploy, then the launch itself.
     expect(treasurySigner.sentTransactions).toHaveLength(2);
     expect(treasurySigner.sentTransactions[0].to).toBe(''); // splitter deployment
-    expect(treasurySigner.sentTransactions[1].to).toBe(config.PONS_FACTORY_ADDRESS);
+    expect(treasurySigner.sentTransactions[1].to).toBe(executableDeployment().factory);
 
     // Treasury spend should be recorded for the circuit breaker to see.
     expect(db.totalSpendLast24h()).toBe(LIVE_FEE);
@@ -288,8 +353,8 @@ describe('handleMention -- full pipeline integration', () => {
     ]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention1, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
-    await handleMention(mention2, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention1, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention2, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const user = db.getUser('user_1');
     expect(user).not.toBeNull();
@@ -306,7 +371,7 @@ describe('handleMention -- full pipeline integration', () => {
       },
     };
     const walletResolver = new MockWalletResolver(db);
-    const deps = { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
+    const deps = { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
 
     const first = await handleMention(mention, deps);
     const second = await handleMention(mention, deps);
@@ -324,7 +389,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(0); // silent, per composeRejectionReply
@@ -338,7 +403,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -356,14 +421,14 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
-    const launchTx = treasurySigner.sentTransactions.find((t) => t.to === config.PONS_FACTORY_ADDRESS);
-    const iface = new ethers.Interface(PONS_FACTORY_ABI);
-    const decoded = iface.decodeFunctionData('launchToken', launchTx!.data);
-    // decoded[0] is the TokenParams struct; feeWallet is its last member. The real ABI has
-    // exactly one wallet field, so there is nowhere else a wallet could have been smuggled in.
-    const actualFeeWallet = decoded[0].feeWallet as string;
+    const launchTx = treasurySigner.sentTransactions.find((t) => t.to === executableDeployment().factory);
+    // Decoded against the CURRENT deployment's ABI, which is what was actually sent. The
+    // field is `creatorFeeRecipient` there; on v1 it was `feeWallet`. Either way the real
+    // ABI has exactly one wallet field, so there is nowhere else a wallet could have been
+    // smuggled in.
+    const actualFeeWallet = decodeCurrentV2Launch(launchTx!.data, executableDeployment()).creatorFeeRecipient;
 
     expect(actualFeeWallet.toLowerCase()).not.toContain('attacker');
     // The fee wallet used is the splitter deployed for THIS user, not anything from the tweet.
@@ -376,7 +441,7 @@ describe('handleMention -- full pipeline integration', () => {
     const parser = new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('onchain_failure');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -408,7 +473,7 @@ describe('a failed reply must not rewrite a successful launch', () => {
         walletResolver: new MockWalletResolver(db),
         xClient,
         treasurySigner,
-        provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+        provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
         monitor,
         getLiveFeeWei: async () => LIVE_FEE,
         getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
@@ -499,7 +564,7 @@ describe("X's 7-day crypto-address rule", () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -652,26 +717,39 @@ describe('launching paired against an approved asset', () => {
     return {
       built,
       target: {
-        version: 'v2' as const,
-        // It builds v1-SHAPED calldata (see below), so v1 is what it honestly is. A
-        // target must name the deployment it addresses: the orchestrator verifies THAT
+        version: 'v2-current' as const,
+        // A target must name the deployment it addresses: the orchestrator verifies THAT
         // one's identity, and a stub with no deployment is a stub the guard cannot aim.
-        deployment: deploymentById('pons-v1'),
-        factoryAddress: '0x' + '77'.repeat(20),
+        // It names the EXECUTABLE deployment and builds that deployment's calldata --
+        // naming one and encoding another is precisely the defect the mandatory decode
+        // downstream exists to catch.
+        deployment: executableDeployment(),
+        factoryAddress: executableDeployment().factory,
         supportsPairing,
-        // Real v1-shaped calldata, because FakeTreasurySigner decodes what it is
-        // given to synthesise a receipt. What is under test here is the request the
-        // orchestrator makes, not the encoding -- that has its own tests -- so the
-        // bytes only need to be decodable.
+        // Real current-v2 calldata, because FakeTreasurySigner decodes what it is given to
+        // synthesise a receipt. What is under test here is the request the orchestrator
+        // makes, not the encoding -- that has its own tests -- so the bytes only need to
+        // be decodable, but they must be decodable AS WHAT THEY CLAIM TO BE.
         build: async (req: any, fee: bigint) => {
           built.push(req);
-          const data = new ethers.Interface(PONS_FACTORY_ABI).encodeFunctionData('launchToken', [
-            { name: req.tokenName, symbol: req.tokenSymbol, logo: '', description: '',
-              socials: { twitter: '', telegram: '', discord: '', website: '', farcaster: '' },
-              feeWallet: req.splitterAddress },
-            0n, 0n, '0x' + '00'.repeat(32),
-          ]);
-          return { to: '0x' + '77'.repeat(20), data, value: fee };
+          return buildCurrentV2LaunchCalldata(
+            {
+              tokenName: req.tokenName,
+              tokenSymbol: req.tokenSymbol,
+              logo: '',
+              description: req.description ?? '',
+              socials: EMPTY_SOCIALS,
+              feeWallet: req.splitterAddress,
+              launchConfigId: 0n,
+              pairToken: req.pairAsset.address,
+              creatorTaxBps: 0,
+              buybackEnabled: false,
+              expectedEconomics: '0x' + 'ab'.repeat(32),
+              salt: launchSalt(executableDeployment(), req.tweetId),
+            },
+            fee,
+            executableDeployment()
+          );
         },
         extractToken: () => '0x' + '44'.repeat(20),
       },
@@ -688,7 +766,7 @@ describe('launching paired against an approved asset', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -792,7 +870,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -819,7 +897,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),

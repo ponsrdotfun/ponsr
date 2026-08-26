@@ -2,13 +2,14 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import { Db } from '../src/db';
 import { config } from '../src/config';
-import { deploymentById } from '../src/deployments';
+import { executableDeployment } from '../src/deployments';
+import { EMPTY_SOCIALS } from '../src/ponsEncoder';
 import {
-  EMPTY_SOCIALS,
-  buildLaunchCalldata,
-  extractLaunchedTokenAddress,
-  saltForTweet,
-} from '../src/ponsEncoder';
+  PONS_V2_CURRENT_ABI,
+  buildCurrentV2LaunchCalldata,
+  extractCurrentV2LaunchDetails,
+  launchSalt,
+} from '../src/ponsV2CurrentEncoder';
 import { MockParser } from '../src/parser';
 import { MockWalletResolver } from '../src/walletResolver';
 import { MockXClient } from '../src/xClient';
@@ -39,23 +40,26 @@ class FakeTreasurySigner implements TreasurySigner {
     if (tx.to === '') {
       return { hash, wait: async () => ({ status: 1, contractAddress: fakeAddress('splitter' + this.nonce), logs: [] } as any) };
     }
-    const iface = new ethers.Interface(PONS_FACTORY_ABI);
-    const decoded = iface.decodeFunctionData('launchToken', tx.data);
-    // Real TokenLaunched: token, deployer, dexFactory, pairToken, pool, dexId,
-    // launchConfigId, positionId, restrictionsEndBlock, initialBuyAmount.
+    // The CURRENT factory's event, because that is the deployment the injected target
+    // names and the shape its calldata is built in.
+    const iface = new ethers.Interface(PONS_V2_CURRENT_ABI);
     const log = iface.encodeEventLog('TokenLaunched', [
       fakeAddress('token' + this.nonce),
+      fakeAddress('curve' + this.nonce),
       fakeAddress('fake-treasury'),
-      fakeAddress('dexFactory'),
       fakeAddress('pairToken'),
-      fakeAddress('pool' + this.nonce),
-      decoded[2], // dexId
-      decoded[1], // launchConfigId
-      1n,
       0n,
-      0n,
+      42n,
     ]);
-    return { hash, wait: async () => ({ status: 1, logs: [{ topics: log.topics, data: log.data }] } as any) };
+    // `address` matters: the orchestrator scopes the receipt to the SELECTED factory
+    // before reading it, so a log from nowhere is correctly read as no launch at all.
+    return {
+      hash,
+      wait: async () => ({
+        status: 1,
+        logs: [{ address: executableDeployment().factory, topics: log.topics, data: log.data }],
+      } as any),
+    };
   }
 }
 
@@ -101,27 +105,42 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       xClient,
       treasurySigner,
       provider: {} as any, verifyIdentity: async () => {},
+      // Required once the injected target reports `supportsPairing: true`, which the
+      // executable deployment genuinely does. A stub claiming otherwise would keep these
+      // tests on a code path production no longer has.
+      assertPairApproved: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n, // funded; not what these test
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
-      // Pinned rather than inherited from config.
+      // INJECTED rather than inherited.
       //
       // These tests are about the sweep -- which mentions get retried, which get
       // skipped, what happens when one fails -- and none of that depends on which
-      // factory a launch goes to. Left ambient, PONS_FACTORY_VERSION decided it: with
-      // v1 they passed, and with v2 the launch build reached for previewLaunchEconomics
-      // on a stubbed provider and two of them failed. A suite whose result depends on
-      // an environment variable does not mean the same thing on two machines.
+      // factory a launch goes to. Left ambient, a version setting decided it: with v1
+      // they passed, and with v2 the launch build reached for previewLaunchEconomics on
+      // a stubbed provider and two of them failed. A suite whose result depends on an
+      // environment variable does not mean the same thing on two machines. The setting
+      // is gone; injecting the target is the fix that outlives it.
       launchTarget: {
-        version: 'v1' as const,
+        version: 'v2-current' as const,
         // The deployment this stub addresses, stated. It is required on the interface
-        // now precisely so a target cannot be built without saying which contract it
-        // means -- the identity check reads it rather than a global.
-        deployment: deploymentById('pons-v1'),
-        factoryAddress: deploymentById('pons-v1').factory,
-        supportsPairing: false,
-        build: async (req: any, feeWei: bigint) => {
-          const { data, value } = buildLaunchCalldata(
+        // precisely so a target cannot be built without saying which contract it means --
+        // the identity check reads it rather than a global. Bound to the EXECUTABLE
+        // deployment: a stub naming a superseded factory would keep v1 alive in the
+        // active path through the back door.
+        deployment: executableDeployment(),
+        factoryAddress: executableDeployment().factory,
+        supportsPairing: true,
+        // CURRENT-V2 shaped, because the deployment above is the current one.
+        //
+        // It built v1-shaped bytes while naming v1, which was consistent. Naming the
+        // executable deployment and still building v1 bytes is not: the orchestrator
+        // MANDATORILY decodes the calldata with the selected deployment's ABI and stops
+        // if it cannot -- correctly, since bytes an ABI cannot read are not what anyone
+        // thinks they are. A stub that lies about its deployment gets caught by the guard
+        // that exists to catch exactly that.
+        build: async (req: any, feeWei: bigint) =>
+          buildCurrentV2LaunchCalldata(
             {
               tokenName: req.tokenName,
               tokenSymbol: req.tokenSymbol,
@@ -129,15 +148,17 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
               description: req.description ?? '',
               socials: EMPTY_SOCIALS,
               feeWallet: req.splitterAddress,
-              launchConfigId: config.PONS_LAUNCH_CONFIG_ID,
-              dexId: config.PONS_DEX_ID,
-              salt: saltForTweet(req.tweetId),
+              launchConfigId: 0n,
+              pairToken: req.pairAsset.address,
+              creatorTaxBps: 0,
+              buybackEnabled: false,
+              expectedEconomics: '0x' + 'ab'.repeat(32),
+              salt: launchSalt(executableDeployment(), req.tweetId),
             },
-            feeWei
-          );
-          return { to: config.PONS_FACTORY_ADDRESS, data, value };
-        },
-        extractToken: (logs: any) => extractLaunchedTokenAddress(logs),
+            feeWei,
+            executableDeployment()
+          ),
+        extractToken: (logs: any) => extractCurrentV2LaunchDetails(logs)?.token ?? null,
       },
     };
   });

@@ -1,9 +1,8 @@
 import { ethers } from 'ethers';
 import { LaunchRequest, createLaunchTarget } from '../src/launchTarget';
 import { PONS_V2_FACTORY_ABI } from '../src/ponsV2Encoder';
-import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
+import { PONS_FACTORY_ABI, extractLaunchedTokenAddress } from '../src/ponsEncoder';
 import { NATIVE_ETH, PairAsset } from '../src/pairTokens';
-import { config } from '../src/config';
 import { executableDeployment, deploymentById } from '../src/deployments';
 import { PONS_V2_CURRENT_ABI } from '../src/ponsV2CurrentEncoder';
 
@@ -56,57 +55,27 @@ function stubPreview(value: string | (() => never) = ECON, escrow?: string) {
 }
 
 describe('createLaunchTarget', () => {
-  const realVersion = process.env.PONS_FACTORY_VERSION;
   afterEach(() => {
-    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
     jest.restoreAllMocks();
   });
 
-  describe('v1', () => {
-    beforeEach(() => { process.env.PONS_FACTORY_VERSION = 'v1'; });
-
-    it('builds a v1 call that decodes against the v1 ABI', async () => {
-      const t = createLaunchTarget(fakeProvider);
-      const built = await t.build(req(), FEE);
-      expect(t.version).toBe('v1');
-      expect(built.to).toBe(config.PONS_FACTORY_ADDRESS);
-      expect(built.value).toBe(FEE);
-      const d = new ethers.Interface(PONS_FACTORY_ABI).decodeFunctionData('launchToken', built.data);
-      expect(d[0].symbol).toBe('PAWS');
-      expect(d[0].feeWallet).toBe(SPLITTER);
-    });
-
-    // v1's pairing comes from the launch config, not a parameter. Accepting a request
-    // for AAPL and launching against WETH anyway would be a permanent pairing nobody
-    // asked for -- so it refuses rather than silently doing something else.
-    it('refuses a pairing it cannot honour instead of ignoring it', async () => {
-      const t = createLaunchTarget(fakeProvider);
-      await expect(t.build(req({ pairAsset: AAPL_ASSET }), FEE)).rejects.toThrow(/cannot pair against AAPL/);
-    });
-
-    it('reports that it cannot pair', () => {
-      expect(createLaunchTarget(fakeProvider).supportsPairing).toBe(false);
-    });
-
-    // The salt is derived from the tweet, so a retry predicts the same address and
-    // reverts rather than launching a second token for one request.
-    it('derives its salt from the tweet, so two builds of one tweet match', async () => {
-      const t = createLaunchTarget(fakeProvider);
-      const a = await t.build(req({ tweetId: 't1' }), FEE);
-      const b = await t.build(req({ tweetId: 't1' }), FEE);
-      const c = await t.build(req({ tweetId: 't2' }), FEE);
-      expect(a.data).toBe(b.data);
-      expect(a.data).not.toBe(c.data);
-    });
-  });
-
-  // Retargeted, not deleted. Every property below is still a real safety guarantee;
-  // what changed is which deployment it must hold for. The superseded V2 is no longer
-  // reachable from createLaunchTarget, and a test asserting its address would now be
-  // asserting that the bot still aims at a factory pons has replaced.
+  /*
+   * The `v1` block that stood here was RETARGETED, not deleted, on 2026-08-26.
+   *
+   * Its four cases asserted properties of a launch target that no longer exists: v1
+   * calldata decoding, the refusal to pair against a stock, `supportsPairing === false`,
+   * and the tweet-derived salt. The first and the last are still real guarantees about
+   * reading history back, and they live in `v1HistoricalReader.test.ts` now, asked of the
+   * encoder and the registry directly. The middle two described how V1Target behaved when
+   * chosen, and nothing can choose it.
+   *
+   * `v1NonExecutable.test.ts` holds the replacement for what this block was really for:
+   * proof that no environment value produces a launch aimed at v1.
+   */
+  // Every property below is a real safety guarantee; what changed is which deployment it
+  // must hold for. The superseded V2 is not reachable from createLaunchTarget, and a test
+  // asserting its address would be asserting that the bot still aims at a replaced factory.
   describe('current v2', () => {
-    beforeEach(() => { process.env.PONS_FACTORY_VERSION = 'v2'; });
-
     it('builds a stock-paired call that decodes against the current ABI', async () => {
       stubPreview();
       const t = createLaunchTarget(fakeProvider);
@@ -184,18 +153,19 @@ describe('createLaunchTarget', () => {
   });
 
   describe('reading the launch back', () => {
-    it('each version reads its own event shape', () => {
+    it('the current decoder and the v1 decoder read different event shapes', () => {
       const token = '0x4444444444444444444444444444444444444444';
 
-      process.env.PONS_FACTORY_VERSION = 'v2';
       const v2Log = new ethers.Interface(PONS_V2_FACTORY_ABI).encodeEventLog('TokenLaunched', [
         token, '0x2222222222222222222222222222222222222222', '0x3333333333333333333333333333333333333333',
         AAPL_ASSET.address, 0n, 1n,
       ]);
       expect(createLaunchTarget(fakeProvider).extractToken([{ topics: v2Log.topics, data: v2Log.data } as any])).toBe(token);
 
-      process.env.PONS_FACTORY_VERSION = 'v1';
-      expect(createLaunchTarget(fakeProvider).extractToken([{ topics: v2Log.topics, data: v2Log.data } as any])).toBeNull();
+      // The decoders are genuinely different, asserted against the v1 reader directly.
+      // This used to flip `PONS_FACTORY_VERSION` between the two calls, which measured the
+      // setting rather than the decoders; the setting is gone and the property is not.
+      expect(extractLaunchedTokenAddress([{ topics: v2Log.topics, data: v2Log.data } as any])).toBeNull();
     });
   });
 });

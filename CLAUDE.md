@@ -138,8 +138,19 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
 
   **Superseded 2026-08-24: production now runs this migration.** The paragraph that stood here
   said production config and the deployed backend were unchanged. That is no longer true — see
-  "Production, as actually deployed" below. `PONS_FACTORY_VERSION` is `v2`, which on this code
-  means the CURRENT factory.
+  "Production, as actually deployed" below.
+
+  **And superseded again 2026-08-26: there is no factory setting any more.**
+  `PONS_FACTORY_VERSION` selected the destination and **defaulted to `v1`**, so an
+  environment that never mentioned it launched through the superseded factory. Two
+  production launches on 2026-08-12 went to v1 through exactly that path — see
+  `docs/v1-historical-launches.md`, which also corrects an earlier claim that their creator
+  fees were unrouted (the splitters exist and are wired; the DB row is what is missing).
+  The setting, `V1Target`, `PONS_FACTORY_ADDRESS` and `PONS_LOCKER_ADDRESS` are all gone.
+  The registry decides, and `executableDeployment()` throws unless exactly one entry is
+  executable. **The signer still allows v1** until the owner runs
+  `docs/TURNKEY-V1-REVOCATION-CEREMONY.md` — code cannot remove a permission that lives in
+  Turnkey.
 
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.

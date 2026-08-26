@@ -82,8 +82,6 @@ matter:
 fly secrets set \
   RPC_URL=https://rpc.mainnet.chain.robinhood.com \
   CHAIN_ID=4663 \
-  PONS_FACTORY_ADDRESS=... \
-  PONS_LOCKER_ADDRESS=... \
   TURNKEY_POLICY_CONFIRMED=true \
   TREASURY_COLD_ADDRESS=... \
   BOT_X_HANDLE=ponsrdotfun \

@@ -24,45 +24,33 @@ import { splitterEscrowFor } from '../src/splitterDeployer';
  * reads it from the target rather than from module state.
  */
 describe('every launch target names its own deployment', () => {
-  const realVersion = process.env.PONS_FACTORY_VERSION;
-  afterEach(() => {
-    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
-  });
-
-  it('the current V2 target carries the executable deployment', () => {
-    process.env.PONS_FACTORY_VERSION = 'v2';
+  it('the target carries the executable deployment', () => {
     const t = createLaunchTarget({} as ethers.Provider);
     expect(t.deployment.id).toBe(executableDeployment().id);
+    expect(t.deployment.executable).toBe(true);
   });
 
   /**
-   * V1 rollback, represented rather than smuggled.
+   * The two cases that stood here asserted V1Target carried `pons-v1` rather than falling
+   * back to the executable deployment -- a real bug at the time, since a guard that
+   * verifies one deployment before sending to another is aimed at the wrong contract.
    *
-   * `pons-v1` is `executable: false` -- correctly, since it is not the launch target --
-   * and V1Target used to carry no deployment at all. That left rollback as a path with
-   * no identity to verify, so the guard silently fell back to the global one and checked
-   * the V2 factory before sending a V1 transaction.
+   * V1Target was deleted on 2026-08-26, so the property is now stronger and simpler: there
+   * is one target and it carries the one executable deployment. That it can never carry a
+   * superseded one is proved behaviourally, against a real transport, in
+   * `v1NonExecutable.test.ts`; that v1 remains READABLE is proved in
+   * `v1HistoricalReader.test.ts`.
    */
-  it('the v1 target carries the v1 deployment, not the executable one', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
+  it('never carries a superseded deployment', () => {
     const t = createLaunchTarget({} as ethers.Provider);
-    expect(t.deployment.id).toBe('pons-v1');
-    expect(t.deployment.id).not.toBe(executableDeployment().id);
+    expect(t.deployment.id).not.toBe('pons-v1');
+    expect(t.deployment.id).not.toBe('pons-v2-legacy-7e1');
   });
 
-  it('the v1 target addresses the v1 factory', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
-    const t = createLaunchTarget({} as ethers.Provider);
+  it('agrees with itself about which factory it addresses', () => {
+    const t: LaunchTarget = createLaunchTarget({} as ethers.Provider);
     expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
-  });
-
-  it('every target agrees with itself about which factory it addresses', () => {
-    for (const version of ['v1', 'v2'] as const) {
-      process.env.PONS_FACTORY_VERSION = version;
-      const t: LaunchTarget = createLaunchTarget({} as ethers.Provider);
-      expect(t.factoryAddress.toLowerCase()).toBe(t.deployment.factory.toLowerCase());
-      expect(t.deployment.chainId).toBe(4663);
-    }
+    expect(t.deployment.chainId).toBe(4663);
   });
 });
 
@@ -221,30 +209,27 @@ describe('handleMention verifies the SELECTED deployment', () => {
 /**
  * The splitter TYPE follows the deployment's fee model, not a global flag.
  *
- * `splitterArtifact()` chose FeeSplitterV2 when `process.env.PONS_FACTORY_VERSION === 'v2'`.
- * That is a different question from which deployment this launch is going to, and the
- * two can disagree: a v1 rollback with the flag still v2, or an injected v2 target while
- * the flag says v1.
+ * `splitterArtifact()` used to choose FeeSplitterV2 from a global version flag. That is a
+ * different question from which deployment this launch is going to, and the two could
+ * disagree. The flag is gone, but the property is still worth asserting: the artifact must
+ * follow the deployment it is HANDED, including a historical one, because that is what a
+ * fee-collection tool passes when it reads an old launch back.
  *
  * Getting it wrong is not a degraded launch. A plain `FeeSplitter` named as
  * `creatorFeeRecipient` on a v2 launch is credited correctly and forever, with no
  * transaction in existence able to move the money -- the escrow pays `msg.sender` and
  * a v1 splitter cannot call it at all. Fees stranded from the first trade.
  */
-describe('splitter type follows the deployment, not the flag', () => {
+describe('splitter type follows the deployment it is handed', () => {
   const { splitterArtifactFor } = require('../src/splitterDeployer');
-  const realVersion = process.env.PONS_FACTORY_VERSION;
-  afterEach(() => {
-    if (realVersion === undefined) delete process.env.PONS_FACTORY_VERSION; else process.env.PONS_FACTORY_VERSION = realVersion;
-  });
 
-  it('an escrow-credit deployment gets FeeSplitterV2 even when the flag says v1', () => {
-    process.env.PONS_FACTORY_VERSION = 'v1';
+  it('an escrow-credit deployment gets FeeSplitterV2', () => {
     expect(splitterArtifactFor(executableDeployment()).name).toBe('FeeSplitterV2');
   });
 
-  it('a push-from-locker deployment gets FeeSplitter even when the flag says v2', () => {
-    process.env.PONS_FACTORY_VERSION = 'v2';
+  it('a push-from-locker deployment gets FeeSplitter', () => {
+    // Handed `pons-v1` explicitly, which is what a HISTORICAL reader does. Nothing can
+    // select v1 as a launch target any more, and nothing here is trying to.
     expect(splitterArtifactFor(deploymentById('pons-v1')).name).toBe('FeeSplitter');
   });
 
@@ -440,9 +425,9 @@ describe('the canary threads one selected deployment', () => {
     expect(code).toMatch(/deployment:\s*selected/);
   });
 
-  it('decides the v1/v2 branch from the deployment, not the global flag', () => {
-    // process.env.PONS_FACTORY_VERSION answers which factory is the default. The branch here
-    // must follow the deployment actually selected, which under rollback is not that.
+  it('decides the v1/v2 branch from the deployment, not a global flag', () => {
+    // A global version flag used to answer this, and it could name a different contract
+    // from the one selected. The branch must follow the deployment actually selected.
     expect(code).toMatch(/const isV2 = selected\.tokenParamsVersion/);
   });
 

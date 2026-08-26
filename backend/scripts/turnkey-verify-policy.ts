@@ -95,7 +95,7 @@ function line(label: string, value: unknown) {
 
   console.log('=== VERIFYING THE BOT POLICY ===');
   line('signer', from);
-  line('v1 factory', config.PONS_FACTORY_ADDRESS);
+  line('v1 factory (deny-test only)', deploymentById('pons-v1').factory);
   line('current factory', `${target.factory}  (${target.id})`);
   line('superseded factory', `${superseded.factory}  (not launched through)`);
   line('bot launches through', `${target.id}  <- the one that has to be ALLOWED`);
@@ -108,7 +108,7 @@ function line(label: string, value: unknown) {
   // the one they did.
   const toV1 = await attempt('launch v1', {
     ...base,
-    to: config.PONS_FACTORY_ADDRESS,
+    to: deploymentById('pons-v1').factory,
     value: 500000000000000n,
     data: '0x12345678',
   });
@@ -137,14 +137,28 @@ function line(label: string, value: unknown) {
     .find((a) => a.startsWith('--target-deployment='))
     ?.slice('--target-deployment='.length);
   const rolloutTarget = targetArg ? deploymentById(targetArg) : null;
+  // A rollout target must be a deployment the bot could actually launch through. Naming a
+  // superseded one used to be accepted and then checked against the v1 probe, which is a
+  // DENY test -- so "the rollout target is allowed" would have meant the opposite of what
+  // it says. v1 and v2-legacy are deny-test destinations here and nothing else.
+  if (rolloutTarget && !rolloutTarget.executable) {
+    console.error(
+      `--target-deployment names ${rolloutTarget.id}, which is not executable ` +
+        `(superseded by ${rolloutTarget.supersededBy ?? 'the current deployment'}). ` +
+        'Rollback is a previous application image, not a superseded factory.'
+    );
+    process.exit(2);
+  }
   if (rolloutTarget) line('rollout target', `${rolloutTarget.id}  <- must be ALLOWED`);
 
-  const wantV2 = config.PONS_FACTORY_VERSION === 'v2';
-  const toFactory = wantV2 ? toCurrent : toV1;
-  // The rollout target, when named, is checked in addition to whatever config says.
-  const rolloutOk =
-    !rolloutTarget ||
-    (rolloutTarget.id === target.id ? toCurrent.kind === 'allowed' : toV1.kind === 'allowed');
+  // The executable deployment IS the answer. There is no longer a setting that can point
+  // this probe at a factory the bot does not launch through -- which is what made a run
+  // report four green ticks about the superseded contract.
+  const toFactory = toCurrent;
+  // The rollout target, when named, is checked in addition to the executable deployment.
+  // Only an executable target can be named, and there is exactly one, so this is the
+  // current probe. Never `toV1`, which is a DENY test.
+  const rolloutOk = !rolloutTarget || toCurrent.kind === 'allowed';
 
   // The ACTUAL splitter initcode, not a ten-byte prefix.
   //
@@ -217,7 +231,7 @@ function line(label: string, value: unknown) {
     if (toCurrent.kind !== 'allowed') {
       console.log('');
       console.log(`NOTE: ${target.id} is still denied. That is fine while the bot runs v1,`);
-      console.log('but switching PONS_FACTORY_VERSION to v2 would produce a bot that passes');
+      console.log('but moving the executable deployment would produce a bot that passes');
       console.log('every check it makes of pons and is then refused by its own signer --');
       console.log('after the splitter has been deployed and paid for.');
       console.log('  powershell -File scripts\\apply-v2-policy.ps1 -Execute');
@@ -226,9 +240,10 @@ function line(label: string, value: unknown) {
     console.log('=== NOT SAFE YET ===');
     if (rolloutTarget && !rolloutOk) {
       console.log(`  The rollout target ${rolloutTarget.id} is DENIED by the policy.`);
-      console.log('  Config still says ' + config.PONS_FACTORY_VERSION + ', so this run would');
-      console.log('  otherwise have passed -- and the next runbook step flips to that target,');
-      console.log('  producing a bot refused by its own signer after the splitter is paid for.');
+      console.log(`  The executable deployment is ${executableDeployment().id}, so this run`);
+      console.log('  would otherwise have passed -- and the next runbook step flips to that');
+      console.log('  target, producing a bot refused by its own signer after the splitter is');
+      console.log('  paid for.');
     }
     if (fundedCreation.kind === 'allowed') {
       console.log('  THE TREASURY IS DRAINABLE BY THIS KEY.');
@@ -242,7 +257,7 @@ function line(label: string, value: unknown) {
     if (toFactory.kind !== 'allowed') {
       console.log(`  The bot launches through ${target.id}, and that factory is DENIED.`);
       console.log('  It cannot launch anything at all.');
-      if (wantV2) console.log('  Fix: powershell -File scripts\\apply-v2-policy.ps1 -Execute');
+      console.log('  Fix: powershell -File scripts\\apply-v2-policy.ps1 -Execute');
     }
     if (deploy.kind !== 'allowed') console.log('  Contract creation is denied -- the bot cannot deploy splitters.');
     if (elsewhere.kind === 'allowed') console.log('  The policy is not restricting anything. Do NOT fund this wallet.');

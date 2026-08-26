@@ -137,17 +137,17 @@ function raw(name: string): string | undefined {
 const PreflightSchema = z.object({
   RPC_URL: z.string().default('https://rpc.testnet.chain.robinhood.com'),
   CHAIN_ID: z.coerce.number().default(46630),
-  PONS_FACTORY_VERSION: z.enum(['v1', 'v2']).default('v1'),
   PONS_LAUNCH_CONFIG_ID: z.coerce.bigint().default(0n),
   PONS_DEX_ID: z.coerce.bigint().default(0n),
   DAILY_SPEND_CAP_WEI: z.coerce.bigint().default(50_000_000_000_000_000n),
   TREASURY_GAS_RESERVE_WEI: z.coerce.bigint().default(2_000_000_000_000_000n),
   TREASURY_MAX_FEE_WEI: z.coerce.bigint().default(2_000_000_000_000_000n),
-  /**
-   * Contract addresses, all public and all readable from the chain by anyone. Kept here with
-   * the same defaults as `config.ts` so the preflight and the bot resolve identically.
+  /*
+   * PONS_FACTORY_VERSION and PONS_FACTORY_ADDRESS were REMOVED on 2026-08-26, for the same
+   * reason as in `config.ts`: which factory a launch goes to is the registry's answer, and
+   * a setting that can disagree with it is the defect, not the guard. The preflight and the
+   * bot resolve identically because they both read `executableDeployment()`.
    */
-  PONS_FACTORY_ADDRESS: z.string().default('0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB'),
   /** Hot/cold treasury policy thresholds. Numbers about money, never keys to it. */
   HOT_WALLET_MAX_DAILY_CAPS: z.coerce.number().default(2),
   HOT_WALLET_FLOOR_LAUNCHES: z.coerce.number().default(20),
