@@ -28,6 +28,7 @@
  */
 import { config } from '../src/config';
 import { DEPLOYMENTS, executableDeployment, deploymentById } from '../src/deployments';
+import { projectPolicyInventory, renderInventory } from '../src/turnkeyInventory';
 
 function line(label: string, value: unknown) {
   console.log(`  ${label.padEnd(28)} ${value}`);
@@ -71,66 +72,51 @@ async function main() {
   line('bot launches through', `${target.id}  ${target.factory}`);
 
   const res = await client.getPolicies({ organizationId });
-  const policies: any[] = res.policies || [];
-  console.log(`\n${policies.length} polic${policies.length === 1 ? 'y' : 'ies'}:\n`);
+  const rows: any[] = res.policies || [];
 
-  let allowsExecutable = false;
-  const staleAllows: string[] = [];
+  /**
+   * IDENTITY, NOT LABELS.
+   *
+   * This printed name, effect and condition. The removal ceremony's own rule is "never
+   * delete by policy name alone -- match exact policy id plus normalized condition,
+   * effect and consensus", and none of the identity half was here. The data was always in
+   * the response; not printing it looked like a complete inventory, which is worse than
+   * an obviously partial one.
+   *
+   * The organisation is CALLER-PINNED. Reading it out of the same response it is meant to
+   * validate would be a limit acting as evidence about itself.
+   */
+  const snapshot = projectPolicyInventory(rows, organizationId);
+  for (const l of renderInventory(snapshot)) console.log(l);
 
-  for (const p of policies) {
-    const condition = String(p.condition ?? '');
-    const effect = String(p.effect ?? '');
-    console.log(`  ${p.policyName}`);
-    line('  effect', effect);
-    line('  condition', condition);
-    line('  targets', describeTarget(condition));
-    console.log('');
-
-    if (effect === 'EFFECT_ALLOW') {
-      const c = condition.toLowerCase();
-      if (c.includes(target.factory.toLowerCase())) allowsExecutable = true;
-      const stale = DEPLOYMENTS.filter((d) => !d.executable && c.includes(d.factory.toLowerCase()));
-      // A rule may name a dead factory AND still carry permission the bot needs. The v1
-      // rule is exactly that: it also allows contract creation, which is how every
-      // FeeSplitter gets deployed. Listing it as "superseded" without that qualifier is
-      // an instruction to cause the outage this tool exists to prevent.
-      const alsoCarries =
-        (/eth\.tx\.to\s*==\s*''/.test(c) ? ['contract creation'] : []).concat(
-          c.includes(target.factory.toLowerCase()) ? ['the current factory'] : []
-        );
-      for (const d of stale) {
-        staleAllows.push(
-          alsoCarries.length
-            ? `${p.policyName} -> ${d.id}  — DO NOT DELETE, also allows ${alsoCarries.join(' and ')}`
-            : `${p.policyName} -> ${d.id}  — names nothing else; safe to delete`
-        );
-      }
-    }
-  }
-
+  console.log('');
   console.log('=== WHAT THIS DOES AND DOES NOT ESTABLISH ===');
-  if (allowsExecutable) {
-    line('executable factory', 'an ALLOW rule names it');
-  } else {
-    line('executable factory', 'NO ALLOW RULE NAMES IT — the bot could not launch');
+  const allowsExecutable = snapshot.policies.some(
+    (p) => p.effect === 'EFFECT_ALLOW' && p.capabilities.includes('current-factory')
+  );
+  line('executable factory', allowsExecutable ? 'an ALLOW rule names it' : 'NO rule names it');
+  for (const p of snapshot.policies) {
+    const stale = p.capabilities.filter((c) => c === 'v1-factory' || c === 'legacy-v2-factory');
+    if (p.effect !== 'EFFECT_ALLOW' || stale.length === 0) continue;
+    const alsoCreates = p.capabilities.some((c) => c.endsWith('creation'));
+    line(
+      'superseded, still allowed',
+      `${p.policyId}  ${stale.join(' + ')}` +
+        (alsoCreates ? '  — DO NOT DELETE ALONE, it also allows contract creation' : '  — names nothing else')
+    );
   }
+  console.log('');
+  console.log('  This is the rule TEXT and its identity, not its ENFORCEMENT. A policy');
+  console.log('  engine failing open would print exactly the same thing. Before real money');
+  console.log('  moves, run:');
+  console.log('');
+  console.log('    npx tsx scripts/turnkey-verify-policy.ts --target-deployment=' + target.id);
+  console.log('');
+  console.log('  and require an arbitrary destination to come back denied.');
 
-  // Not dangerous, but it is permission that buys nothing, and permission nobody can
-  // explain is permission nobody removes.
-  for (const s of staleAllows) {
-    line('superseded, still allowed', s);
-  }
-  if (staleAllows.length) {
-    console.log('\n  Those rules allow factories this bot no longer calls. Harmless today --');
-    console.log('  read each line before removing anything: a rule can name a dead factory');
-    console.log('  and still be the only thing permitting contract creation, and deleting');
-    console.log('  it would leave a bot that launches and then cannot deploy its splitter.');
-  }
-
-  console.log('\n  This is the rule TEXT, not its enforcement. A policy engine failing open');
-  console.log('  would print exactly the same thing. Before real money moves, run:');
-  console.log('\n    npx tsx scripts/turnkey-verify-policy.ts');
-  console.log('\n  and require an arbitrary destination to come back denied.');
+  // A snapshot nobody can bind is not a snapshot. Exiting 0 on one would let the ceremony
+  // proceed to a deletion with nothing but a name to match on.
+  process.exitCode = snapshot.usableForMutation ? 0 : 1;
 }
 
 main().catch((err) => {
