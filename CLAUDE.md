@@ -339,6 +339,26 @@ missing authoritative figure plus a quiet calendar day published `daily-cap: ok`
 concurrent request could leave one response carrying `observedThrough=A` in the envelope
 while telling a human that B was serving.
 
+**Production runs v36 (`dd5a72e`) since 2026-08-26**, and the readiness fix works there:
+`/status` went from **HTTP 503 at 12.772 s** to **200 at 0.757 s**, with the readiness read
+at **74 ms**. The public gate stays false and `public-launches` is the only intended
+degraded check.
+
+**What remained was a TAIL, and attributing it needed measurement rather than instinct.**
+Sampled 25 times against v36, three responses took 3 s or more; on two of those the non-ok
+check was `read-credits` — twitterapi.io, nothing to do with the chain — and on the third
+the readiness read itself took 3 012 ms. An outside diagnostic timing each keyless
+dependency directly could NOT attribute it, because from a laptop the chain reads take
+2–4.7 s while production answers in 0.4 s. A vantage point that differs from production's by
+an order of magnitude cannot attribute production's latency, and saying so is part of the
+finding.
+
+The fix is structural rather than a bet on which dependency is slow: `statusCore.ts` is a
+stable contract (`ponsr.status-core` v1) for the facts a spend decision rests on, built
+under its own deadline BEFORE optional telemetry starts, and `/status/core` serves it alone
+without ever starting pair discovery or the credits call. Optional telemetry keeps its real
+state on `/status` — never deleted, never reported green when it failed.
+
 **A fifth review (2026-08-26) found the fix's own optimisation defeating it.** The pool
 coalesces concurrent admissions, and `admit()` handed a later caller the in-flight promise
 as-is — so a `/status` request with a **300 ms budget took 983 ms**, waiting under a stalled
