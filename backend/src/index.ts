@@ -351,7 +351,11 @@ app.get('/status', async (_req, res) => {
         };
       },
       describeRpc: () => rpcPool.status(),
-      getDeploymentIdentity: () => rpcPool.run((p) => identityWatch.check(p)),
+      // Bound to the endpoint that actually answered. The pool can fail over between two
+      // status requests, so an unbound cache could report a pass measured through the
+      // primary while a fallback was serving.
+      getDeploymentIdentity: () =>
+        rpcPool.run((p, endpoint) => identityWatch.check(p, endpoint.fingerprint)),
       /**
        * The UTC CALENDAR DAY, for the human-facing line only.
        *

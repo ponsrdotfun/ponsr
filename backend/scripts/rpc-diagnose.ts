@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   before.destroy();
 
   const idp = new CountingProvider(url, d.chainId, { staticNetwork: true });
-  const identity = await new IdentityWatch(d).check(idp);
+  const identity = await new IdentityWatch(d).check(idp, describeRpcEndpoint(url).fingerprint);
   console.log(`\n  deployment identity: ${summariseIdentity(identity)}`);
   idp.destroy();
 }

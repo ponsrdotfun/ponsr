@@ -1,3 +1,4 @@
+import * as http from 'http';
 import { ethers } from 'ethers';
 import { executableDeployment } from '../src/deployments';
 import { readCurrentReadiness, describeReadiness } from '../src/currentReadiness';
@@ -213,4 +214,58 @@ describe('launch-readiness round trips', () => {
     expect(probe.timings.map((t) => t.name)).not.toContain('approvedPairTokens');
     expect(probe.verdict!.pairApproved).toBe(true);
   });
+
+  /**
+   * The causal claim, proved without the real network.
+   *
+   * Every assertion above is about trip COUNT. This one closes the last gap in the
+   * argument: that the count is what breaks the budget. A local server delays every
+   * response by a fixed amount, so the trip count is the only variable. At 1 300 ms per
+   * trip the old path must exceed the 5 000 ms status deadline and the new one must not.
+   *
+   * Deterministic, and it is the reason no wall-clock claim here depends on a live
+   * endpoint being slow on the day the suite runs.
+   */
+  it('the trip count, not the endpoint, is what breaks the 5000ms budget', async () => {
+    const DELAY_MS = 1300;
+    const BUDGET_MS = 5000;
+    let trips = 0;
+
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        trips += 1;
+        const parsed = JSON.parse(body);
+        const one = (p: any) => ({ id: p.id, jsonrpc: '2.0', result: healthy(p.method, p.params ?? []) });
+        const out = Array.isArray(parsed) ? parsed.map(one) : one(parsed);
+        setTimeout(() => {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(out));
+        }, DELAY_MS);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `http://127.0.0.1:${(server.address() as any).port}`;
+
+    const measure = async (run: (p: ethers.JsonRpcProvider) => Promise<unknown>) => {
+      trips = 0;
+      const p = new ethers.JsonRpcProvider(url, D.chainId, { staticNetwork: true });
+      const started = Date.now();
+      await run(p);
+      const ms = Date.now() - started;
+      p.destroy();
+      return { ms, trips };
+    };
+
+    const before = await measure((p) => readCurrentReadiness(p, TREASURY, 0n, ZERO, D));
+    const after = await measure((p) => probeLaunchPermission(p, TREASURY, 0n, ZERO, D));
+    server.close();
+
+    expect(before.trips).toBe(4);
+    expect(after.trips).toBe(1);
+    // The whole outage, reproduced from nothing but latency and arithmetic.
+    expect(before.ms).toBeGreaterThan(BUDGET_MS);
+    expect(after.ms).toBeLessThan(BUDGET_MS);
+  }, 40_000);
 });

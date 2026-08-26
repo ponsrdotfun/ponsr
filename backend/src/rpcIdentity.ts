@@ -83,7 +83,30 @@ function looksLikeKey(segment: string): boolean {
   return segment.length >= 16 && /^[A-Za-z0-9_-]+$/.test(segment);
 }
 
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+/**
+ * Whether this host can only be reached from the machine itself.
+ *
+ * Two things a set of literal strings gets wrong, both found by testing rather than by
+ * reading:
+ *
+ *   - `new URL('http://[::1]:8545').hostname` is `[::1]`, WITH the brackets, so a set
+ *     containing `::1` never matches an IPv6 loopback URL.
+ *   - loopback is the whole `127.0.0.0/8` block, not just `127.0.0.1`. `127.0.0.2` is
+ *     every bit as unreachable from another host.
+ *
+ * Getting this wrong is not cosmetic: the point of the flag is to tell an operator that
+ * the endpoint they are looking at cannot be the one serving anyone else.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (h === '0.0.0.0' || h === '::' || h === '[::]') return true;
+  // IPv6, with or without the brackets the URL parser adds.
+  const bare = h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
+  if (bare === '::1') return true;
+  // The entire 127.0.0.0/8 block.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare);
+}
 
 export function describeRpcEndpoint(url: string | undefined | null): RpcEndpointDescription {
   const raw = String(url ?? '');
@@ -110,7 +133,7 @@ export function describeRpcEndpoint(url: string | undefined | null): RpcEndpoint
     fingerprint,
     credentialed:
       u.username !== '' || u.password !== '' || u.search !== '' || segments.some(looksLikeKey),
-    loopback: LOOPBACK.has(u.hostname),
+    loopback: isLoopbackHost(u.hostname),
   };
 }
 

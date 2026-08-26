@@ -40,6 +40,19 @@ import { IdentityResult, verifyDeploymentIdentity } from './deploymentIdentity';
  * This is a REPORT, not a control. `assertDeploymentIdentity` still runs uncached on the
  * launch path, before a splitter is deployed and before a fee is spent, and it still
  * throws. Nothing about spending money reads this cache.
+ *
+ * WHAT THE CACHE IS KEYED ON, AND WHY THAT IS NOT A DETAIL
+ * -------------------------------------------------------
+ * A cached PASS is a claim about ONE contract as seen through ONE endpoint. The first
+ * version of this cache was keyed on nothing at all, which was a real defect rather than a
+ * tidiness point: the read pool can fail over between requests, so a pass measured through
+ * the primary could be reported while a fallback was the endpoint actually answering. The
+ * page would have said "matches the registry" about a node it had never asked.
+ *
+ * So the key binds every input the answer depends on -- chain id, deployment id, factory
+ * address, the expected runtime hash, and the fingerprint of the endpoint that produced it.
+ * Any of them changing invalidates the entry rather than reusing it, because a pass earned
+ * under different inputs is not evidence about these ones.
  */
 
 export interface IdentityStatus {
@@ -52,14 +65,40 @@ export interface IdentityStatus {
   fromCache: boolean;
   /** Set when the most recent attempt could not read the chain. Never a mismatch. */
   unreadable?: string;
+  /**
+   * The cache key the held result was measured under -- chain, deployment, factory,
+   * expected runtime hash and endpoint fingerprint.
+   *
+   * Published so a reader can see WHICH endpoint produced a remembered pass, rather than
+   * having to trust that it was this one.
+   */
+  measuredThrough?: string | null;
 }
 
 export const DEFAULT_IDENTITY_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Everything a cached PASS is a claim about. Change any of it and the entry is stale.
+ *
+ * The endpoint fingerprint is the one that is easiest to leave out and the one that matters
+ * most here, because the read path can fail over between two status requests.
+ */
+export function identityCacheKey(d: PonsDeployment, endpointFingerprint: string): string {
+  return [
+    d.chainId,
+    d.id,
+    d.factory.toLowerCase(),
+    d.runtimeBytecodeSha256.toLowerCase(),
+    endpointFingerprint,
+  ].join('|');
+}
+
 export class IdentityWatch {
   private cached: IdentityResult | null = null;
   private checkedAt: Date | null = null;
+  private cachedKey: string | null = null;
   private inFlight: Promise<IdentityStatus> | null = null;
+  private inFlightKey: string | null = null;
 
   constructor(
     private readonly deployment: PonsDeployment = executableDeployment(),
@@ -69,11 +108,21 @@ export class IdentityWatch {
 
   private status(fromCache: boolean, unreadable?: string): IdentityStatus {
     const ageMs = this.checkedAt ? this.now().getTime() - this.checkedAt.getTime() : null;
-    return { result: this.cached, checkedAt: this.checkedAt, ageMs, fromCache, unreadable };
+    return {
+      result: this.cached,
+      checkedAt: this.checkedAt,
+      ageMs,
+      fromCache,
+      unreadable,
+      measuredThrough: this.cachedKey,
+    };
   }
 
-  private fresh(): boolean {
+  private fresh(key: string): boolean {
     if (!this.cached || !this.checkedAt) return false;
+    // A pass earned through a different endpoint, chain or deployment is not evidence
+    // about this one. Re-read rather than reuse.
+    if (this.cachedKey !== key) return false;
     // A mismatch is never fresh. Holding one would mean a drift keeps being reported from
     // memory after it is fixed, and -- worse -- that a real one was measured once and then
     // repeated rather than re-confirmed.
@@ -81,17 +130,27 @@ export class IdentityWatch {
     return this.now().getTime() - this.checkedAt.getTime() < this.ttlMs;
   }
 
-  async check(provider: ethers.Provider): Promise<IdentityStatus> {
-    if (this.fresh()) return this.status(true);
+  /**
+   * @param endpointFingerprint identity of the endpoint answering this call, from
+   *        `rpcIdentity`. Required, not optional: an optional binding is one a caller
+   *        forgets, and forgetting it is exactly the defect this parameter exists to close.
+   */
+  async check(provider: ethers.Provider, endpointFingerprint: string): Promise<IdentityStatus> {
+    const key = identityCacheKey(this.deployment, endpointFingerprint);
+    if (this.fresh(key)) return this.status(true);
     // Concurrent status requests must not each start their own 48 KB download. Without
-    // this, the cache removes the cost for one caller and multiplies it for ten.
-    if (this.inFlight) return this.inFlight;
+    // this, the cache removes the cost for one caller and multiplies it for ten. Shared
+    // only among callers asking the SAME question -- a request that failed over to another
+    // endpoint must not be handed an answer measured through the first one.
+    if (this.inFlight && this.inFlightKey === key) return this.inFlight;
 
+    this.inFlightKey = key;
     this.inFlight = (async () => {
       try {
         const result = await verifyDeploymentIdentity(this.deployment, provider);
         this.cached = result;
         this.checkedAt = this.now();
+        this.cachedKey = key;
         return this.status(false);
       } catch (err: any) {
         // Could not ASK. The previous verdict stands with its real age, and the reason is
@@ -100,6 +159,7 @@ export class IdentityWatch {
         return this.status(true, String(err?.shortMessage ?? err?.message ?? err).slice(0, 120));
       } finally {
         this.inFlight = null;
+        this.inFlightKey = null;
       }
     })();
     return this.inFlight;
@@ -109,6 +169,7 @@ export class IdentityWatch {
   invalidate(): void {
     this.cached = null;
     this.checkedAt = null;
+    this.cachedKey = null;
   }
 }
 

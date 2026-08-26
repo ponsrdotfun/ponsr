@@ -61,6 +61,40 @@ describe('RPC endpoint identity', () => {
     expect(isIdentified(d) && d.loopback).toBe(true);
     expect(isIdentified(d) && d.port).toBe(8545);
   });
+
+  it('recognises IPv6 loopback, brackets and all', () => {
+    // new URL(...).hostname is `[::1]` WITH the brackets, so a plain `::1` comparison
+    // silently never matches and an unreachable endpoint reports as reachable.
+    expect(isIdentified(describeRpcEndpoint('http://[::1]:8545')) &&
+      (describeRpcEndpoint('http://[::1]:8545') as any).loopback).toBe(true);
+  });
+
+  it('recognises the whole 127.0.0.0/8 block, not just 127.0.0.1', () => {
+    for (const host of ['127.0.0.1', '127.0.0.2', '127.1.2.3']) {
+      const d = describeRpcEndpoint(`http://${host}:8545`);
+      expect(isIdentified(d) && d.loopback).toBe(true);
+    }
+    // And does not over-claim: 128.x is a perfectly ordinary public address.
+    const public_ = describeRpcEndpoint('http://128.0.0.1:8545');
+    expect(isIdentified(public_) && public_.loopback).toBe(false);
+  });
+
+  it('flags userinfo credentials and never echoes them', () => {
+    const d = describeRpcEndpoint('https://alice:hunter2@rpc.example.com/v1/mainnet');
+    expect(isIdentified(d)).toBe(true);
+    if (!isIdentified(d)) return;
+    expect(d.credentialed).toBe(true);
+    const published = JSON.stringify(d) + summariseRpcEndpoint(d);
+    expect(published).not.toContain('hunter2');
+    expect(published).not.toContain('alice');
+    // The origin must be the bare host, not `alice:hunter2@rpc.example.com`.
+    expect(d.origin).toBe('https://rpc.example.com');
+  });
+
+  it('reports no port when the URL relies on the scheme default', () => {
+    const d = describeRpcEndpoint('https://rpc.example.com');
+    expect(isIdentified(d) && d.port).toBeNull();
+  });
 });
 
 describe('endpoint list parsing', () => {
@@ -293,6 +327,10 @@ class FakeChain extends ethers.JsonRpcProvider {
   }
 }
 
+/** Two distinct endpoint fingerprints, so cache binding can be exercised. */
+const FP_A = 'aaaaaaaaaaaa';
+const FP_B = 'bbbbbbbbbbbb';
+
 /** The registry entry this fake chain genuinely satisfies. */
 const MATCHING = { ...D, runtimeBytecodeSha256: REAL_HASH };
 
@@ -302,14 +340,14 @@ describe('deployment identity, on its own budget', () => {
     const watch = new IdentityWatch(MATCHING, 1000, () => new Date(clock.t));
     const chain = new FakeChain();
 
-    const first = await watch.check(chain);
+    const first = await watch.check(chain, FP_A);
     expect(first.result!.ok).toBe(true);
-    await watch.check(chain);
-    await watch.check(chain);
+    await watch.check(chain, FP_A);
+    await watch.check(chain, FP_A);
     expect(chain.getCodeCalls).toBe(1);
 
     clock.t = 2000;
-    await watch.check(chain);
+    await watch.check(chain, FP_A);
     expect(chain.getCodeCalls).toBe(2);
     chain.destroy();
   });
@@ -320,7 +358,7 @@ describe('deployment identity, on its own budget', () => {
     const chain = new FakeChain(5);
 
     // Otherwise the cache removes the cost for one caller and multiplies it for ten.
-    await Promise.all([watch.check(chain), watch.check(chain), watch.check(chain)]);
+    await Promise.all([watch.check(chain, FP_A), watch.check(chain, FP_A), watch.check(chain, FP_A)]);
     expect(chain.getCodeCalls).toBe(1);
     chain.destroy();
   });
@@ -330,8 +368,8 @@ describe('deployment identity, on its own budget', () => {
     const watch = new IdentityWatch({ ...D, runtimeBytecodeSha256: 'deadbeef' }, 1000, () => new Date(clock.t));
     const chain = new FakeChain();
 
-    const first = await watch.check(chain);
-    const second = await watch.check(chain);
+    const first = await watch.check(chain, FP_A);
+    const second = await watch.check(chain, FP_A);
     expect(first.result!.ok).toBe(false);
     expect(second.result!.ok).toBe(false);
     // Re-read, not remembered. A held mismatch would keep being reported after a fix, and
@@ -346,12 +384,12 @@ describe('deployment identity, on its own budget', () => {
     const watch = new IdentityWatch(MATCHING, 60_000, () => new Date(clock.t));
     const chain = new FakeChain();
 
-    const fresh = await watch.check(chain);
+    const fresh = await watch.check(chain, FP_A);
     expect(fresh.fromCache).toBe(false);
     expect(summariseIdentity(fresh)).toContain('measured just now');
 
     clock.t = 30_000;
-    const cached = await watch.check(chain);
+    const cached = await watch.check(chain, FP_A);
     expect(cached.fromCache).toBe(true);
     expect(cached.ageMs).toBe(30_000);
     expect(summariseIdentity(cached)).toContain('cached, measured 30s ago');
@@ -363,12 +401,12 @@ describe('deployment identity, on its own budget', () => {
     const watch = new IdentityWatch(MATCHING, 1000, () => new Date(clock.t));
     const chain = new FakeChain();
 
-    const good = await watch.check(chain);
+    const good = await watch.check(chain, FP_A);
     expect(good.result!.ok).toBe(true);
 
     chain.reachable = false;
     clock.t = 5000;
-    const stale = await watch.check(chain);
+    const stale = await watch.check(chain, FP_A);
 
     // The previous verdict stands, with its true age, and the failure is reported
     // separately. Reporting it as drift sends an operator hunting an upgrade that never
@@ -378,6 +416,50 @@ describe('deployment identity, on its own budget', () => {
     expect(stale.ageMs).toBe(5000);
     expect(summariseIdentity(stale)).toContain('latest attempt failed');
     chain.destroy();
+  });
+
+  it('does NOT reuse a pass measured through a different endpoint', async () => {
+    const clock = { t: 0 };
+    const watch = new IdentityWatch(MATCHING, 60_000, () => new Date(clock.t));
+    const chain = new FakeChain();
+
+    await watch.check(chain, FP_A);
+    expect(chain.getCodeCalls).toBe(1);
+
+    // Well inside the TTL, but a different node is answering now. The read pool can fail
+    // over between two status requests, so an unbound cache would let the page say
+    // "matches the registry" about an endpoint it had never asked.
+    clock.t = 1000;
+    const viaB = await watch.check(chain, FP_B);
+    expect(viaB.fromCache).toBe(false);
+    expect(chain.getCodeCalls).toBe(2);
+    expect(viaB.measuredThrough).toContain(FP_B);
+  });
+
+  it('does NOT reuse a pass measured against a different deployment', async () => {
+    const clock = { t: 0 };
+    const chain = new FakeChain();
+    const watch = new IdentityWatch(MATCHING, 60_000, () => new Date(clock.t));
+    await watch.check(chain, FP_A);
+
+    // A separate watch over a different expected runtime must not be able to inherit the
+    // first one's answer -- the key carries chain, deployment, factory and runtime hash.
+    const other = new IdentityWatch({ ...MATCHING, id: 'pons-v2-superseded' }, 60_000, () => new Date(clock.t));
+    const chain2 = new FakeChain();
+    const r = await other.check(chain2, FP_A);
+    expect(r.fromCache).toBe(false);
+    expect(chain2.getCodeCalls).toBe(1);
+  });
+
+  it('does not merge concurrent checks that are asking different questions', async () => {
+    const clock = { t: 0 };
+    const watch = new IdentityWatch(MATCHING, 60_000, () => new Date(clock.t));
+    const chain = new FakeChain(5);
+
+    // In-flight sharing is an optimisation for identical questions only. Sharing across
+    // endpoints would reintroduce the same defect through the concurrency path.
+    await Promise.all([watch.check(chain, FP_A), watch.check(chain, FP_B)]);
+    expect(chain.getCodeCalls).toBe(2);
   });
 
   it('says "not verified yet" rather than passing before anything was measured', () => {

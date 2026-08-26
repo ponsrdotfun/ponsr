@@ -219,7 +219,9 @@ export class RpcPool {
    * The bound is the point: at most `urls.length` attempts, no retries within an endpoint,
    * no backoff. A caller with a deadline gets an answer or a refusal inside it.
    */
-  async run<T>(op: (provider: ethers.JsonRpcProvider) => Promise<T>): Promise<T> {
+  async run<T>(
+    op: (provider: ethers.JsonRpcProvider, endpoint: RpcEndpointDescription) => Promise<T>
+  ): Promise<T> {
     const problems: string[] = [];
     // The endpoint that worked last time goes first, so a healthy fallback does not pay
     // for the primary's failure on every subsequent call.
@@ -241,7 +243,10 @@ export class RpcPool {
         continue;
       }
       try {
-        const value = await op(provider);
+        // The endpoint identity travels WITH the provider. A caller that caches anything
+        // derived from a read has to be able to bind it to the node that answered, and
+        // asking the pool afterwards would race with the next failover.
+        const value = await op(provider, admission.identity);
         this.active = index;
         return value;
       } catch (err: any) {
