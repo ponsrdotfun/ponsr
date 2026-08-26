@@ -19,6 +19,8 @@
  *       --out samples.jsonl --csv samples.csv
  */
 import * as fs from 'fs';
+import { csvRow, safeChecks, safeDependencies } from '../src/sampleGuards';
+import { parseArgInteger } from '../src/strictParse';
 
 const argv = process.argv.slice(2);
 function flag(name: string): string | undefined {
@@ -74,10 +76,22 @@ async function main(): Promise<void> {
     console.error('       [--timeout-ms N] [--out file.jsonl] [--csv file.csv] [--budget-ms N]');
     process.exit(2);
   }
-  const n = Number(flag('--samples') ?? 10);
-  const interval = Number(flag('--interval-ms') ?? 3000);
-  const timeoutMs = Number(flag('--timeout-ms') ?? 20_000);
-  const budget = Number(flag('--budget-ms') ?? 5000);
+  // Strict parsing. `--samples NaN` and `--timeout-ms -1` are refused rather than silently
+  // becoming a nonsense bound, and the offending value is never echoed back.
+  const arg = (name: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number => {
+    const raw = flag(name);
+    if (raw === undefined) return fallback;
+    const v = parseArgInteger(raw, min, max);
+    if (v === null) {
+      console.error(`sample-status-latency: ${name} must be an integer between ${min} and ${max}`);
+      process.exit(2);
+    }
+    return v;
+  };
+  const n = arg('--samples', 10, 1, 1000);
+  const interval = arg('--interval-ms', 3000, 0, 3_600_000);
+  const timeoutMs = arg('--timeout-ms', 20_000, 1, 600_000);
+  const budget = arg('--budget-ms', 5000, 1, 600_000);
   const corePath = flag('--core-path') ?? '/status/core';
   const root = base.replace(/\/+$/, '');
 
@@ -85,8 +99,13 @@ async function main(): Promise<void> {
   for (let i = 1; i <= n; i++) {
     const core = await get(`${root}${corePath}`, timeoutMs);
     const full = await get(`${root}/status`, timeoutMs);
-    const deps = Array.isArray(full.body?.dependencies) ? full.body.dependencies : [];
-    const slowest = deps.length ? deps.reduce((a: any, b: any) => (b.ms > a.ms ? b : a)) : null;
+    // Shape-validated before anything is read off it. A null row or a wrong-typed element
+    // used to be dereferenced directly, so one odd response could abort the whole run --
+    // turning "the endpoint answered something strange" into "we have no data", which is
+    // the worst outcome for a measurement tool.
+    const deps = safeDependencies(full.body?.dependencies);
+    const checks = safeChecks(full.body?.checks);
+    const slowest = deps.length ? deps.reduce((a, b) => (b.ms > a.ms ? b : a)) : null;
 
     const s: Sample = {
       n: i,
@@ -95,14 +114,17 @@ async function main(): Promise<void> {
       coreStatus: core.status,
       coreMs: core.ms,
       coreOk: typeof core.body?.ok === 'boolean' ? core.body.ok : null,
-      coreProblems: Array.isArray(core.body?.problems) ? core.body.problems : [],
-      coreElapsedMs: typeof core.body?.elapsedMs === 'number' ? core.body.elapsedMs : null,
+      coreProblems: Array.isArray(core.body?.problems)
+        ? core.body.problems.filter((p: unknown): p is string => typeof p === 'string').slice(0, 20)
+        : [],
+      coreElapsedMs:
+        typeof core.body?.elapsedMs === 'number' && Number.isFinite(core.body.elapsedMs)
+          ? core.body.elapsedMs
+          : null,
       fullStatus: full.status,
       fullMs: full.ms,
-      fullState: full.body?.state ?? null,
-      fullNonOk: Array.isArray(full.body?.checks)
-        ? full.body.checks.filter((c: any) => c.state !== 'ok').map((c: any) => c.name)
-        : [],
+      fullState: typeof full.body?.state === 'string' ? full.body.state : null,
+      fullNonOk: checks.filter((c) => c.state !== 'ok').map((c) => c.name),
       slowestDependency: slowest?.name ?? null,
       slowestDependencyMs: slowest?.ms ?? null,
       error: core.error ?? full.error,
@@ -120,9 +142,13 @@ async function main(): Promise<void> {
   if (out) fs.writeFileSync(out, samples.map((s) => JSON.stringify(s)).join('\n') + '\n');
   const csv = flag('--csv');
   if (csv) {
+    // RFC 4180 quoting, and a leading apostrophe on anything a spreadsheet would execute
+    // as a formula. Joining raw strings with commas shifts every column after a field that
+    // contains one, and `=cmd()` arriving in a public response becomes code in whatever the
+    // operator opens the file with.
     const cols = Object.keys(samples[0]) as (keyof Sample)[];
-    const rows = [cols.join(',')].concat(
-      samples.map((s) => cols.map((c) => (Array.isArray(s[c]) ? (s[c] as string[]).join('|') : String(s[c]))).join(','))
+    const rows = [csvRow(cols)].concat(
+      samples.map((s) => csvRow(cols.map((c) => (Array.isArray(s[c]) ? (s[c] as string[]).join('|') : s[c]))))
     );
     fs.writeFileSync(csv, rows.join('\n') + '\n');
   }

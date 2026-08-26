@@ -44,7 +44,9 @@ const ALLOWED: ReadonlySet<string> = new Set(DEPENDENCY_NAMES);
  * How a dependency finished. Closed on purpose: an open-ended reason field is where a
  * provider's error text -- and the URL inside it -- ends up being copied.
  */
-export type DependencyOutcome = 'ok' | 'failed' | 'timed-out' | 'not-reached' | 'not-configured';
+export const DEPENDENCY_OUTCOMES = ['ok', 'failed', 'timed-out', 'not-reached', 'not-configured'] as const;
+
+export type DependencyOutcome = (typeof DEPENDENCY_OUTCOMES)[number];
 
 export interface DependencyTiming {
   name: DependencyName;
@@ -107,6 +109,23 @@ export class TimingRecorder {
   absent(name: DependencyName): void {
     if (this.sealed || !ALLOWED.has(name)) return;
     this.rows.push({ name, outcome: 'not-configured', ms: 0, startedAtMs: 0, shared: false });
+  }
+
+  /**
+   * Records that the CALLER stopped waiting for a dependency that is still running.
+   *
+   * Needed because the recorder attaches to the underlying promise, not to the deadline
+   * wrapper around it. When a caller's `within()` fired, the tracked promise was still
+   * pending, so `seal()` marked it `not-reached` -- which means "we never got to this one"
+   * and is a different fact from "we asked and it did not answer in time". An operator
+   * reading the first would look for a budget problem; the second points at the endpoint.
+   *
+   * Ignored if the dependency has already settled: a real outcome always wins over this.
+   */
+  markTimedOut(name: DependencyName): void {
+    if (this.sealed || !ALLOWED.has(name)) return;
+    if (this.rows.some((r) => r.name === name)) return;
+    this.rows.push({ name, outcome: 'timed-out', ms: this.now() - this.origin, startedAtMs: 0, shared: false });
   }
 
   /**

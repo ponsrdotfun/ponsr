@@ -19,7 +19,10 @@ import { DependencyName, DependencyTiming, TimingRecorder } from './dependencyTi
  * WHAT IS IN, AND WHY EACH ONE
  * ----------------------------
  *   admitted endpoint + chain   a different chain is a different world
- *   advancing block             a node that answers but does not advance is not usable
+ *   observed block              a readable, positive head. NOT "advancing": one response
+ *                               cannot prove progression, which needs two observations
+ *                               separated in time. The sampler can show that across
+ *                               samples; a single readiness verdict must not claim it.
  *   deployment + factory        an address is not an identity (findings section 11)
  *   deployment identity         the bytecode is the only thing separating the current
  *                               factory from the superseded one
@@ -65,23 +68,27 @@ export const CORE_DEPENDENCIES: readonly DependencyName[] = [
  * Closed set. A core problem is one of these, never a sentence built from a provider's
  * error text.
  */
-export type CoreProblem =
-  | 'no-admitted-endpoint'
-  | 'chain-unreadable'
-  | 'chain-mismatch'
-  | 'block-unreadable'
-  | 'deployment-unknown'
-  | 'identity-unreadable'
-  | 'identity-mismatch'
-  | 'identity-stale'
-  | 'fee-unreadable'
-  | 'readiness-unreadable'
-  | 'readiness-incomplete'
-  | 'readiness-refused'
-  | 'treasury-unreadable'
-  | 'spend-unknown'
-  | 'spend-exhausted'
-  | 'core-deadline-exceeded';
+export const CORE_PROBLEMS = [
+  'no-admitted-endpoint',
+  'chain-unreadable',
+  'chain-mismatch',
+  'block-unreadable',
+  'deployment-unknown',
+  'identity-unreadable',
+  'identity-mismatch',
+  'identity-stale',
+  'fee-unreadable',
+  'readiness-unreadable',
+  'readiness-incomplete',
+  'readiness-refused',
+  'treasury-unreadable',
+  'treasury-insufficient',
+  'spend-unknown',
+  'spend-exhausted',
+  'core-deadline-exceeded',
+] as const;
+
+export type CoreProblem = (typeof CORE_PROBLEMS)[number];
 
 export interface CoreReadiness {
   ready: boolean;
@@ -179,6 +186,15 @@ export interface CoreDeps {
 export interface CoreOptions {
   /** The core's OWN deadline, separate from anything optional telemetry may need. */
   budgetMs?: number;
+  /**
+   * Minimum treasury balance for the core to call itself ok, in wei.
+   *
+   * Defaults to the live launch fee, which is the floor below which a launch cannot even
+   * be paid for. A caller that needs fee plus a gas allowance pins a larger figure. A
+   * READABLE ZERO used to pass: the core checked only that the balance could be read,
+   * which is a statement about the RPC and not about whether anything can be afforded.
+   */
+  requiredBalanceWei?: bigint;
   /** How old a cached identity pass may be before core calls it stale. */
   identityMaxAgeMs?: number;
   now?: () => number;
@@ -285,6 +301,11 @@ export async function buildCoreEvidence(
     : undefined;
   if (!identityP) rec.absent('deployment-identity');
 
+  /** Marks a dependency timed out when the caller's deadline fired, not the promise. */
+  const expired = (name: DependencyName, err: unknown) => {
+    if (err instanceof Expired) rec.markTimedOut(name);
+  };
+
   let chainId: number | null = null;
   let block: number | null = null;
   try {
@@ -292,7 +313,8 @@ export async function buildCoreEvidence(
     chainId = c;
     block = b;
     if (c !== deps.expectedChainId) problems.push('chain-mismatch');
-  } catch {
+  } catch (err) {
+    expired('chain', err);
     problems.push('chain-unreadable');
   }
 
@@ -300,7 +322,8 @@ export async function buildCoreEvidence(
   try {
     const fee = await within(feeP, remaining(), 'launch fee');
     launchFeeWei = fee.toString();
-  } catch {
+  } catch (err) {
+    expired('launch-fee', err);
     // An unreadable fee is never zero. A zero fee is a real value pons could set, so
     // inventing it would publish a price nobody read.
     problems.push('fee-unreadable');
@@ -320,14 +343,18 @@ export async function buildCoreEvidence(
     };
     if (!complete) problems.push('readiness-incomplete');
     if (!readiness.ready) problems.push('readiness-refused');
-  } catch {
+  } catch (err) {
+    expired('launch-readiness', err);
     problems.push('readiness-unreadable');
   }
 
   let treasuryBalanceWei: string | null = null;
+  let balance: bigint | null = null;
   try {
-    treasuryBalanceWei = (await within(balanceP, remaining(), 'treasury balance')).toString();
-  } catch {
+    balance = await within(balanceP, remaining(), 'treasury balance');
+    treasuryBalanceWei = balance.toString();
+  } catch (err) {
+    expired('treasury-balance', err);
     problems.push('treasury-unreadable');
   }
 
@@ -341,12 +368,21 @@ export async function buildCoreEvidence(
         fromCache: id.fromCache,
         unreadable: Boolean(id.unreadable),
       };
-      if (!id.result) problems.push('identity-unreadable');
+      // AN UNREADABLE REFRESH FAILS THE CORE, cached prior pass or not.
+      //
+      // `IdentityWatch` keeps a good verdict standing when a refresh cannot be made, which
+      // is right for a status page: the previous answer with its true age beats inventing
+      // one. It is wrong for spend-readiness evidence. A core that says ok while its own
+      // bytecode check could not be performed is asserting something nobody just measured,
+      // and it published HTTP 200 while doing it.
+      if (id.unreadable) problems.push('identity-unreadable');
+      else if (!id.result) problems.push('identity-unreadable');
       else if (!id.result.ok) problems.push('identity-mismatch');
       // A cached pass is still a pass, but not an unlimited one. Beyond the threshold it
       // is remembered rather than observed, and a spend decision must be able to tell.
       else if (id.ageMs !== null && id.ageMs > identityMaxAge) problems.push('identity-stale');
-    } catch {
+    } catch (err) {
+      expired('deployment-identity', err);
       problems.push('identity-unreadable');
     }
   } else {
@@ -355,12 +391,37 @@ export async function buildCoreEvidence(
 
   // Local, no network. Unknown is not headroom: the rolling window is what admits a
   // launch, and a missing figure with a quiet calendar day is not evidence of room.
+  //
+  // WRAPPED, because this file promises never to throw and this call is SYNCHRONOUS. A
+  // database read behind it can throw, and it did: a thrown `DB path /secret/path failed`
+  // escaped `buildCoreEvidence` entirely and reached the route's catch, which published the
+  // raw message. A promise that never throws is worth nothing if a plain function call
+  // beside it can.
   let rolling24hWei: string | null = null;
-  const rolling = deps.rollingSpendLast24hWei?.();
+  let rolling: bigint | undefined;
+  try {
+    rolling = deps.rollingSpendLast24hWei?.();
+  } catch {
+    // Nothing from the error is retained. Unknown, and unknown is not headroom.
+    rolling = undefined;
+  }
   if (rolling === undefined) problems.push('spend-unknown');
   else {
     rolling24hWei = rolling.toString();
     if (rolling >= deps.capWei) problems.push('spend-exhausted');
+  }
+
+  // A READABLE ZERO IS NOT FUNDING.
+  //
+  // The core used to check only that the balance could be read, so a treasury holding
+  // nothing at all reported ok with an empty problem list beside a live fee it could not
+  // pay. The floor defaults to the live fee: below that, a launch cannot even be attempted.
+  // Callers needing fee plus a gas allowance pin a larger figure; full gas sufficiency
+  // remains the direct canary preflight's job, and this does not claim to replace it.
+  if (balance !== null) {
+    const floor =
+      options.requiredBalanceWei ?? (launchFeeWei === null ? null : BigInt(launchFeeWei));
+    if (floor !== null && balance < floor) problems.push('treasury-insufficient');
   }
 
   if (!deps.deploymentId || !deps.deploymentFactory) problems.push('deployment-unknown');

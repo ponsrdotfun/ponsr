@@ -155,7 +155,10 @@ describe('one budget covers acquisition AND reporting', () => {
       { totalBudgetMs: 400 }
     );
     const detail = report.checks.map((c) => c.detail).join(' | ');
-    expect(detail).toMatch(/budget|did not answer/);
+    // The human checks now replay what the CORE observed, so an axis the core never got to
+    // is reported as unobserved rather than being re-attempted and blamed for timing out.
+    // That is the more precise statement, and it is the point of the coherence fix.
+    expect(detail).toMatch(/budget|did not answer|was not observed in this response/);
   }, 30_000);
 
   it('running out of budget says nothing about the endpoints, and blacklists none of them', async () => {

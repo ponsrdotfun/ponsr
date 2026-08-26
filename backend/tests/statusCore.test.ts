@@ -1,9 +1,11 @@
 import { assembleCore, assembleStatus, AcquiredSession, StatusPool } from '../src/statusSession';
 import { StatusDeps, buildStatus } from '../src/statusReport';
-import { buildCoreEvidence, CoreDeps, CORE_SCHEMA, CORE_VERSION } from '../src/statusCore';
+import { buildCoreEvidence, CoreDeps, CORE_SCHEMA, CORE_VERSION, CORE_PROBLEMS } from '../src/statusCore';
 import { validateCoreEvidence, fetchAndValidateCore } from '../src/coreValidator';
 import { TimingRecorder, DEPENDENCY_NAMES } from '../src/dependencyTiming';
 import { executableDeployment } from '../src/deployments';
+import { RpcPool } from '../src/rpcPool';
+import { startFakeChain, FakeChain, MATCHING_SHA256 } from './fixtures/jsonRpcServer';
 
 /**
  * The authoritative core must not wait for optional telemetry.
@@ -24,6 +26,34 @@ const FEE = 500000000000000n;
 const TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
 
 const hang = () => new Promise<never>(() => {});
+
+/** The registry a local fixture chain genuinely satisfies. */
+const D2 = { ...D, runtimeBytecodeSha256: MATCHING_SHA256 };
+const openChains: FakeChain[] = [];
+afterEach(async () => {
+  while (openChains.length) await openChains.pop()!.close();
+});
+async function chain(opts: Parameters<typeof startFakeChain>[0] = {}): Promise<FakeChain> {
+  const c = await startFakeChain(opts);
+  openChains.push(c);
+  return c;
+}
+
+/** Deps that depend on the SESSION, exactly as the route builds them. */
+function sessionDeps(session: any, over: Partial<StatusDeps> = {}): StatusDeps {
+  const unavailable = () => {
+    throw new Error('no admitted RPC endpoint is available to serve this status request');
+  };
+  return deps({
+    getChainId: async () => (session ? D.chainId : unavailable()),
+    getBlockNumber: async () => (session ? 1234 : unavailable()),
+    getLiveFeeWei: async () => (session ? FEE : unavailable()),
+    getTreasuryBalanceWei: async () => (session ? ETH / 50n : unavailable()),
+    getLaunchReadiness: async () =>
+      session ? { launchEnabled: true, whitelisted: false, canLaunch: true, canLaunchOnChain: true } : unavailable(),
+    ...over,
+  });
+}
 const slow = <T>(v: T, ms: number) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
 function deps(over: Partial<StatusDeps> = {}): StatusDeps {
@@ -351,12 +381,16 @@ describe('timing evidence carries no secret', () => {
 describe('the keyless validator', () => {
   const good = () =>
     buildCoreEvidence(coreDeps(), { budgetMs: 1000 });
+  // Every quantity is CALLER-PINNED. None of it is read from the body being judged.
   const opts = {
     expectedChainId: D.chainId,
     expectedDeploymentId: D.id,
     expectedFactory: D.factory,
     expectedLaunchFeeWei: FEE,
+    expectedCapWei: ETH / 100n,
     expectedTreasury: TREASURY,
+    requiredTreasuryBalanceWei: FEE,
+    expectedEndpointFingerprint: 'aaaaaaaaaaaa',
   };
 
   it('passes on complete, fresh, correct evidence -- and says it grants nothing', async () => {
@@ -392,6 +426,23 @@ describe('the keyless validator', () => {
     ['exhausted spend', (c: any) => ({ ...c, rolling24hWei: c.capWei }), 'spend-exhausted'],
     ['unreadable treasury', (c: any) => ({ ...c, treasuryBalanceWei: null }), 'treasury-unreadable'],
     ['wrong treasury', (c: any) => ({ ...c, treasuryAddress: '0x' + '22'.repeat(20) }), 'treasury-mismatch'],
+    ['zero balance', (c: any) => ({ ...c, treasuryBalanceWei: '0' }), 'treasury-insufficient'],
+    ['balance one wei short', (c: any) => ({ ...c, treasuryBalanceWei: (FEE - 1n).toString() }), 'treasury-insufficient'],
+    ['inflated cap', (c: any) => ({ ...c, capWei: '999999999999999999999' }), 'cap-mismatch'],
+    ['missing cap', (c: any) => { const x = { ...c }; delete x.capWei; return x; }, 'cap-mismatch'],
+    ['ok true with problems', (c: any) => ({ ...c, problems: ['chain-mismatch'] }), 'core-not-ok'],
+    ['unknown problem code', (c: any) => ({ ...c, problems: ['not-a-real-code'] }), 'unknown-problem-code'],
+    ['ready with nothing permitting it', (c: any) => ({ ...c, readiness: { ...c.readiness, launchEnabled: false, whitelisted: false } }), 'readiness-inconsistent'],
+    ['canLaunchOnChain false', (c: any) => ({ ...c, readiness: { ...c.readiness, canLaunchOnChain: false } }), 'readiness-inconsistent'],
+    ['identity age negative', (c: any) => ({ ...c, identity: { ...c.identity, ageMs: -5 } }), 'identity-not-fresh'],
+    ['identity age far in the past', (c: any) => ({ ...c, identity: { ...c.identity, ageMs: 3600000 } }), 'identity-stale'],
+    ['block zero', (c: any) => ({ ...c, block: 0 }), 'block-missing'],
+    ['block negative', (c: any) => ({ ...c, block: -1 }), 'block-missing'],
+    ['origin carrying a path', (c: any) => ({ ...c, endpointOrigin: 'https://rpc.example.com/v2/KEY' }), 'malformed-field'],
+    ['fingerprint of the wrong shape', (c: any) => ({ ...c, observedThrough: 'not-hex' }), 'endpoint-missing'],
+    ['ok not a boolean', (c: any) => ({ ...c, ok: 'true' }), 'malformed-field'],
+    ['gate not a boolean', (c: any) => ({ ...c, publicLaunchEnabled: 0 }), 'malformed-field'],
+    ['dependency row of the wrong shape', (c: any) => ({ ...c, dependencies: [{ name: 'nope', outcome: 'ok', ms: 1, startedAtMs: 0, shared: false }] }), 'malformed-field'],
   ])('fails on %s', async (_label, mutate, code) => {
     const r = validateCoreEvidence(mutate(await good()), opts);
     expect(r.pass).toBe(false);
@@ -472,5 +523,424 @@ describe('/status stays compatible while gaining the core', () => {
     expect(credits.state).not.toBe('ok');
     // The core is unaffected: an exhausted credits balance says nothing about the chain.
     expect(report.core!.ok).toBe(true);
+  }, 20_000);
+});
+
+/**
+ * HOSTILE PUBLIC JSON.
+ *
+ * The body is untrusted. An earlier version called BigInt() on it directly, so a field of
+ * "not-a-bigint" made the validator THROW a SyntaxError -- and the CLI's outer catch then
+ * exited 2 with the failure category discarded. A validator that throws has no closed
+ * vocabulary at the one moment it needs one.
+ */
+describe('the validator never throws, whatever the body contains', () => {
+  const opts = {
+    expectedChainId: D.chainId,
+    expectedDeploymentId: D.id,
+    expectedFactory: D.factory,
+    expectedLaunchFeeWei: FEE,
+    expectedCapWei: ETH / 100n,
+    expectedTreasury: TREASURY,
+    requiredTreasuryBalanceWei: FEE,
+    expectedEndpointFingerprint: 'aaaaaaaaaaaa',
+  };
+
+  const wellFormed = () => ({
+    schema: CORE_SCHEMA,
+    version: CORE_VERSION,
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: 1,
+    observedThrough: 'aaaaaaaaaaaa',
+    endpointOrigin: 'https://rpc.example.com',
+    chainId: D.chainId,
+    expectedChainId: D.chainId,
+    block: 1,
+    deploymentId: D.id,
+    factory: D.factory,
+    identity: { ok: true, ageMs: 0, fromCache: false, unreadable: false },
+    launchFeeWei: FEE.toString(),
+    readiness: { ready: true, launchEnabled: true, whitelisted: false, canLaunchOnChain: true, complete: true },
+    treasuryAddress: TREASURY,
+    treasuryBalanceWei: (ETH / 50n).toString(),
+    rolling24hWei: '0',
+    capWei: (ETH / 100n).toString(),
+    publicLaunchEnabled: false,
+    problems: [],
+    dependencies: [],
+  });
+
+  it('a production-shaped, paused core still PASSES', () => {
+    const r = validateCoreEvidence(wellFormed(), opts);
+    expect(r.failures).toEqual([]);
+    expect(r.pass).toBe(true);
+  });
+
+  /** Every shape a numeric string field must refuse, and none of them may throw. */
+  const HOSTILE = ['not-a-bigint', '', ' 12 ', '+12', '-1', '1.0', '1e3', '0x0a', '007', '9'.repeat(60)];
+
+  it.each(['launchFeeWei', 'rolling24hWei', 'capWei', 'treasuryBalanceWei'])(
+    'refuses every malformed shape of %s without throwing',
+    (field) => {
+      for (const bad of HOSTILE) {
+        let r!: ReturnType<typeof validateCoreEvidence>;
+        expect(() => {
+          r = validateCoreEvidence({ ...wellFormed(), [field]: bad }, opts);
+        }).not.toThrow();
+        expect(r.pass).toBe(false);
+        // The raw value never appears in what the validator publishes.
+        expect(JSON.stringify(r)).not.toContain('9'.repeat(60));
+      }
+    }
+  );
+
+  it.each([
+    ['null body', null],
+    ['a string body', 'hello'],
+    ['an array body', [1, 2, 3]],
+    ['a number body', 42],
+    ['an empty object', {}],
+  ])('refuses %s without throwing', (_label, body) => {
+    let r!: ReturnType<typeof validateCoreEvidence>;
+    expect(() => {
+      r = validateCoreEvidence(body, opts);
+    }).not.toThrow();
+    expect(r.pass).toBe(false);
+  });
+
+  it.each(['identity', 'readiness'])('refuses a %s that is not an object, without throwing', (field) => {
+    for (const bad of [null, 'x', 42, []]) {
+      let r!: ReturnType<typeof validateCoreEvidence>;
+      expect(() => {
+        r = validateCoreEvidence({ ...wellFormed(), [field]: bad }, opts);
+      }).not.toThrow();
+      expect(r.pass).toBe(false);
+    }
+  });
+
+  it.each(['elapsedMs', 'chainId'])('refuses a malformed %s without throwing', (field) => {
+    for (const bad of [NaN, Infinity, -1, 1.5, '3', null]) {
+      let r!: ReturnType<typeof validateCoreEvidence>;
+      expect(() => {
+        r = validateCoreEvidence({ ...wellFormed(), [field]: bad }, opts);
+      }).not.toThrow();
+      expect(r.pass).toBe(false);
+    }
+  });
+
+  it('never returns evidence alongside a failure', () => {
+    const r = validateCoreEvidence({ ...wellFormed(), launchFeeWei: 'not-a-bigint' }, opts);
+    expect(r.pass).toBe(false);
+    // Reading `evidence` after a failure would be reading a document just judged unfit.
+    expect(r.evidence).toBeNull();
+  });
+
+  it('compares spend against the CALLER pin, not the body cap', () => {
+    // The exact reproduced defect: cap inflated in the body, real cap exhausted.
+    const r = validateCoreEvidence(
+      { ...wellFormed(), rolling24hWei: (ETH / 100n).toString(), capWei: '999999999999999999999' },
+      opts
+    );
+    expect(r.pass).toBe(false);
+    expect(r.failures).toEqual(expect.arrayContaining(['cap-mismatch', 'spend-exhausted']));
+  });
+});
+
+describe('the producer never throws, and never leaks', () => {
+  it('a SYNCHRONOUS rolling-spend throw becomes spend-unknown, not a rejection', async () => {
+    const core = await buildCoreEvidence(
+      coreDeps({
+        rollingSpendLast24hWei: () => {
+          throw new Error('DB path /secret/path failed');
+        },
+      }),
+      { budgetMs: 500 }
+    );
+
+    expect(core.ok).toBe(false);
+    expect(core.problems).toContain('spend-unknown');
+    expect(core.rolling24hWei).toBeNull();
+    // The path never reaches the document.
+    expect(JSON.stringify(core)).not.toContain('/secret/path');
+  });
+
+  it('an unreadable identity refresh fails core even with a cached prior pass', async () => {
+    const core = await buildCoreEvidence(
+      coreDeps({
+        getDeploymentIdentity: async () => ({
+          result: { ok: true },
+          ageMs: 660_000,
+          fromCache: true,
+          unreadable: 'ECONNRESET',
+        }),
+      }),
+      { budgetMs: 500, identityMaxAgeMs: 15 * 60 * 1000 }
+    );
+    // Keeping a good verdict standing is right for a status page and wrong for spend
+    // evidence: the bytecode check could not be performed, so nobody just measured it.
+    expect(core.ok).toBe(false);
+    expect(core.problems).toContain('identity-unreadable');
+  });
+
+  it('a readable ZERO balance is not funding', async () => {
+    const core = await buildCoreEvidence(
+      coreDeps({ getLiveFeeWei: async () => 10n, getTreasuryBalanceWei: async () => 0n }),
+      { budgetMs: 500 }
+    );
+    expect(core.ok).toBe(false);
+    expect(core.problems).toContain('treasury-insufficient');
+  });
+
+  it.each([
+    ['one wei short', 9n, true],
+    ['exactly the fee', 10n, false],
+    ['more than the fee', 11n, false],
+  ])('balance %s of a 10 wei fee', async (_label, balance, shouldFail) => {
+    const core = await buildCoreEvidence(
+      coreDeps({ getLiveFeeWei: async () => 10n, getTreasuryBalanceWei: async () => balance as bigint }),
+      { budgetMs: 500 }
+    );
+    expect(core.problems.includes('treasury-insufficient')).toBe(shouldFail);
+  });
+
+  it('honours a caller-pinned balance floor above the fee', async () => {
+    const core = await buildCoreEvidence(
+      coreDeps({ getLiveFeeWei: async () => 10n, getTreasuryBalanceWei: async () => 50n }),
+      { budgetMs: 500, requiredBalanceWei: 100n }
+    );
+    expect(core.problems).toContain('treasury-insufficient');
+  });
+
+  it('publishes only problem codes from the version 1 vocabulary', async () => {
+    const core = await buildCoreEvidence(
+      coreDeps({
+        getChainId: async () => 46630,
+        getLiveFeeWei: async () => {
+          throw new Error('x');
+        },
+        rollingSpendLast24hWei: undefined,
+      }),
+      { budgetMs: 500 }
+    );
+    expect(core.problems.length).toBeGreaterThan(0);
+    for (const p of core.problems) expect(CORE_PROBLEMS).toContain(p);
+  });
+});
+
+describe('the client deadline covers the body, not only the headers', () => {
+  const opts = {
+    expectedChainId: D.chainId,
+    expectedDeploymentId: D.id,
+    expectedFactory: D.factory,
+    expectedLaunchFeeWei: FEE,
+    expectedCapWei: ETH / 100n,
+    expectedTreasury: TREASURY,
+    requiredTreasuryBalanceWei: FEE,
+    expectedEndpointFingerprint: 'aaaaaaaaaaaa',
+  };
+
+  it('returns FAIL when json() never settles, rather than hanging forever', async () => {
+    let fetches = 0;
+    const started = Date.now();
+    const r = await fetchAndValidateCore('https://example.test', {
+      ...opts,
+      timeoutMs: 60,
+      fetchImpl: (async () => {
+        fetches += 1;
+        return {
+          status: 200,
+          headers: { get: () => null },
+          // A body stream that never ends. AbortSignal on the fetch does not settle this.
+          json: () => new Promise(() => {}),
+        } as any;
+      }) as any,
+    });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(r.pass).toBe(false);
+    expect(r.failures).toEqual(['request-failed']);
+    // Still exactly one fetch. Bounding must never become retrying.
+    expect(fetches).toBe(1);
+  }, 20_000);
+
+  it('refuses a body larger than the bound without reading it', async () => {
+    const r = await fetchAndValidateCore('https://example.test', {
+      ...opts,
+      maxBodyBytes: 1024,
+      fetchImpl: (async () =>
+        ({
+          status: 200,
+          headers: { get: (h: string) => (h === 'content-length' ? '5000000' : null) },
+          json: async () => {
+            throw new Error('should not be read');
+          },
+        }) as any) as any,
+    });
+    expect(r.failures).toEqual(['response-too-large']);
+  });
+
+  it('survives a fetch implementation that returns nonsense', async () => {
+    const r = await fetchAndValidateCore('https://example.test', {
+      ...opts,
+      fetchImpl: (async () => ({}) as any) as any,
+    });
+    expect(r.pass).toBe(false);
+    expect(r.failures).toEqual(['request-failed']);
+  });
+});
+
+/**
+ * ONE RESPONSE, ONE OBSERVATION.
+ *
+ * `assembleStatus` built the core and then handed the same dependency set to `buildStatus`,
+ * which started FRESH chain, fee, readiness, balance and identity reads. So a single
+ * document could embed core evidence from observation A beside human checks describing
+ * observation B, with nothing on the page able to say so. Sharing a function definition is
+ * not sharing an observation.
+ */
+describe('one /status response describes one world', () => {
+  function countingDeps(counts: Record<string, number>) {
+    const bump = (k: string) => {
+      counts[k] = (counts[k] ?? 0) + 1;
+    };
+    return deps({
+      getChainId: async () => {
+        bump('chain');
+        return D.chainId;
+      },
+      getBlockNumber: async () => {
+        bump('block');
+        return 1234;
+      },
+      getLiveFeeWei: async () => {
+        bump('fee');
+        return FEE;
+      },
+      getTreasuryBalanceWei: async () => {
+        bump('balance');
+        return ETH / 50n;
+      },
+      getLaunchReadiness: async () => {
+        bump('readiness');
+        return { launchEnabled: true, whitelisted: false, canLaunch: true, canLaunchOnChain: true };
+      },
+      getDeploymentIdentity: async () => {
+        bump('identity');
+        return { result: { ok: true, mismatches: [] }, ageMs: 0, fromCache: false };
+      },
+      rollingSpendLast24hWei: () => 0n,
+    });
+  }
+
+  it('invokes each core dependency exactly ONCE per full status request', async () => {
+    const counts: Record<string, number> = {};
+    await assembleStatus(fakePool(), () => countingDeps(counts), { totalBudgetMs: 3000 });
+    // Two reads of the same fact in one document is how two worlds get presented as one.
+    for (const key of ['chain', 'block', 'fee', 'balance', 'readiness', 'identity']) {
+      expect(counts[key]).toBe(1);
+    }
+  }, 20_000);
+
+  it('the human checks agree with the embedded core, value for value', async () => {
+    const report = await assembleStatus(fakePool(), () => deps(), { totalBudgetMs: 3000 });
+    const rpc = report.checks.find((c) => c.name === 'rpc')!;
+    const fee = report.checks.find((c) => c.name === 'launch-fee')!;
+
+    expect(report.core!.chainId).toBe(D.chainId);
+    expect(rpc.detail).toContain(String(report.core!.block));
+    expect(rpc.detail).toContain(String(report.core!.chainId));
+    // The fee line and the core's fee are the same observation, not two reads that happened
+    // to agree.
+    expect(report.core!.launchFeeWei).toBe(FEE.toString());
+    expect(fee.state).toBe('ok');
+    expect(report.spend!.observedThrough).toBe(report.core!.observedThrough);
+  }, 20_000);
+
+  it('a chain fact that changes AFTER the core is read cannot appear in the same document', async () => {
+    let chain = D.chainId;
+    const report = await assembleStatus(
+      fakePool(),
+      () =>
+        deps({
+          getChainId: async () => {
+            const v = chain;
+            // The world moves the instant the core has looked at it.
+            chain = 46630;
+            return v;
+          },
+          rollingSpendLast24hWei: () => 0n,
+        }),
+      { totalBudgetMs: 3000 }
+    );
+    // Whatever the page says, it says once. Before this, the core carried 4663 while the
+    // human `rpc` check re-read and reported 46630 in the same response.
+    expect(report.core!.chainId).toBe(D.chainId);
+    expect(report.checks.find((c) => c.name === 'rpc')!.detail).toContain(String(D.chainId));
+  }, 20_000);
+
+  it('a core axis that failed is reported as unobserved, not retried into a green check', async () => {
+    const report = await assembleStatus(
+      fakePool(),
+      () => deps({ getLiveFeeWei: hang, rollingSpendLast24hWei: () => 0n }),
+      { totalBudgetMs: 1500, coreBudgetMs: 250 }
+    );
+    expect(report.core!.problems).toContain('fee-unreadable');
+    // A page where core.ok is false while launch-fee is green would be the same
+    // contradiction in the other direction.
+    expect(report.checks.find((c) => c.name === 'launch-fee')!.state).not.toBe('ok');
+  }, 20_000);
+});
+
+/**
+ * The one absolute deadline is never re-issued.
+ *
+ * `Math.max(REPORTING_FLOOR_MS, deadline - now())` was applied twice -- once for the core
+ * and once for the full report -- so an exhausted budget was granted a fresh 250 ms each
+ * time. Measured with a zero total budget and hanging dependencies: ~690 ms elapsed against
+ * a bound of zero.
+ */
+describe('exhausted budget is not topped up', () => {
+  it('does not manufacture time after the deadline has passed', async () => {
+    const a = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([a.url], { deployment: D2, admissionTimeoutMs: 4000 });
+
+    const started = Date.now();
+    const report = await assembleStatus(
+      pool,
+      (session) =>
+        sessionDeps(session, {
+          getChainId: hang,
+          getBlockNumber: hang,
+          getLiveFeeWei: hang,
+          getLaunchReadiness: hang,
+          getTreasuryBalanceWei: hang,
+          getDeploymentIdentity: hang,
+          listPairAssets: hang,
+          readCredits: hang,
+        }),
+      { totalBudgetMs: 0 }
+    );
+    const elapsed = Date.now() - started;
+
+    // Was ~690 ms. Zero budget plus scheduling slack, not two fresh floors.
+    expect(elapsed).toBeLessThan(300);
+    // And a body is still returned: the reserve is taken BEFORE acquisition, not after.
+    expect(report.checks.length).toBeGreaterThan(0);
+    expect(report.core).toBeDefined();
+  }, 20_000);
+
+  it('a tight budget with a stalled pool still answers inside it', async () => {
+    const a = await chain({ hang: ['eth_chainId'] });
+    const b = await chain({ hang: ['eth_chainId'] });
+    const pool = new RpcPool([a.url, b.url], { deployment: D2, admissionTimeoutMs: 4000 });
+
+    const started = Date.now();
+    const report = await assembleStatus(pool, (session) => sessionDeps(session), {
+      totalBudgetMs: 600,
+    });
+    // 600 ms of budget plus 300 ms of CI scheduling slack. Not a multiple.
+    expect(Date.now() - started).toBeLessThan(900);
+    expect(report.core!.ok).toBe(false);
+    expect(report.core!.problems).toContain('no-admitted-endpoint');
   }, 20_000);
 });

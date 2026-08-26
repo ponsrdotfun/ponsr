@@ -10,7 +10,7 @@ import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { probeLaunchPermission } from './readinessProbe';
-import { RpcPool, parseEndpointList } from './rpcPool';
+import { RpcPool, parseChainId, parseEndpointList } from './rpcPool';
 import { RpcEndpointDescription } from './rpcIdentity';
 import { IdentityWatch } from './identityWatch';
 import { handleMention } from './orchestrator';
@@ -323,6 +323,30 @@ app.get('/health', (_req, res) => {
  * the pool happened to pick -- while the page labelled the result with the POOL's endpoint.
  * Null session means nothing could be admitted; the chain checks then fail as they should.
  */
+/**
+ * The PUBLIC treasury address, resolved once, without the signer.
+ *
+ * Serving a status page used to call `treasurySigner.address()`, which resolves through the
+ * Turnkey client. That does not sign anything, but it made a read-only endpoint depend on
+ * the signer path -- and it made the claim "the endpoint loads no Turnkey credential" false
+ * at the composition boundary even though every leaf module was clean.
+ *
+ * The address is public and already pinned in configuration, so status reads it from there.
+ * No second signer is built and no additional credential is loaded.
+ *
+ * BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT FIX: the endpoint performs no signing and
+ * grants no authority, but the production PROCESS is still signer-capable -- `index.ts`
+ * constructs a treasury signer at startup for the launch path. Serving `/status` no longer
+ * touches it; the process it lives in is not thereby keyless.
+ */
+const statusTreasuryAddress = (() => {
+  try {
+    return pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string });
+  } catch {
+    return undefined;
+  }
+})();
+
 const statusDepsFor = (session: AcquiredSession | null) => {
       const readProvider = session?.provider;
       const unavailable = () => {
@@ -331,11 +355,33 @@ const statusDepsFor = (session: AcquiredSession | null) => {
 
       return {
       expectedChainId: config.CHAIN_ID,
-      getChainId: async () =>
-        readProvider ? Number((await readProvider.getNetwork()).chainId) : unavailable(),
+      /**
+       * A FRESH `eth_chainId` OVER THE WIRE, not `getNetwork()`.
+       *
+       * The pool builds providers with `staticNetwork: true`, and `getNetwork()` then
+       * answers from the CONFIGURED value without sending a request -- the same property
+       * that made the pool's admission gate inert until it was rewritten. Admission does
+       * check the transport, but an admission PASS is cached for up to five minutes, so a
+       * core response could look freshly chain-bound while nothing had asked the endpoint
+       * anything during that response.
+       *
+       * `provider.send` bypasses the static-network shortcut, and the result is parsed
+       * strictly rather than coerced: `Number('')` is 0 and `parseInt('4663junk')` is 4663.
+       */
+      getChainId: async () => {
+        if (!readProvider) return unavailable();
+        const raw = await readProvider.send('eth_chainId', []);
+        const observed = parseChainId(raw);
+        if (observed === null) {
+          throw new Error('the endpoint did not return a valid hex chain id');
+        }
+        return observed;
+      },
       getBlockNumber: () => (readProvider ? readProvider.getBlockNumber() : unavailable()),
       getTreasuryBalanceWei: async () =>
-        readProvider ? getBalanceWei(readProvider, await treasurySigner.address()) : unavailable(),
+        readProvider && statusTreasuryAddress
+          ? getBalanceWei(readProvider, statusTreasuryAddress)
+          : unavailable(),
       getLiveFeeWei: async () =>
         readProvider ? getLiveFeeWei(readProvider, launchTarget.deployment) : unavailable(),
       // Read from the deployment the bot launches through, using that contract's own
@@ -349,7 +395,8 @@ const statusDepsFor = (session: AcquiredSession | null) => {
         // then the permission batch, then the launch config -- inside a single 5 000 ms
         // deadline. It did not fail because the launchpad was closed or the RPC was
         // broken; it failed whenever one round trip cost more than about a second.
-        const launcher = await treasurySigner.address();
+        if (!statusTreasuryAddress) return unavailable();
+        const launcher = statusTreasuryAddress;
         const probe = await probeLaunchPermission(
           readProvider,
           launcher,
@@ -406,7 +453,7 @@ const statusDepsFor = (session: AcquiredSession | null) => {
        */
       treasuryAddress: (() => {
         try {
-          return pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string });
+          return statusTreasuryAddress;
         } catch {
           return undefined;
         }
@@ -443,8 +490,16 @@ app.get('/status', async (_req, res) => {
 });
 
 /**
- * The authoritative core alone: keyless, read-only, and structurally unable to wait on
- * optional telemetry.
+ * The authoritative core alone: read-only, and structurally unable to wait on optional
+ * telemetry.
+ *
+ * A NOTE ON "KEYLESS", STATED PRECISELY.
+ * The validator and its script are keyless, and this route performs no signing, requests no
+ * signature and broadcasts nothing. But this route is hosted inside a process that
+ * constructs a treasury signer at startup for the launch path, so the PROCESS is
+ * signer-capable. Serving status no longer resolves an address through the signer -- it
+ * uses the public pinned address -- but calling the deployed endpoint "keyless" would be
+ * false at the composition boundary, and that claim is not made.
  *
  * WHY A SEPARATE ROUTE AND NOT ONLY A FIELD ON /status
  * ---------------------------------------------------

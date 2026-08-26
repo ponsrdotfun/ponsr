@@ -70,6 +70,57 @@ export const DEFAULT_STATUS_BUDGET_MS = 5000;
 export const REPORTING_FLOOR_MS = 250;
 
 /**
+ * Turns core evidence back into dependency functions that RETURN WHAT WAS ALREADY OBSERVED.
+ *
+ * WHY ONE DOCUMENT MUST NOT READ THE CHAIN TWICE
+ * ---------------------------------------------
+ * `assembleStatus` built the core and then handed the SAME dependency set to `buildStatus`,
+ * which started its own fresh chain, fee, readiness, balance and identity reads. So one
+ * response could embed core evidence from observation A while its human checks described
+ * observation B -- two worlds presented as one document, with nothing on the page able to
+ * say so. Sharing a function definition is not sharing an observation.
+ *
+ * These replay the core's values instead. A core axis that failed rejects here too, so the
+ * human check reports the same failure rather than getting a lucky second attempt: a page
+ * where `core.ok` is false while `launchpad` is green would be the same contradiction in
+ * the other direction.
+ */
+function replayCore(deps: StatusDeps, core: CoreEvidence): StatusDeps {
+  const refuse = (axis: string) => () =>
+    Promise.reject(new Error(`${axis} was not observed in this response`));
+
+  return {
+    ...deps,
+    getChainId: core.chainId === null ? refuse('chain id') : async () => core.chainId!,
+    getBlockNumber: core.block === null ? refuse('block') : async () => core.block!,
+    getLiveFeeWei:
+      core.launchFeeWei === null ? refuse('launch fee') : async () => BigInt(core.launchFeeWei!),
+    getTreasuryBalanceWei:
+      core.treasuryBalanceWei === null
+        ? refuse('treasury balance')
+        : async () => BigInt(core.treasuryBalanceWei!),
+    getLaunchReadiness: core.readiness
+      ? async () => ({
+          launchEnabled: core.readiness!.launchEnabled,
+          whitelisted: core.readiness!.whitelisted,
+          canLaunch: core.readiness!.ready,
+          canLaunchOnChain: core.readiness!.canLaunchOnChain ?? undefined,
+          detail: core.readiness!.detail,
+          incomplete: core.readiness!.complete ? undefined : 'evidence was incomplete',
+        })
+      : refuse('launch readiness'),
+    getDeploymentIdentity: core.identity
+      ? async () => ({
+          result: { ok: core.identity!.ok, mismatches: [] },
+          ageMs: core.identity!.ageMs,
+          fromCache: core.identity!.fromCache,
+          unreadable: core.identity!.unreadable ? 'the identity refresh could not be made' : undefined,
+        })
+      : refuse('deployment identity'),
+  };
+}
+
+/**
  * Turns the status dependency set into the core's narrower one.
  *
  * Kept as a projection rather than a second dependency set so the two cannot describe
@@ -133,7 +184,12 @@ export async function assembleCore(
     session = null;
   }
 
-  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
+  // Whatever is genuinely left, never a fresh allowance. `Math.max(FLOOR, ...)` CREATED
+  // time once the deadline was exhausted: with a zero total budget and hanging
+  // dependencies the route still ran ~690 ms, because the floor was granted again after
+  // the one absolute deadline had already passed. The reserve is subtracted BEFORE
+  // acquisition; it is never re-issued after.
+  const remaining = Math.max(0, deadline - now());
   return buildCoreEvidence(coreDepsFrom(makeDeps(session), session, originOf(session)), {
     budgetMs: Math.min(options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS, remaining),
     now,
@@ -175,9 +231,12 @@ export async function assembleStatus(
    * of three slow responses and on none of the twenty-two fast ones.
    */
   const coreRecorder = new TimingRecorder(now(), now);
+  // Only what is left of the ONE deadline. See assembleCore for why the floor is not
+  // re-applied here: reserving time before acquisition is correct, granting it again
+  // afterwards manufactures budget the response already promised it would not use.
   const coreBudget = Math.min(
     options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS,
-    Math.max(REPORTING_FLOOR_MS, deadline - now())
+    Math.max(0, deadline - now())
   );
   const core = await buildCoreEvidence(coreDepsFrom(deps, session, originOf(session)), {
     budgetMs: coreBudget,
@@ -185,11 +244,13 @@ export async function assembleStatus(
     recorder: coreRecorder,
   });
 
-  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
+  const remaining = Math.max(0, deadline - now());
 
   return buildStatus(
     {
-      ...deps,
+      // Every overlapping human check replays what the core already observed, so one
+      // document describes one world.
+      ...replayCore(deps, core),
       /**
        * The endpoint THIS response used, by value.
        *

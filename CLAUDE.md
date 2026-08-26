@@ -359,6 +359,25 @@ under its own deadline BEFORE optional telemetry starts, and `/status/core` serv
 without ever starting pair discovery or the credits call. Optional telemetry keeps its real
 state on `/status` — never deleted, never reported green when it failed.
 
+**A hostile review of the core contract (2026-08-26) found fourteen defects, and the
+shape of them is worth carrying forward: a validator is only as good as the WORST input
+it is handed, not the input you had in mind.** Reproduced before fixing: malformed public
+JSON made the validator THROW instead of fail; an inflated `capWei` in the body PASSED,
+because spend was compared against the cap the response itself supplied; a dead-address
+treasury passed, because the pin was optional in the default command; `ok:true` beside
+`problems:['chain-mismatch']` passed; a readable ZERO balance passed beside a live fee it
+could not pay; `buildCoreEvidence` promised never to throw while a SYNCHRONOUS call inside
+it did, and the route then published the raw `DB path /secret/path failed`; an unreadable
+identity refresh still published HTTP 200 with `ok:true` when a cached pass existed; and
+the "one total deadline" was topped up by two fresh 250 ms floors after it had expired.
+
+Three general rules came out of it. **A limit must never be evidence about itself** —
+every quantity a verdict depends on is caller-pinned now. **A promise that never throws is
+worth nothing if a plain function call beside it can.** And **`getNetwork()` under
+`staticNetwork` is configured metadata, not an observation** — the core reads `eth_chainId`
+off the wire, because admission's transport check is cached for minutes and a response can
+otherwise look freshly chain-bound while nothing asked the endpoint anything.
+
 **A fifth review (2026-08-26) found the fix's own optimisation defeating it.** The pool
 coalesces concurrent admissions, and `admit()` handed a later caller the in-flight promise
 as-is — so a `/status` request with a **300 ms budget took 983 ms**, waiting under a stalled

@@ -260,7 +260,13 @@ describe('the core evidence path imports nothing that can spend', () => {
     'signTransaction',
   ];
 
-  it.each(['src/statusCore.ts', 'src/coreValidator.ts', 'src/dependencyTiming.ts'])(
+  it.each([
+    'src/statusCore.ts',
+    'src/coreValidator.ts',
+    'src/dependencyTiming.ts',
+    'src/strictParse.ts',
+    'src/sampleGuards.ts',
+  ])(
     '%s imports no signer, credential loader or broadcast path',
     (file) => {
       const src = code(file);
@@ -280,6 +286,40 @@ describe('the core evidence path imports nothing that can spend', () => {
       expect(src).not.toMatch(/from '\.\.\/src\/config'/);
     }
   );
+
+  it('the production status route resolves the treasury WITHOUT the signer', () => {
+    // The leaf modules were always clean, but the deployed route called
+    // `treasurySigner.address()`, which resolves through the Turnkey client. That signs
+    // nothing, yet it made a read-only endpoint depend on the signer path -- and made the
+    // claim "loads no Turnkey credential" false at the composition boundary.
+    const src = code('src/index.ts');
+    const builderAt = src.indexOf('const statusDepsFor');
+    const routesEnd = src.indexOf("app.get('/status/core'");
+    expect(builderAt).toBeGreaterThan(-1);
+    expect(routesEnd).toBeGreaterThan(builderAt);
+
+    const statusPath = src.slice(builderAt, routesEnd);
+    expect(statusPath).not.toContain('treasurySigner');
+    expect(statusPath).toContain('statusTreasuryAddress');
+
+    // And exactly one signer is CONSTRUCTED in the whole file: no second one was added.
+    // Counted on the call, not on the identifier -- the import mentions it too, and an
+    // assertion that cannot tell an import from a construction is not measuring the thing
+    // it names.
+    const constructions = [...src.matchAll(/createTreasurySigner\s*\(/g)];
+    expect(constructions.length).toBe(1);
+  });
+
+  it('the core route asks the endpoint for its chain id rather than reading configuration', () => {
+    // `getNetwork()` answers from the configured value under staticNetwork, which is how
+    // the pool's admission gate came to compare a constant to itself.
+    const src = code('src/index.ts');
+    const builderAt = src.indexOf('const statusDepsFor');
+    const routesEnd = src.indexOf("app.get('/status/core'");
+    const statusPath = src.slice(builderAt, routesEnd);
+    expect(statusPath).toContain("send('eth_chainId'");
+    expect(statusPath).not.toContain('getNetwork()');
+  });
 
   it('the launch path does not import the core validator as a substitute for its own checks', () => {
     // The endpoint may become an ADDITIONAL gate. It must never become a weaker one: an
