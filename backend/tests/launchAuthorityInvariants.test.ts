@@ -72,20 +72,56 @@ describe('the fallback pool is wired to the read path only', () => {
     expect(src).toContain('createTreasurySigner(provider)');
   });
 
-  it('uses the pool only for status reads', () => {
-    // Every rpcPool.run in index.ts must be inside the /status handler. Checked by
-    // position: the pool may not be reached before the route is declared.
+  it('is referenced by exactly one module in the whole shipped tree', () => {
+    // Stronger than checking where the calls sit inside index.ts. A source-position test
+    // cannot see a use added later in the file, an alias assigned to another name, or a
+    // second module importing the pool entirely. This enumerates every shipped file that
+    // mentions RpcPool at all and holds the list to an explicit allowlist.
+    const roots = ['src', 'scripts'];
+    const found: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(rel);
+        // code(), not read(): config.ts mentions rpcPool.ts in a doc comment explaining
+        // why RPC_FALLBACK_URLS is dangerous, which is documentation rather than a use.
+        // A rule satisfied or broken by prose about the rule is not a rule.
+        else if (/\.ts$/.test(entry.name) && /RpcPool|rpcPool/.test(code(rel))) found.push(rel);
+      }
+    };
+    roots.forEach(walk);
+
+    // rpcPool.ts defines it; index.ts is the only consumer, and only for /status.
+    expect(found.sort()).toEqual(['src/index.ts', 'src/rpcPool.ts']);
+  });
+
+  it('reaches the pool only inside the /status handler', () => {
     const statusAt = src.indexOf("app.get('/status'");
     expect(statusAt).toBeGreaterThan(-1);
 
+    // Every mention of the pool instance, wherever it appears, including aliases created
+    // by assignment. The construction line is the one legitimate exception.
     const uses: number[] = [];
-    let at = src.indexOf('rpcPool.run');
+    let at = src.indexOf('rpcPool');
     while (at !== -1) {
       uses.push(at);
-      at = src.indexOf('rpcPool.run', at + 1);
+      at = src.indexOf('rpcPool', at + 1);
     }
-    expect(uses.length).toBeGreaterThan(0);
-    for (const u of uses) expect(u).toBeGreaterThan(statusAt);
+    // Two legitimate mentions outside the handler: the import, and the construction.
+    const importAt = src.indexOf("from './rpcPool'");
+    const construction = src.indexOf('const rpcPool = new RpcPool');
+    expect(importAt).toBeGreaterThan(-1);
+    expect(construction).toBeGreaterThan(-1);
+    const isDeclaration = (u: number) =>
+      (u > importAt - 60 && u < importAt + 20) || (u > construction - 5 && u < construction + 40);
+
+    const operational = uses.filter((u) => !isDeclaration(u));
+    expect(operational.length).toBeGreaterThan(0);
+    // Every actual USE sits inside the /status handler.
+    for (const u of operational) expect(u).toBeGreaterThan(statusAt);
+
+    // And no alias escapes the handler under a different name.
+    expect(src).not.toMatch(/const\s+\w+\s*=\s*rpcPool\s*;/);
   });
 
   it('does not pass a pooled provider into the treasury signer or the launch target', () => {

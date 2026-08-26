@@ -97,8 +97,15 @@ export class IdentityWatch {
   private cached: IdentityResult | null = null;
   private checkedAt: Date | null = null;
   private cachedKey: string | null = null;
-  private inFlight: Promise<IdentityStatus> | null = null;
-  private inFlightKey: string | null = null;
+  /**
+   * One in-flight probe PER KEY, not one in total.
+   *
+   * A single mutable slot loses work under interleaving: A starts, B starts and overwrites
+   * the slot, A finishes and its `finally` clears B's entry, and a third caller for B then
+   * starts a duplicate download of the same 48 KB. A map keyed the same way as the cache
+   * cannot do that, and each completion deletes only its own key.
+   */
+  private readonly inFlight = new Map<string, Promise<IdentityStatus>>();
 
   constructor(
     private readonly deployment: PonsDeployment = executableDeployment(),
@@ -142,10 +149,10 @@ export class IdentityWatch {
     // this, the cache removes the cost for one caller and multiplies it for ten. Shared
     // only among callers asking the SAME question -- a request that failed over to another
     // endpoint must not be handed an answer measured through the first one.
-    if (this.inFlight && this.inFlightKey === key) return this.inFlight;
+    const running = this.inFlight.get(key);
+    if (running) return running;
 
-    this.inFlightKey = key;
-    this.inFlight = (async () => {
+    const probe = (async () => {
       try {
         const result = await verifyDeploymentIdentity(this.deployment, provider);
         this.cached = result;
@@ -158,11 +165,13 @@ export class IdentityWatch {
         // one sends an operator hunting a contract upgrade that never happened.
         return this.status(true, String(err?.shortMessage ?? err?.message ?? err).slice(0, 120));
       } finally {
-        this.inFlight = null;
-        this.inFlightKey = null;
+        // Only this key. Clearing a shared slot is how one probe's completion cancelled
+        // another's de-duplication.
+        this.inFlight.delete(key);
       }
     })();
-    return this.inFlight;
+    this.inFlight.set(key, probe);
+    return probe;
   }
 
   /** Forces the next `check` to read the chain. For tests and for an operator command. */
