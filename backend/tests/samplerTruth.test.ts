@@ -76,9 +76,15 @@ function coreBody(over: Record<string, unknown> = {}): Record<string, unknown> {
     generatedAt: new Date().toISOString(),
     elapsedMs: 70,
     problems: [],
+    // All five CORE dependencies, settled ok -- what production emits. The strict core
+    // contract requires each one present exactly once and settled, because a core whose
+    // `chain` row timed out gathered no chain evidence whatever `ok` says.
     dependencies: [
       { name: 'chain', outcome: 'ok', ms: 70, startedAtMs: 0, shared: false },
       { name: 'launch-fee', outcome: 'ok', ms: 60, startedAtMs: 5, shared: false },
+      { name: 'launch-readiness', outcome: 'ok', ms: 60, startedAtMs: 5, shared: true },
+      { name: 'treasury-balance', outcome: 'ok', ms: 55, startedAtMs: 8, shared: false },
+      { name: 'deployment-identity', outcome: 'ok', ms: 0, startedAtMs: 8, shared: false },
     ],
     ...over,
   };
@@ -141,6 +147,48 @@ async function startServer(opts: { core?: () => unknown; coreStatus?: number; bl
   };
 }
 
+/** Same server, with the FULL status body under the test's control per call. */
+async function startServerWithFull(full: (call: number) => unknown): Promise<ServerHandle> {
+  const paths: string[] = [];
+  let coreCall = 0;
+  let fullCall = 0;
+  const server = http.createServer((req, res) => {
+    paths.push(req.url ?? '');
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', env: 'test' }));
+      return;
+    }
+    if (req.url === '/status/core') {
+      const body = coreBody({ block: 46_600_000 + coreCall });
+      coreCall += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+      return;
+    }
+    if (req.url === '/status') {
+      const body = full(fullCall);
+      fullCall += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    paths,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections?.();
+        server.close(() => resolve());
+      }),
+  };
+}
+
 function pins(url: string, extra: string[] = []): string[] {
   return [
     '--url', url,
@@ -154,6 +202,7 @@ function pins(url: string, extra: string[] = []): string[] {
     '--expect-cap-wei', CAP,
     '--expect-treasury', TREASURY,
     '--expect-public-gate', 'false',
+    '--require-balance-wei', '2500000000000000',
     ...extra,
   ];
 }
@@ -352,6 +401,128 @@ describe('the sampler measures what an operator is told it measures', () => {
       expect(r.stdout).toMatch(/4\.5/);
       expect(r.stdout).toMatch(/5\.0/);
       expect(r.stdout).toContain('No sample was discarded');
+    } finally {
+      await s.close();
+    }
+  }, 120_000);
+});
+
+
+/**
+ * `ok: true` IS THE PRODUCER'S OPINION, NOT EVIDENCE.
+ *
+ * Pinning the top-level fields by hand accepted documents that contradicted themselves.
+ * The sampler runs the SAME strict contract `check-core-readiness.ts` uses -- not a second,
+ * weaker one -- so a body only passes if it would satisfy the pre-canary readiness check.
+ */
+describe('the sampler refuses core evidence that contradicts itself', () => {
+  const FULL_DEPS = [
+    { name: 'chain', outcome: 'ok', ms: 70, startedAtMs: 0, shared: false },
+    { name: 'launch-fee', outcome: 'ok', ms: 60, startedAtMs: 5, shared: false },
+    { name: 'launch-readiness', outcome: 'ok', ms: 60, startedAtMs: 5, shared: true },
+    { name: 'treasury-balance', outcome: 'ok', ms: 55, startedAtMs: 8, shared: false },
+    { name: 'deployment-identity', outcome: 'ok', ms: 0, startedAtMs: 8, shared: false },
+  ];
+
+  const HOSTILE: Array<[string, Record<string, unknown>]> = [
+    [
+      'readiness that contradicts ok:true',
+      { readiness: { ready: true, launchEnabled: false, whitelisted: false, canLaunchOnChain: false, complete: true } },
+    ],
+    ['incomplete readiness', { readiness: { ready: true, launchEnabled: true, whitelisted: false, complete: false } }],
+    ['an unreadable identity', { identity: { ok: false, ageMs: 0, fromCache: false, unreadable: true } }],
+    ['a stale identity', { identity: { ok: true, ageMs: 60 * 60 * 1000, fromCache: true, unreadable: false } }],
+    ['a treasury below the canary floor', { treasuryBalanceWei: '1' }],
+    ['a rolling spend at the cap', { rolling24hWei: CAP }],
+    ['a rolling spend above the cap', { rolling24hWei: '99999999999999999999' }],
+    ['a non-canonical timestamp', { generatedAt: 'Tue, 26 Aug 2026 12:00:00 GMT' }],
+    ['stale evidence', { generatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() }],
+    ['evidence from the future', { generatedAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() }],
+    ['an origin carrying a path', { endpointOrigin: 'https://rpc.example.com/mainnet' }],
+    ['an origin carrying userinfo', { endpointOrigin: 'https://user:pass@rpc.example.com' }],
+    [
+      'a core dependency that timed out',
+      { dependencies: FULL_DEPS.map((d) => (d.name === 'chain' ? { ...d, outcome: 'timed-out' } : d)) },
+    ],
+    [
+      'a core dependency that failed',
+      { dependencies: FULL_DEPS.map((d) => (d.name === 'launch-fee' ? { ...d, outcome: 'failed' } : d)) },
+    ],
+    ['a missing mandatory dependency', { dependencies: FULL_DEPS.slice(1) }],
+    ['a duplicated dependency', { dependencies: [...FULL_DEPS, FULL_DEPS[0]] }],
+    ['an unlisted dependency name', { dependencies: [...FULL_DEPS, { name: 'not-a-dependency', outcome: 'ok', ms: 1, startedAtMs: 0, shared: false }] }],
+    ['problems beside ok:true', { problems: ['chain-mismatch'] }],
+  ];
+
+  it.each(HOSTILE)('%s fails the run', async (_label, over) => {
+    const s = await startServer({ core: () => coreBody(over) });
+    try {
+      const r = await run(pins(s.url));
+      expect(r.status).toBe(1);
+      expect(r.stdout).toMatch(/strict core validation\s+0\/2/);
+    } finally {
+      await s.close();
+    }
+  }, 120_000);
+
+  it('an unexpected degraded check in steady state fails the run', async () => {
+    const s = await startServerWithFull(() => ({
+      state: 'degraded',
+      at: new Date().toISOString(),
+      checks: [
+        { name: 'public-launches', state: 'degraded', detail: 'paused by Ponsr' },
+        { name: 'read-credits', state: 'degraded', detail: 'unreadable' },
+      ],
+      spend: {},
+      dependencies: [],
+    }));
+    try {
+      const r = await run(pins(s.url));
+      expect(r.status).toBe(1);
+      expect(r.stdout).toMatch(/unexpected-degraded-check/);
+    } finally {
+      await s.close();
+    }
+  }, 120_000);
+
+  it('a DECLARED warm-up sample is kept, counted for latency, and exempt from steady state', async () => {
+    // Warm-up must never discard. A run that drops its inconvenient samples is the
+    // lucky-window pattern with extra steps.
+    const s = await startServerWithFull((call) =>
+      call === 0
+        ? {
+            state: 'degraded',
+            at: new Date().toISOString(),
+            checks: [
+              { name: 'public-launches', state: 'degraded', detail: 'paused' },
+              { name: 'pair-assets', state: 'degraded', detail: 'still discovering' },
+            ],
+            spend: {},
+            dependencies: [],
+          }
+        : fullBody()
+    );
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-sampler-'));
+    const out = path.join(dir, 's.jsonl');
+    try {
+      const r = await run([...pins(s.url), '--warmup-samples', '1', '--out', out]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/declared warm-up sample/);
+      // Both samples are on disk; the warm-up one is labelled, not removed.
+      const rows = fs.readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      expect(rows).toHaveLength(2);
+      expect(rows[0].warmup).toBe(true);
+      expect(rows[1].warmup).toBe(false);
+    } finally {
+      await s.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('exact valid evidence still exits 0', async () => {
+    const s = await startServer();
+    try {
+      expect((await run(pins(s.url))).status).toBe(0);
     } finally {
       await s.close();
     }

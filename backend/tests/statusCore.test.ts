@@ -571,7 +571,17 @@ describe('the validator never throws, whatever the body contains', () => {
     capWei: (ETH / 100n).toString(),
     publicLaunchEnabled: false,
     problems: [],
-    dependencies: [],
+    // The five CORE dependencies, all settled ok -- which is what production actually
+    // emits. The fixture called itself production-shaped while carrying an empty array,
+    // and an empty array is now a failure: a core that gathered no dependency evidence is
+    // not a core anyone should spend against.
+    dependencies: [
+      { name: 'chain', outcome: 'ok', ms: 70, startedAtMs: 0, shared: false },
+      { name: 'launch-fee', outcome: 'ok', ms: 60, startedAtMs: 5, shared: false },
+      { name: 'launch-readiness', outcome: 'ok', ms: 60, startedAtMs: 5, shared: true },
+      { name: 'treasury-balance', outcome: 'ok', ms: 55, startedAtMs: 8, shared: false },
+      { name: 'deployment-identity', outcome: 'ok', ms: 0, startedAtMs: 8, shared: false },
+    ],
   });
 
   it('a production-shaped, paused core still PASSES', () => {

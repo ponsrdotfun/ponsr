@@ -35,7 +35,8 @@
  */
 import * as fs from 'fs';
 import { csvRow, safeChecks, safeDependencies } from '../src/sampleGuards';
-import { parseArgInteger } from '../src/strictParse';
+import { parseArgInteger, parseArgWei } from '../src/strictParse';
+import { validateCoreEvidence } from '../src/coreValidator';
 
 /** Flags taking a value. Anything else is a usage error, never a silent no-op. */
 const VALUE_FLAGS = new Set([
@@ -55,6 +56,10 @@ const VALUE_FLAGS = new Set([
   '--expect-cap-wei',
   '--expect-treasury',
   '--expect-public-gate',
+  '--require-balance-wei',
+  '--max-age-ms',
+  '--max-identity-age-ms',
+  '--warmup-samples',
 ]);
 
 /** The pins without which no run can be PASS-capable. */
@@ -68,6 +73,7 @@ const REQUIRED = [
   '--expect-cap-wei',
   '--expect-treasury',
   '--expect-public-gate',
+  '--require-balance-wei',
 ];
 
 function usage(message: string): never {
@@ -130,6 +136,13 @@ interface Sample {
   fullNonOk: string[];
   slowestDependency: string | null;
   slowestDependencyMs: number | null;
+  /** Every core dependency row, name and outcome, never reduced to names alone. */
+  coreDependencyOutcomes: string[];
+  /** Closed codes from the STRICT core contract, the same one check-core-readiness uses. */
+  coreValidationFailures: string[];
+  coreValidationExplanations: string[];
+  /** True for samples taken before the declared warm-up ended. */
+  warmup: boolean;
   /** Why this sample failed, in closed labels. Empty means it satisfied every pin. */
   failures: string[];
   verdict: 'pass' | 'fail';
@@ -190,10 +203,19 @@ async function main(): Promise<void> {
   const corePath = args.get('--core-path') ?? '/status/core';
   const root = args.get('--url')!.replace(/\/+$/, '');
 
+  const warmup = integer('--warmup-samples', 0, 0, 1000);
+  const maxAgeMs = integer('--max-age-ms', 30_000, 1, 3_600_000);
+  const maxIdentityAgeMs = integer('--max-identity-age-ms', 15 * 60 * 1000, 1, 24 * 3_600_000);
+  const requireBalanceWei = parseArgWei(args.get('--require-balance-wei')!);
+  if (requireBalanceWei === null) usage('--require-balance-wei must be a decimal wei amount');
   const expectedChain = parseArgInteger(args.get('--expect-chain')!, 1, Number.MAX_SAFE_INTEGER);
   if (expectedChain === null) usage('--expect-chain must be a positive integer');
   const gateRaw = args.get('--expect-public-gate')!.trim().toLowerCase();
   if (gateRaw !== 'true' && gateRaw !== 'false') usage('--expect-public-gate must be true or false');
+  const expectedFeeWei = parseArgWei(args.get('--expect-fee-wei')!);
+  const expectedCapWei = parseArgWei(args.get('--expect-cap-wei')!);
+  if (expectedFeeWei === null) usage('--expect-fee-wei must be a decimal wei amount');
+  if (expectedCapWei === null) usage('--expect-cap-wei must be a decimal wei amount');
   const expected = {
     endpoint: args.get('--expect-endpoint')!,
     chain: expectedChain,
@@ -213,6 +235,34 @@ async function main(): Promise<void> {
     const full = await get(`${root}/status`, timeoutMs);
 
     const c = core.malformed ? null : core.body;
+
+    /**
+     * THE SAME STRICT CONTRACT `check-core-readiness.ts` USES, not a second weaker one.
+     *
+     * Pinning the top-level fields by hand was not enough: it accepted `ok: true` beside
+     * contradictory readiness, an unreadable or stale identity, a treasury below the
+     * canary floor, a rolling spend at the cap, a non-canonical timestamp, an origin
+     * carrying a path, and a core dependency that had timed out. Every one of those is a
+     * document the producer should never emit -- which is exactly the assumption a
+     * validator exists to stop making.
+     */
+    const validation = validateCoreEvidence(
+      c,
+      {
+        expectedChainId: expected.chain,
+        expectedDeploymentId: expected.deployment,
+        expectedFactory: expected.factory,
+        expectedLaunchFeeWei: expectedFeeWei,
+        expectedCapWei: expectedCapWei,
+        expectedTreasury: expected.treasury,
+        requiredTreasuryBalanceWei: requireBalanceWei,
+        expectedEndpointFingerprint: expected.endpoint,
+        expectPublicLaunchEnabled: expected.gate,
+        maxAgeMs,
+        maxIdentityAgeMs,
+      },
+      core.ms
+    );
     const deps = safeDependencies(full.body?.dependencies);
     const checks = safeChecks(full.body?.checks);
     const slowest = deps.length ? deps.reduce((a, b) => (b.ms > a.ms ? b : a)) : null;
@@ -247,6 +297,15 @@ async function main(): Promise<void> {
       coreDependencies: Array.isArray(c?.dependencies)
         ? c.dependencies.map((d: any) => String(d?.name ?? '?')).slice(0, 30)
         : [],
+      // Name AND outcome. Reducing rows to names before deciding PASS is how a core whose
+      // `chain` row said `timed-out` sat beside `ok: true` and was accepted.
+      coreDependencyOutcomes: Array.isArray(c?.dependencies)
+        ? c.dependencies.map((d: any) => `${String(d?.name ?? '?')}=${String(d?.outcome ?? '?')}`).slice(0, 30)
+        : [],
+      coreValidationFailures: validation.failures.slice(0, 30),
+      // Built from public facts only by the validator itself; no response value is echoed.
+      coreValidationExplanations: validation.explanations.slice(0, 30),
+      warmup: i <= warmup,
       fullStatus: full.status,
       fullMs: full.ms,
       fullState: str(full.body?.state),
@@ -264,6 +323,9 @@ async function main(): Promise<void> {
     if (s.healthStatus !== 200) f.push('health-not-200');
     if (s.coreStatus !== 200) f.push('core-not-200');
     if (core.malformed) f.push('core-malformed');
+    // The strict contract is the authority. The hand-written pins below stay because they
+    // name the failure in this tool's own vocabulary, but nothing passes without this.
+    if (!validation.pass) f.push('core-invalid');
     if (s.coreOk !== true) f.push('core-not-ok');
     if (s.coreProblems.length > 0) f.push('core-problems');
     if (s.coreSchema !== 'ponsr.status-core' || s.coreVersion !== 1) f.push('core-contract');
@@ -280,6 +342,10 @@ async function main(): Promise<void> {
     if (s.treasuryBalanceWei === null) f.push('treasury-balance-unreadable');
     if (s.rolling24hWei === null) f.push('rolling-spend-unknown');
     if (s.publicLaunchEnabled !== expected.gate) f.push('public-gate-mismatch');
+    // Steady state, after any declared warm-up: only the intended pause may be degraded.
+    if (!s.warmup && !(s.fullNonOk.length === 1 && s.fullNonOk[0] === 'public-launches')) {
+      f.push('unexpected-degraded-check');
+    }
     // The whole point of the core split: optional telemetry must not be in the core.
     if (s.coreDependencies.some((d) => d === 'read-credits' || d === 'pair-assets')) {
       f.push('core-carries-optional-telemetry');
@@ -377,15 +443,37 @@ async function main(): Promise<void> {
 
   console.log('\n  No sample was discarded and nothing was retried.');
 
+  /**
+   * Warm-up is EXPLICIT, RECORDED, and discards nothing.
+   *
+   * A deploy-time run once failed the steady-state condition because pair discovery had
+   * not finished, and the honest answer was to say so rather than to widen the gate. So a
+   * warm-up may be DECLARED with `--warmup-samples`; those samples stay in the artifacts,
+   * stay in every latency count, and simply do not carry the steady-state requirement.
+   * With no flag the warm-up is zero and all ten samples must be clean.
+   */
+  const steady = samples.filter((x) => !x.warmup);
+  const steadyOnlyPause = steady.filter(
+    (x) => x.fullNonOk.length === 1 && x.fullNonOk[0] === 'public-launches'
+  ).length;
+  const coreValid = count((x) => x.coreValidationFailures.length === 0);
+
+  console.log(`  strict core validation        ${coreValid}/${total}`);
+  console.log(`  steady-state only public-launches  ${steadyOnlyPause}/${steady.length}` +
+    (warmup > 0 ? `   (${warmup} declared warm-up sample(s), kept, not counted here)` : ''));
+
   const acceptance =
     passed === total &&
     healthOk === total &&
     coreOk === total &&
+    coreValid === total &&
     coreUnder === total &&
     fullOk === total &&
     under50 === total &&
     under45 >= Math.ceil(total * 0.9) &&
     invariantOk === total &&
+    steady.length > 0 &&
+    steadyOnlyPause === steady.length &&
     progressed;
   console.log(`  VERDICT: ${acceptance ? 'PASS' : 'FAIL'}`);
   console.log('  This grants no signing or financial authority.');
