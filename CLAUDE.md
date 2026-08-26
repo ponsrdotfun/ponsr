@@ -371,6 +371,16 @@ it did, and the route then published the raw `DB path /secret/path failed`; an u
 identity refresh still published HTTP 200 with `ok:true` when a cached pass existed; and
 the "one total deadline" was topped up by two fresh 250 ms floors after it had expired.
 
+A **sixth review (2026-08-26) found the never-throws claim was still false**, and the
+shape is worth keeping: only the synchronous rolling-spend callback had been wrapped. The
+other six dependencies are *invoked synchronously* when their promises are constructed, so
+any implementation throwing before it returns one escaped `buildCoreEvidence` entirely and
+the legacy `/status` catch published the raw message — one integration bug away from leaking
+an internal path through a public endpoint. It also found the producer publishing
+`ok: true` beside `canLaunchOnChain: false`, **relying on its own consumer to repair it**:
+an authoritative endpoint has to be internally valid before anybody reads it, because a
+second opinion is not a substitute for being right.
+
 Three general rules came out of it. **A limit must never be evidence about itself** —
 every quantity a verdict depends on is caller-pinned now. **A promise that never throws is
 worth nothing if a plain function call beside it can.** And **`getNetwork()` under

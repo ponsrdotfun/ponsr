@@ -240,7 +240,16 @@ export function validateCoreEvidence(
   else if (fingerprint !== options.expectedEndpointFingerprint) {
     fail('endpoint-mismatch', `served through ${fingerprint}, expected ${options.expectedEndpointFingerprint}`);
   }
-  if (e.endpointOrigin !== null && e.endpointOrigin !== undefined && parseOrigin(e.endpointOrigin) === null) {
+  // An admitted endpoint carries BOTH a fingerprint and a bare origin. A null origin is
+  // valid only for a document that had no endpoint at all -- and such a document is not ok,
+  // so it fails elsewhere anyway. Accepting null beside a claimed fingerprint would let the
+  // schema narrative and the implementation disagree, which is how a contract stops meaning
+  // anything.
+  if (e.endpointOrigin === null || e.endpointOrigin === undefined) {
+    if (fingerprint !== null) {
+      fail('endpoint-missing', 'an endpoint fingerprint is present but no origin accompanies it');
+    }
+  } else if (parseOrigin(e.endpointOrigin) === null) {
     // A published origin carrying a path, query or userinfo would be a leak; accepting it
     // would be helping to hide one.
     fail('malformed-field', 'endpointOrigin is not a bare scheme-and-host origin');

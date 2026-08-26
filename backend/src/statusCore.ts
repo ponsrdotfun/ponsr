@@ -81,6 +81,7 @@ export const CORE_PROBLEMS = [
   'readiness-unreadable',
   'readiness-incomplete',
   'readiness-refused',
+  'readiness-inconsistent',
   'treasury-unreadable',
   'treasury-insufficient',
   'spend-unknown',
@@ -207,6 +208,35 @@ export const DEFAULT_IDENTITY_MAX_AGE_MS = 15 * 60 * 1000;
 
 class Expired extends Error {}
 
+/**
+ * Calls a dependency behind a rejection-safe boundary.
+ *
+ * `deps.getChainId()` and its five siblings are INVOKED SYNCHRONOUSLY when the promises are
+ * constructed. An `async` implementation returns a rejected promise, which is handled -- but
+ * a plain function, an injected test double, or any implementation that validates its
+ * arguments before returning can throw BEFORE a promise exists. That throw escaped
+ * `buildCoreEvidence` entirely, reached the legacy `/status` catch, and was published as
+ * `error: <raw message>`. One synchronous integration bug was enough to leak an internal
+ * path or a credential-bearing URL through a public endpoint.
+ *
+ * This is the same lesson as the synchronous rolling-spend call, applied to the rest of the
+ * surface: a promise that never rejects is worth nothing if constructing it can throw.
+ *
+ * Nothing from the thrown value is retained. It becomes a rejection, is classified by the
+ * recorder into a closed outcome, and is mapped to a closed core problem by the caller.
+ */
+function invoke<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    const p = call();
+    // A dependency that returns a non-promise is a broken implementation, not a value.
+    return p && typeof (p as { then?: unknown }).then === 'function'
+      ? p
+      : Promise.reject(new Error('the dependency did not return a promise'));
+  } catch {
+    return Promise.reject(new Error('the dependency threw before returning'));
+  }
+}
+
 /** Bounds one dependency without propagating anything from it. */
 async function within<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -244,11 +274,32 @@ export async function buildCoreEvidence(
   const rec = options.recorder ?? new TimingRecorder(startedAt, now);
   const problems: CoreProblem[] = [];
 
+  // Synchronous setup, audited rather than assumed total.
+  //
+  // `deps.capWei.toString()` throws if capWei is not a bigint; a caller-supplied `now()`
+  // can throw; `new Date(...).toISOString()` throws on a non-finite value. None of those
+  // should be possible with the declared types, but "should be impossible" is exactly the
+  // claim that was wrong twice already, so the boundary is real rather than asserted.
+  const capString = (() => {
+    try {
+      return deps.capWei.toString();
+    } catch {
+      return '0';
+    }
+  })();
+  const stamp = (at: number): string => {
+    try {
+      return new Date(at).toISOString();
+    } catch {
+      return new Date(0).toISOString();
+    }
+  };
+
   const base = {
     schema: CORE_SCHEMA as typeof CORE_SCHEMA,
     version: CORE_VERSION as typeof CORE_VERSION,
     expectedChainId: deps.expectedChainId,
-    capWei: deps.capWei.toString(),
+    capWei: capString,
     publicLaunchEnabled: deps.publicLaunchEnabled,
     observedThrough: deps.observedThrough ?? null,
     endpointOrigin: deps.endpointOrigin ?? null,
@@ -266,7 +317,7 @@ export async function buildCoreEvidence(
     return {
       ...base,
       ok: problems.length === 0,
-      generatedAt: new Date(now()).toISOString(),
+      generatedAt: stamp(now()),
       elapsedMs,
       chainId: null,
       block: null,
@@ -292,12 +343,15 @@ export async function buildCoreEvidence(
   // Started together. Concurrency is the point: the core's cost is its slowest dependency,
   // not their sum, and the recorder attaches to running promises rather than serialising
   // them.
-  const chainP = rec.track('chain', Promise.all([deps.getChainId(), deps.getBlockNumber()]));
-  const feeP = rec.track('launch-fee', deps.getLiveFeeWei());
-  const readyP = rec.track('launch-readiness', deps.getLaunchReadiness(), true);
-  const balanceP = rec.track('treasury-balance', deps.getTreasuryBalanceWei());
+  const chainP = rec.track(
+    'chain',
+    Promise.all([invoke(() => deps.getChainId()), invoke(() => deps.getBlockNumber())])
+  );
+  const feeP = rec.track('launch-fee', invoke(() => deps.getLiveFeeWei()));
+  const readyP = rec.track('launch-readiness', invoke(() => deps.getLaunchReadiness()), true);
+  const balanceP = rec.track('treasury-balance', invoke(() => deps.getTreasuryBalanceWei()));
   const identityP = deps.getDeploymentIdentity
-    ? rec.track('deployment-identity', deps.getDeploymentIdentity())
+    ? rec.track('deployment-identity', invoke(() => deps.getDeploymentIdentity!()))
     : undefined;
   if (!identityP) rec.absent('deployment-identity');
 
@@ -333,16 +387,47 @@ export async function buildCoreEvidence(
   try {
     const r = await within(readyP, remaining(), 'launch readiness');
     const complete = !r.incomplete;
+    // Observed values, not truthy coercion: `1`, `'false'` and an object are all truthy, and
+    // the upstream shape is not this file's to trust.
+    const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+    const launchEnabled = bool(r.launchEnabled);
+    const whitelisted = bool(r.whitelisted);
+    const canLaunch = bool(r.canLaunch);
+    const onChain = bool(r.canLaunchOnChain);
+
     readiness = {
-      ready: Boolean(r.canLaunch ?? (r.launchEnabled || r.whitelisted)),
-      launchEnabled: Boolean(r.launchEnabled),
-      whitelisted: Boolean(r.whitelisted),
-      canLaunchOnChain: r.canLaunchOnChain ?? null,
+      ready: canLaunch ?? Boolean(launchEnabled || whitelisted),
+      launchEnabled: launchEnabled ?? false,
+      whitelisted: whitelisted ?? false,
+      canLaunchOnChain: onChain,
       complete,
       detail: r.detail,
     };
     if (!complete) problems.push('readiness-incomplete');
     if (!readiness.ready) problems.push('readiness-refused');
+
+    // THE FACTORY'S OWN PREDICATE, ENFORCED BY THE PRODUCER.
+    //
+    // The consumer rejected `canLaunchOnChain !== true` while this file happily published
+    // HTTP 200 and `ok: true` in exactly that state, relying on the validator to repair it.
+    // An authoritative endpoint has to be internally valid before anybody reads it: a
+    // separate consumer is a second opinion, not a substitute for being right.
+    //
+    // Semantics, pinned once: MISSING is incomplete evidence; FALSE is the chain refusing.
+    if (onChain === null) {
+      if (!problems.includes('readiness-incomplete')) problems.push('readiness-incomplete');
+    } else if (!onChain) {
+      if (!problems.includes('readiness-refused')) problems.push('readiness-refused');
+    }
+
+    // The factory's guard is `launchEnabled || whitelisted`. Ready with neither is a
+    // document contradicting the contract it claims to describe.
+    if (readiness.ready && !readiness.launchEnabled && !readiness.whitelisted) {
+      problems.push('readiness-inconsistent');
+    }
+    if (launchEnabled === null || whitelisted === null) {
+      if (!problems.includes('readiness-incomplete')) problems.push('readiness-incomplete');
+    }
   } catch (err) {
     expired('launch-readiness', err);
     problems.push('readiness-unreadable');

@@ -483,9 +483,19 @@ app.get('/status', async (_req, res) => {
     const report = await assembleStatus(rpcPool, statusDepsFor);
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {
-    // buildStatus is written not to throw; if it does, saying so beats a 500 with
-    // no body, which is indistinguishable from the process being gone.
-    res.status(503).json({ state: 'down', error: String((err as Error)?.message ?? err) });
+    /**
+     * A CLOSED SHAPE, never the exception text.
+     *
+     * This published `error: String(err.message)`. `buildStatus` is written not to throw,
+     * but a synchronous throw from any injected dependency reached here -- and the message
+     * can carry an internal filesystem path or a credential-bearing URL. One integration
+     * bug was enough to leak either through a public endpoint.
+     *
+     * Saying so still beats a bare 500 with no body, which is indistinguishable from the
+     * process being gone. It just says so in a fixed vocabulary.
+     */
+    void err;
+    res.status(503).json({ state: 'down', problem: 'status-could-not-be-assembled' });
   }
 });
 

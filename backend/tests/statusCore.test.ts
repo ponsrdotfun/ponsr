@@ -221,7 +221,10 @@ describe('GREEN: the core is bounded regardless of which dependency is slow', ()
         getBlockNumber: () => slow(1234, 120),
         getLiveFeeWei: () => slow(FEE, 120),
         getTreasuryBalanceWei: () => slow(ETH / 50n, 120),
-        getLaunchReadiness: () => slow({ launchEnabled: true, whitelisted: false, canLaunch: true }, 120),
+        // canLaunchOnChain included: the producer now requires the factory's own predicate,
+        // so a fixture omitting it is incomplete evidence rather than a passing core.
+        getLaunchReadiness: () =>
+          slow({ launchEnabled: true, whitelisted: false, canLaunch: true, canLaunchOnChain: true }, 120),
         getDeploymentIdentity: () => slow({ result: { ok: true }, ageMs: 0, fromCache: false }, 120),
       }),
       { budgetMs: 2000 }

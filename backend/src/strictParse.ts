@@ -98,11 +98,29 @@ export function parseOrigin(raw: unknown): string | null {
   return `${u.protocol}//${u.host}`;
 }
 
-/** ISO timestamp, as epoch ms. Null when absent or unparseable. */
+/**
+ * A CANONICAL ISO-8601 UTC timestamp, as epoch ms. Null for anything else.
+ *
+ * `Date.parse` is famously permissive: it accepts RFC 1123 (`Wed, 26 Aug 2026 03:00:00
+ * GMT`), bare `2026-08-26`, and several locale-ish forms. The contract says these fields
+ * are ISO, and a parser that quietly accepts four other spellings makes that claim false --
+ * two documents that differ byte-for-byte would compare equal, and a producer could drift
+ * to a different format without anything noticing.
+ *
+ * So the round trip is the test: the value must be exactly what `toISOString()` produces
+ * for the instant it names.
+ */
 export function parseTimestamp(raw: unknown): number | null {
   if (typeof raw !== 'string' || raw.length > 40) return null;
   const at = Date.parse(raw);
-  return Number.isFinite(at) ? at : null;
+  if (!Number.isFinite(at)) return null;
+  let canonical: string;
+  try {
+    canonical = new Date(at).toISOString();
+  } catch {
+    return null;
+  }
+  return canonical === raw ? at : null;
 }
 
 /**
