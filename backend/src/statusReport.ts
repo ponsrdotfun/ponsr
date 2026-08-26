@@ -78,8 +78,56 @@ export interface StatusDeps {
      *  rather than inferred: Ponsr spent a week deriving this from a superseded
      *  contract's fields and was confidently wrong the whole time. */
     canLaunch?: boolean;
+    /**
+     * What `canLaunch()` returned before any local narrowing.
+     *
+     * `canLaunch` above is narrowed to fail closed on unrelated conditions -- a mismatched
+     * fee escrow makes it false even when pons would happily accept the launch. That is
+     * right for a gate and wrong for a report: an operator reading `canLaunch: false` goes
+     * looking for a closed launchpad. Both are published so the page can say which it is.
+     */
+    canLaunchOnChain?: boolean;
     durable?: boolean;
     detail?: string;
+    /**
+     * Per-call evidence for WHY this check was slow.
+     *
+     * The outage that motivated this had `launchpad: down -- did not answer within 5000ms`
+     * and nothing else. That sentence is compatible with a closed launchpad, a slow RPC, a
+     * wrong endpoint and a bug, and distinguishing them needed access nobody watching the
+     * page had.
+     */
+    timings?: Array<{ name: string; ms: number; ok: boolean; shared: boolean; error?: string }>;
+    totalMs?: number;
+  }>;
+  /**
+   * Which RPC endpoints exist and which are allowed to answer -- identity, never the URL.
+   *
+   * `RPC_URL` is a Fly secret whose value cannot be read back, so "is the backend pointed
+   * at the endpoint I just tested?" was unanswerable by anyone, including the operator who
+   * set it. This publishes enough to compare and not enough to call.
+   */
+  describeRpc?: () => {
+    endpoints: Array<{
+      identity: { origin: string | null; fingerprint: string; credentialed?: boolean };
+      admitted: boolean;
+      refusedBecause?: string;
+      probeMs: number;
+    }>;
+    activeIndex: number | null;
+  };
+  /**
+   * Deployment identity, on its own budget and cadence.
+   *
+   * Split out of the launchpad check because a 48 KB bytecode download sharing a deadline
+   * with the permission reads meant a slow transfer published `launchpad: down` -- a claim
+   * about pons produced by a file transfer.
+   */
+  getDeploymentIdentity?: () => Promise<{
+    result: { ok: boolean; mismatches: string[] } | null;
+    ageMs: number | null;
+    fromCache: boolean;
+    unreadable?: string;
   }>;
   /** Which registry entry the bot launches through, so the page names the contract
    *  it is actually reading rather than "the launchpad". */
@@ -275,11 +323,59 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
     });
   }
 
+  // Where the traffic goes, published before anything that depends on it. An operator
+  // debugging a slow readiness check needs this first, not buried under the consequences.
+  if (deps.describeRpc) {
+    const pool = deps.describeRpc();
+    const active = pool.activeIndex === null ? null : pool.endpoints[pool.activeIndex];
+    const refused = pool.endpoints.filter((e) => e.refusedBecause && e.refusedBecause !== 'not probed yet');
+    const where = active
+      ? `${active.identity.origin ?? 'unparseable'} (fingerprint ${active.identity.fingerprint})`
+      : 'none admitted yet';
+    const extra = [
+      `${pool.endpoints.length} configured`,
+      ...refused.map(
+        (e) => `REFUSED ${e.identity.origin ?? 'unparseable'}: ${e.refusedBecause}`
+      ),
+    ];
+    checks.push({
+      name: 'rpc-endpoint',
+      // A refused endpoint is not an outage: the primary may be serving perfectly while a
+      // misconfigured fallback sits refused beside it. Reported, not escalated.
+      state: active ? 'ok' : 'degraded',
+      detail: `${where}; ${extra.join('; ')}`,
+    });
+  }
+
   try {
     const r = await within(deps.getLaunchReadiness(), timeoutMs, 'launch readiness');
     // canLaunch is the contract's own answer where it exists; the older deployments
     // have no such helper, so the inference is the fallback rather than the rule.
     const permitted = r.canLaunch ?? (r.launchEnabled || r.whitelisted);
+
+    // Appended to whichever detail is chosen below. Present on the healthy path too: a
+    // check that only reports its cost once it has already failed gives an operator no
+    // baseline to compare against, which is how a four-round-trip check sat unnoticed.
+    const cost: string[] = [];
+    if (typeof r.totalMs === 'number') cost.push(`read in ${r.totalMs}ms`);
+    if (r.timings?.length) {
+      const slowest = r.timings.reduce((a, t) => (t.ms > a.ms ? t : a));
+      cost.push(
+        r.timings.every((t) => t.shared)
+          ? `${r.timings.length} calls in one batch`
+          : `slowest call ${slowest.name} ${slowest.ms}ms`
+      );
+      const failed = r.timings.filter((t) => !t.ok).map((t) => t.name);
+      if (failed.length) cost.push(`did not answer: ${failed.join(', ')}`);
+    }
+    // Only when the two disagree -- which is exactly when the narrowed field misleads.
+    if (r.canLaunchOnChain !== undefined && r.canLaunchOnChain !== r.canLaunch) {
+      cost.push(
+        `canLaunch() on chain is ${r.canLaunchOnChain}; refused locally for another reason`
+      );
+    }
+    const suffix = cost.length ? ` [${cost.join('; ')}]` : '';
+
     checks.push(
       permitted
         ? {
@@ -289,17 +385,54 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
             // gate works exactly as well as one riding on a whitelist, right up until
             // the gate closes -- and only one of those is worth planning around.
             detail:
-              r.detail ??
-              (r.whitelisted ? 'whitelisted on this deployment' : 'open via the public gate'),
+              (r.detail ??
+                (r.whitelisted ? 'whitelisted on this deployment' : 'open via the public gate')) +
+              suffix,
           }
         : {
             name: 'launchpad',
             state: 'degraded',
-            detail: r.detail ?? 'this deployment would refuse a launch from this address',
+            detail: (r.detail ?? 'this deployment would refuse a launch from this address') + suffix,
           }
     );
   } catch (err) {
     checks.push({ name: 'launchpad', state: 'down', detail: reason(err) });
+  }
+
+  if (deps.getDeploymentIdentity) {
+    try {
+      const id = await within(deps.getDeploymentIdentity(), timeoutMs, 'deployment identity');
+      const age =
+        id.ageMs === null ? 'never measured' : `measured ${Math.round(id.ageMs / 1000)}s ago`;
+      if (!id.result) {
+        checks.push({
+          name: 'deployment-identity',
+          state: 'degraded',
+          detail: id.unreadable ? `not verified yet: ${id.unreadable}` : 'not verified yet',
+        });
+      } else if (!id.result.ok) {
+        // The most serious thing this page can say: the contract being addressed is not
+        // the one the registry describes. Never softened by a cache -- mismatches are
+        // re-read every time.
+        checks.push({
+          name: 'deployment-identity',
+          state: 'down',
+          detail: `does NOT match the registry (${age}) -- ${id.result.mismatches.join('; ')}`,
+        });
+      } else {
+        checks.push({
+          name: 'deployment-identity',
+          // A pass that could not be refreshed is still a pass, but its age is stated so
+          // nobody reads a remembered answer as a fresh one.
+          state: id.unreadable ? 'degraded' : 'ok',
+          detail: id.unreadable
+            ? `matched the registry (${age}), but the latest attempt failed: ${id.unreadable}`
+            : `matches the registry (${id.fromCache ? age : 'measured just now'})`,
+        });
+      }
+    } catch (err) {
+      checks.push({ name: 'deployment-identity', state: 'degraded', detail: reason(err) });
+    }
   }
 
   try {

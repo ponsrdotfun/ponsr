@@ -9,6 +9,9 @@ import { PrivyWalletResolver } from './walletResolver';
 import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
+import { probeLaunchPermission } from './readinessProbe';
+import { RpcPool, parseEndpointList } from './rpcPool';
+import { IdentityWatch } from './identityWatch';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
 import { startReconciliation, ReconcilerHandle } from './reconciler';
@@ -85,6 +88,24 @@ function reportStorage(): void {
 reportStorage();
 const db = new Db(config.DATABASE_PATH);
 const provider = createProvider();
+
+/**
+ * A second opinion for the READ path only, and deliberately not for the launch path.
+ *
+ * Every endpoint is admitted before it answers -- chain id and factory bytecode must match
+ * the registry -- so a fallback cannot move the bot onto a different chain or a forked
+ * state. Empty by default: one endpoint remains the behaviour until an operator adds one.
+ *
+ * The launch path keeps the single pinned `provider` above, on purpose. Failing over
+ * mid-launch means a nonce reserved against one node and a transaction broadcast through
+ * another, and the canary's whole ambiguity model assumes one view of the chain. Making
+ * that path resilient is a financial-path change and needs its own review, not a quiet
+ * ride-along with a status-page fix.
+ */
+const rpcPool = new RpcPool(parseEndpointList(config.RPC_URL, config.RPC_FALLBACK_URLS));
+
+/** Deployment identity, cached with a published age, off the launchpad check's deadline. */
+const identityWatch = new IdentityWatch();
 const treasurySigner = createTreasurySigner(provider);
 const treasuryPolicy = treasuryPolicyFromConfig();
 
@@ -297,21 +318,40 @@ app.get('/status', async (_req, res) => {
       getLaunchReadiness: async () => {
         const d = launchTarget.deployment;
         if (!d) return deps.getLaunchReadiness();
-        const r = await readCurrentReadiness(
-          provider,
-          await treasurySigner.address(),
-          config.PONS_LAUNCH_CONFIG_ID,
-          '0x0000000000000000000000000000000000000000',
-          d
+        // ONE round trip, and each call timed. This used to be readCurrentReadiness, which
+        // makes four sequential trips -- a 48 KB bytecode download, then feeEscrow alone,
+        // then the permission batch, then the launch config -- inside a single 5 000 ms
+        // deadline. It did not fail because the launchpad was closed or the RPC was
+        // broken; it failed whenever one round trip cost more than about a second.
+        const launcher = await treasurySigner.address();
+        const probe = await rpcPool.run((p) =>
+          probeLaunchPermission(
+            p,
+            launcher,
+            config.PONS_LAUNCH_CONFIG_ID,
+            '0x0000000000000000000000000000000000000000',
+            d
+          )
         );
+        const r = probe.verdict;
+        if (!r) {
+          // A permission read did not answer. Thrown rather than reported as a closed
+          // launchpad: not knowing is not the same as being refused.
+          throw new Error(probe.failure ?? 'launch readiness could not be determined');
+        }
         return {
           launchEnabled: r.launchEnabled,
           whitelisted: r.whitelisted,
           canLaunch: r.canLaunch,
+          canLaunchOnChain: r.canLaunchOnChain,
           durable: r.durable,
           detail: r.reason ? `${r.reason}` : r.detail,
+          timings: probe.timings,
+          totalMs: probe.totalMs,
         };
       },
+      describeRpc: () => rpcPool.status(),
+      getDeploymentIdentity: () => rpcPool.run((p) => identityWatch.check(p)),
       /**
        * The UTC CALENDAR DAY, for the human-facing line only.
        *
