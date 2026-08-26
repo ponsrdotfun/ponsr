@@ -339,6 +339,14 @@ missing authoritative figure plus a quiet calendar day published `daily-cap: ok`
 concurrent request could leave one response carrying `observedThrough=A` in the envelope
 while telling a human that B was serving.
 
+**A fifth review (2026-08-26) found the fix's own optimisation defeating it.** The pool
+coalesces concurrent admissions, and `admit()` handed a later caller the in-flight promise
+as-is — so a `/status` request with a **300 ms budget took 983 ms**, waiting under a stalled
+1 000 ms probe started by a caller with no deadline at all. Every existing test began from an
+idle pool, so nothing touched the concurrency path. The lesson rhymes with the one above: a
+bound is only as good as the compositions you actually exercise, and an optimisation that
+shares work must not also share the waiting. Probe and wait are separate clocks now.
+
 **The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
 table; the journal is operator state outside the container, deliberately, so a deploy cannot
 erase a record of transactions that are still on chain. Migrations to it — such as the
