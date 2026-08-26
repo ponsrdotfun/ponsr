@@ -91,8 +91,9 @@ describe('the fallback pool is wired to the read path only', () => {
     };
     roots.forEach(walk);
 
-    // rpcPool.ts defines it; index.ts is the only consumer, and only for /status.
-    expect(found.sort()).toEqual(['src/index.ts', 'src/rpcPool.ts']);
+    // rpcPool.ts defines it; statusSession.ts assembles one bounded /status response from
+    // it; index.ts wires those together. Nothing else in the shipped tree may touch it.
+    expect(found.sort()).toEqual(['src/index.ts', 'src/rpcPool.ts', 'src/statusSession.ts']);
   });
 
   it('reaches the pool only inside the /status handler', () => {

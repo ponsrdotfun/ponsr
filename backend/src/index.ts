@@ -21,7 +21,8 @@ import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
-import { buildStatus, statusHttpCode } from './statusReport';
+import { statusHttpCode } from './statusReport';
+import { assembleStatus } from './statusSession';
 import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
@@ -325,13 +326,13 @@ app.get('/status', async (_req, res) => {
      * Null when nothing can be admitted. The chain checks then fail as they should, and
      * `rpc-endpoint` reports why each candidate was refused.
      */
-    const session = await rpcPool.acquire();
-    const readProvider = session?.provider;
-    const unavailable = () => {
-      throw new Error('no admitted RPC endpoint is available to serve this status request');
-    };
+    const report = await assembleStatus(rpcPool, (session) => {
+      const readProvider = session?.provider;
+      const unavailable = () => {
+        throw new Error('no admitted RPC endpoint is available to serve this status request');
+      };
 
-    const report = await buildStatus({
+      return {
       expectedChainId: config.CHAIN_ID,
       getChainId: async () =>
         readProvider ? Number((await readProvider.getNetwork()).chainId) : unavailable(),
@@ -383,10 +384,8 @@ app.get('/status', async (_req, res) => {
       // other chain read above used.
       getDeploymentIdentity: () =>
         readProvider && session
-          ? identityWatch.check(readProvider, endpointFingerprint(session.endpoint))
+          ? identityWatch.check(readProvider, session.endpoint.fingerprint)
           : Promise.reject(new Error('no admitted RPC endpoint is available')),
-      /** Which endpoint every chain observation in this response came from. */
-      observedThrough: session ? endpointFingerprint(session.endpoint) : undefined,
       describeRpc: () => rpcPool.status(),
       /**
        * The UTC CALENDAR DAY, for the human-facing line only.
@@ -432,6 +431,7 @@ app.get('/status', async (_req, res) => {
       // Free at twitterapi.io, and it answers while data calls are being refused.
       readCredits: () => (deps.xClient as { getReadCredits?: () => Promise<{ credits: number; bonus: number } | null> }).getReadCredits?.() ?? Promise.resolve(null),
       sweepStaleAfterMs: Math.max(config.MENTION_POLL_SECONDS * 3, 900) * 1000,
+      };
     });
     res.status(statusHttpCode(report)).json(report);
   } catch (err) {

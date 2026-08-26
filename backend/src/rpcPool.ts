@@ -64,9 +64,16 @@ export type RefusalCode =
   | 'runtime-unreadable'
   | 'runtime-mismatch'
   | 'operation-timed-out'
-  | 'operation-failed';
+  | 'operation-failed'
+  | 'budget-exhausted';
 
-/** True for reasons that are a property of the endpoint rather than of the moment. */
+/**
+ * True for reasons that are a property of the endpoint rather than of the moment.
+ *
+ * `budget-exhausted` is deliberately NOT permanent: it says the CALLER ran out of time,
+ * which is a fact about one request and not about the endpoint. Caching it would let a
+ * single slow response mark a healthy endpoint unusable for everything after it.
+ */
 function isPermanent(code: RefusalCode): boolean {
   return code === 'chain-id-mismatch' || code === 'runtime-mismatch' || code === 'url-unparseable';
 }
@@ -154,6 +161,23 @@ export interface RpcPoolOptions {
 export const DEFAULT_ADMISSION_TTL_MS = 5 * 60 * 1000;
 export const DEFAULT_OPERATION_TIMEOUT_MS = 2500;
 
+/**
+ * How long the CALLER has left, for work that is part of a larger bounded response.
+ *
+ * Without this the pool's own timeouts are additive with the caller's: /status opened with
+ * `await rpcPool.acquire()` and only afterwards started its 5 000 ms deadline, so two
+ * stalled candidates at the 4 000 ms default cost 8 000 ms before the "one budget for the
+ * whole response" even began. Measured on the route: 8 026 ms of acquisition, 8 038 ms
+ * total, against a claimed 5 000 ms bound.
+ *
+ * Every internal timeout is clamped to what remains, so a caller cannot configure an
+ * admission or operation timeout that outlives the deadline it is nested inside.
+ */
+export interface BudgetedCall {
+  /** Absolute epoch-ms deadline for the whole enclosing response. */
+  deadlineMs?: number;
+}
+
 class TimedOut extends Error {}
 
 /**
@@ -239,21 +263,27 @@ export class RpcPool {
    * round trips would make adding a fallback measurably slower on the happy path, which is
    * a good way to ensure nobody ever configures one.
    */
-  private async admit(index: number): Promise<EndpointAdmission> {
+  private async admit(index: number, deadlineMs?: number): Promise<EndpointAdmission> {
     if (this.fresh(index)) return this.admissions[index]!;
     // Concurrent callers must not each start their own probe. Per-endpoint, so a second
     // endpoint's probe is never merged with the first's.
     const running = this.inFlight[index];
     if (running) return running;
 
-    const probe = this.probe(index).finally(() => {
+    const probe = this.probe(index, deadlineMs).finally(() => {
       this.inFlight[index] = null;
     });
     this.inFlight[index] = probe;
     return probe;
   }
 
-  private async probe(index: number): Promise<EndpointAdmission> {
+  /** What this call may still spend: the caller's remaining time, never more. */
+  private allowance(configured: number, deadlineMs?: number): number {
+    if (deadlineMs === undefined) return configured;
+    return Math.min(configured, Math.max(0, deadlineMs - this.now()));
+  }
+
+  private async probe(index: number, deadlineMs?: number): Promise<EndpointAdmission> {
     const url = this.urls[index];
     const identity = describeRpcEndpoint(url);
     const started = this.now();
@@ -273,6 +303,13 @@ export class RpcPool {
       });
 
     if (!isIdentified(identity)) return refuse('url-unparseable', identity.problem);
+
+    const budget = this.allowance(this.admissionTimeoutMs, deadlineMs);
+    if (budget <= 0) {
+      // Not a judgement about the endpoint. Reported as its own category so an operator
+      // reading a refusal can tell "this endpoint is wrong" from "we ran out of time".
+      return refuse('budget-exhausted', 'the status request ran out of budget before this endpoint was probed');
+    }
 
     let provider: ethers.JsonRpcProvider;
     try {
@@ -294,11 +331,11 @@ export class RpcPool {
           provider.send('eth_chainId', []) as Promise<unknown>,
           provider.getCode(this.deployment.factory),
         ]),
-        this.admissionTimeoutMs
+        budget
       );
     } catch (err) {
       if (err instanceof TimedOut) {
-        return refuse('admission-timed-out', `the endpoint did not answer within ${this.admissionTimeoutMs}ms`);
+        return refuse('admission-timed-out', `the endpoint did not answer within ${budget}ms`);
       }
       return refuse('chain-id-unreadable', 'the endpoint did not return a usable chain id and runtime');
     }
@@ -350,7 +387,8 @@ export class RpcPool {
    * whole deadline.
    */
   async run<T>(
-    op: (provider: ethers.JsonRpcProvider, endpoint: RpcEndpointDescription) => Promise<T>
+    op: (provider: ethers.JsonRpcProvider, endpoint: RpcEndpointDescription) => Promise<T>,
+    options: BudgetedCall = {}
   ): Promise<T> {
     const token = ++this.generation;
     const problems: string[] = [];
@@ -362,7 +400,7 @@ export class RpcPool {
     ];
 
     for (const index of order) {
-      const admission = await this.admit(index);
+      const admission = await this.admit(index, options.deadlineMs);
       const where = isIdentified(admission.identity) ? admission.identity.origin : 'unparseable endpoint';
       if (!admission.admitted) {
         problems.push(`${where}: ${admission.refusedBecause}`);
@@ -373,8 +411,13 @@ export class RpcPool {
         problems.push(`${where}: admitted but has no provider`);
         continue;
       }
+      const opBudget = this.allowance(this.operationTimeoutMs, options.deadlineMs);
+      if (opBudget <= 0) {
+        problems.push(`${where}: the status request ran out of budget before this endpoint was tried`);
+        continue;
+      }
       try {
-        const value = await bounded(op(provider, admission.identity), this.operationTimeoutMs);
+        const value = await bounded(op(provider, admission.identity), opBudget);
         // A stale generation means this caller already gave up and something else has since
         // run. Recording `active` here would let an abandoned attempt reassign the pool
         // behind a later caller's back.
@@ -383,7 +426,7 @@ export class RpcPool {
       } catch (err) {
         const timedOut = err instanceof TimedOut;
         problems.push(
-          `${where}: ${timedOut ? `the operation did not answer within ${this.operationTimeoutMs}ms` : 'the operation failed'}`
+          `${where}: ${timedOut ? `the operation did not answer within ${opBudget}ms` : 'the operation failed'}`
         );
         // Nothing from `err` is retained. The operation callback is application code that
         // wraps provider errors, and those carry the request URL.
@@ -409,17 +452,25 @@ export class RpcPool {
    * Returns null rather than throwing when nothing can be admitted: the caller is a status
    * page whose job is to report that, not to fail.
    */
-  async acquire(): Promise<{ provider: ethers.JsonRpcProvider; endpoint: RpcEndpointDescription } | null> {
+  async acquire(
+    options: BudgetedCall = {}
+  ): Promise<{ provider: ethers.JsonRpcProvider; endpoint: RpcEndpointDescription; index: number } | null> {
     const order = [
       ...(this.active !== null ? [this.active] : []),
       ...this.urls.map((_, i) => i).filter((i) => i !== this.active),
     ];
     for (const index of order) {
-      const admission = await this.admit(index);
+      // Every candidate shares the caller's ONE remaining budget. Previously each got the
+      // full admissionTimeoutMs, so N stalled endpoints cost N x 4000ms before the response
+      // it belongs to had started counting at all.
+      const admission = await this.admit(index, options.deadlineMs);
       const provider = this.providers[index];
       if (admission.admitted && provider) {
         this.active = index;
-        return { provider, endpoint: admission.identity };
+        // The INDEX travels with the session. A caller that renders "which endpoint served
+        // this response" must not look up `activeIndex` later: a concurrent request can
+        // move it between acquisition and rendering.
+        return { provider, endpoint: admission.identity, index };
       }
     }
     return null;
