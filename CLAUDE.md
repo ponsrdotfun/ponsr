@@ -287,6 +287,39 @@ was misdiagnosed), and `rpcPool.ts` (a bounded fallback that admits an endpoint 
 chain id and factory bytecode match the registry, wired to the read path only). Not yet
 deployed. See `PONSR-READINESS-OBSERVABILITY-REPORT.txt`.
 
+**An independent audit of PR #20 (2026-08-26) found nine defects in that work, and the
+first one is the most important lesson in this file after §11 of the findings.**
+
+`rpcPool`'s wrong-chain admission gate **did nothing at all**. It asked
+`provider.getNetwork()`, but `new JsonRpcProvider(url, chainId, { staticNetwork: true })`
+answers that from the CONFIGURED value and sends no request. Reproduced: a server answering
+chain 46630, a pool expecting 4663, **zero methods reaching the transport**, endpoint
+**ADMITTED**. The gate compared a constant to itself.
+
+Every wrong-chain test passed, because they supplied a fake provider whose `getNetwork()`
+returned whatever the test wanted. **A mock placed above the layer under test can only
+report the author's expectations back** — and this repository had already written that
+sentence down, in `readinessRoundTrips.test.ts`, before making the mistake in the file next
+to it. The eight tests were deleted rather than repaired: adding a `send` stub would have
+made them green again and rebuilt the same false comfort. They are replaced by
+`rpcPoolTransport.test.ts`, which drives a real `JsonRpcProvider` against a real local
+JSON-RPC server and asserts on the methods that server was **actually asked for**.
+
+The other eight are recorded in `PONSR-PR20-AUDIT-CLOSURE-REPORT.txt`. Three are worth
+carrying forward as general rules:
+
+- **A revert is proven by revert DATA, not by an error code.** With ethers 6.17 every
+  `eth_call` failure is `CALL_EXCEPTION`, and a revert carrying no data is indistinguishable
+  from `-32000 server overloaded` down to the same `missing revert data` message. Code alone
+  would classify an overloaded node as the contract saying no.
+- **A missing input is not a permissive input.** An unreadable `launchFee` became `0n`,
+  nothing in the verdict inspects the fee, and `/status` published `launchpad: ok` for a
+  launch whose price nobody had managed to read.
+- **`/status` reported the UTC calendar day while `validator.ts` admits against a rolling
+  24h window.** At 00:01 UTC the page showed a full cap of headroom while every launch was
+  being refused — and it told the operator refusals end "at midnight UTC", which is not when
+  a rolling window frees up.
+
 **The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
 table; the journal is operator state outside the container, deliberately, so a deploy cannot
 erase a record of transactions that are still on chain. Migrations to it — such as the
