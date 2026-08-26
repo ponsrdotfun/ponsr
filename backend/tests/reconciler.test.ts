@@ -20,6 +20,10 @@ import { MockNotifier } from '../src/monitor';
 import { InboundMention, ParsedIntent } from '../src/types';
 import { PONS_FACTORY_ABI } from '../src/ponsEncoder';
 
+/** The nonce the splitter is predicted and deployed at, so the fakes stay consistent. */
+const SPLITTER_NONCE = 0;
+const ECONOMICS = '0x' + 'ab'.repeat(32);
+
 const TEST_DB_PATH = './data/test-reconciler.sqlite';
 const LIVE_FEE = 500_000_000_000_000n;
 
@@ -38,7 +42,16 @@ class FakeTreasurySigner implements TreasurySigner {
     this.nonce++;
     const hash = `0x${this.nonce.toString().padStart(64, '0')}`;
     if (tx.to === '') {
-      return { hash, wait: async () => ({ status: 1, contractAddress: fakeAddress('splitter' + this.nonce), logs: [] } as any) };
+      // The address a plain CREATE actually produces, so the fake stays self-consistent
+      // with the prediction the orchestrator makes before anything is signed.
+      return {
+        hash,
+        wait: async () => ({
+          status: 1,
+          contractAddress: ethers.getCreateAddress({ from: fakeAddress('fake-treasury'), nonce: SPLITTER_NONCE }),
+          logs: [],
+        } as any),
+      };
     }
     // The CURRENT factory's event, because that is the deployment the injected target
     // names and the shape its calldata is built in.
@@ -104,7 +117,12 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, verifyIdentity: async () => {},
+      provider: {} as any,
+      // Read-only seams: the splitter address is predicted from the treasury's nonce
+      // before anything is signed, and the economics digest is observed independently.
+      getTreasuryNonce: async () => SPLITTER_NONCE,
+      readLaunchEconomics: async () => ECONOMICS,
+      verifyIdentity: async () => {},
       // Required once the injected target reports `supportsPairing: true`, which the
       // executable deployment genuinely does. A stub claiming otherwise would keep these
       // tests on a code path production no longer has.
@@ -152,7 +170,7 @@ describe('reconciler -- recovering mentions the webhook never delivered (Part 7 
               pairToken: req.pairAsset.address,
               creatorTaxBps: 0,
               buybackEnabled: false,
-              expectedEconomics: '0x' + 'ab'.repeat(32),
+              expectedEconomics: ECONOMICS,
               salt: launchSalt(executableDeployment(), req.tweetId),
             },
             feeWei,

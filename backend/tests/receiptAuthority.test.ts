@@ -30,7 +30,16 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ponsr-receipt-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 const TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
-const SPLITTER = '0x9999999999999999999999999999999999999999';
+/**
+ * The splitter address, DERIVED the way a plain CREATE actually derives it.
+ *
+ * The orchestrator predicts this from the treasury's nonce before anything is signed, so
+ * it can build the launch calldata once. A hand-picked constant here would be a fake that
+ * cannot exist, and the flow correctly refuses to send a launch naming a splitter it did
+ * not deploy.
+ */
+const SPLITTER_NONCE = 0;
+const SPLITTER = ethers.getCreateAddress({ from: TREASURY, nonce: SPLITTER_NONCE });
 const REAL_TOKEN = '0x1111111111111111111111111111111111111111';
 const REAL_CURVE = '0x2222222222222222222222222222222222222222';
 const FOREIGN_TOKEN = ethers.getAddress('0x' + 'ba'.repeat(20));
@@ -123,6 +132,11 @@ function depsWithLogs(db: Db, logs: unknown[], replies: string[]) {
       }),
     },
     provider: {} as never,
+    // Read-only seams for the single-build design: the splitter address is predicted from
+    // the treasury's nonce before anything is signed, and the economics digest is observed
+    // independently so the calldata is not its own witness.
+    getTreasuryNonce: async () => SPLITTER_NONCE,
+    readLaunchEconomics: async () => '0x' + 'cd'.repeat(32),
     launchTarget: realTarget(),
     verifyIdentity: async () => {},
     // The factory's post-receipt record, agreeing with the selected factory's own event.

@@ -6,6 +6,11 @@ import { splitterEscrowFor } from '../src/splitterDeployer';
 import { EMPTY_SOCIALS } from '../src/ponsEncoder';
 import { buildCurrentV2LaunchCalldata, launchSalt } from '../src/ponsV2CurrentEncoder';
 
+/** The nonce the splitter is predicted and deployed at, so the fakes stay consistent. */
+const SPLITTER_NONCE = 0;
+const TREASURY_ADDR = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
+const ECONOMICS = '0x' + 'ab'.repeat(32);
+
 /**
  * One selected deployment, threaded through everything that acts on it.
  *
@@ -120,7 +125,7 @@ describe('handleMention verifies the SELECTED deployment', () => {
             pairToken: req.pairAsset.address,
             creatorTaxBps: 0,
             buybackEnabled: false,
-            expectedEconomics: '0x' + 'ab'.repeat(32),
+            expectedEconomics: ECONOMICS,
             salt: launchSalt(deployment, req.tweetId),
           },
           LIVE_FEE,
@@ -151,7 +156,7 @@ describe('handleMention verifies the SELECTED deployment', () => {
         }),
       },
       treasurySigner: {
-        address: async () => '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+        address: async () => TREASURY_ADDR,
         // A creation (`to: ''`) must come back with a contractAddress or deploySplitter
         // refuses -- correctly, since a splitter it cannot name is one nobody can claim
         // from. The first version of this stub returned neither, so every launch failed
@@ -161,12 +166,17 @@ describe('handleMention verifies the SELECTED deployment', () => {
           wait: async () => ({
             status: 1,
             logs: [],
-            contractAddress: tx.to === '' ? '0x' + '99'.repeat(20) : null,
+            contractAddress: tx.to === '' ? ethers.getCreateAddress({ from: TREASURY_ADDR, nonce: SPLITTER_NONCE }) : null,
           }),
         }),
       },
       provider: {} as never,
       launchTarget: targetFor(deployment),
+      // Read-only seams: the splitter address is predicted from the treasury's nonce
+      // before anything is signed, and the economics digest is observed independently so
+      // the calldata is never its own witness.
+      getTreasuryNonce: async () => SPLITTER_NONCE,
+      readLaunchEconomics: async () => ECONOMICS,
       // Records which deployment the guard was actually given.
       verifyIdentity: async () => { seen.push(deployment.id); },
       getLiveFeeWei: async () => LIVE_FEE,

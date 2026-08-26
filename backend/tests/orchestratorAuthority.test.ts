@@ -151,6 +151,10 @@ describe('an injected launch target cannot aim the treasury at a superseded fact
       treasurySigner: signer,
       provider: {} as never,
       launchTarget: target,
+      // Read-only seams: the splitter address is predicted from the treasury's nonce
+      // before anything is signed, and the economics digest is observed independently.
+      getTreasuryNonce: async () => 0,
+      readLaunchEconomics: async () => '0x' + 'ab'.repeat(32),
       verifyIdentity: async () => {},
       assertPairApproved: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,

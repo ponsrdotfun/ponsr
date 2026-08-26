@@ -19,6 +19,9 @@ import { config } from '../src/config';
 import { deploymentById, executableDeployment } from '../src/deployments';
 
 const TEST_DB_PATH = './data/test-orchestrator.sqlite';
+/** The nonce the splitter is predicted and deployed at, so the fakes stay self-consistent. */
+const SPLITTER_NONCE = 0;
+const ECONOMICS = '0x' + 'ab'.repeat(32);
 
 /**
  * These tests exercise the orchestrator, and INJECT the launch target rather than letting
@@ -64,7 +67,7 @@ function injectedTarget(): any {
           pairToken: req.pairAsset.address,
           creatorTaxBps: 0,
           buybackEnabled: false,
-          expectedEconomics: '0x' + 'ab'.repeat(32),
+          expectedEconomics: ECONOMICS,
           salt: launchSalt(d, req.tweetId),
         },
         fee,
@@ -113,8 +116,10 @@ class FakeTreasurySigner implements TreasurySigner {
     const hash = `0x${this.nonce.toString().padStart(64, '0')}`;
 
     if (tx.to === '') {
-      // Contract creation (splitter deployment) -- fabricate a deterministic address.
-      const splitterAddress = fakeAddress(`fake-splitter-${this.nonce}`);
+      // The address a plain CREATE actually produces. A fabricated one cannot exist, and
+      // the orchestrator predicts this from the treasury's nonce before anything is signed
+      // so it can build the launch calldata once.
+      const splitterAddress = ethers.getCreateAddress({ from: this.treasuryAddress, nonce: SPLITTER_NONCE });
       return {
         hash,
         wait: async () => ({ status: 1, contractAddress: splitterAddress, logs: [] } as any),
@@ -227,7 +232,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: wallet,
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       getLiveFeeWei: async () => { chainCalls += 1; return LIVE_FEE; },
       getTreasuryBalanceWei: async () => { chainCalls += 1; return FUNDED_TREASURY; },
       getLaunchReadiness: async () => { chainCalls += 1; return { canLaunch: true, launchConfigUsable: true }; },
@@ -269,7 +274,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner: signer,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       verifyIdentity: async () => {
         order.push('verify');
       },
@@ -293,7 +298,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token),
       verifyIdentity: async () => {
         throw new Error(
           'pons-v2-current-7ed (0x7eD598…) is not the contract the registry describes. ' +
@@ -324,7 +329,7 @@ describe('handleMention -- full pipeline integration', () => {
       walletResolver,
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => LIVE_FEE,
       getTreasuryBalanceWei: async () => FUNDED_TREASURY,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -353,8 +358,8 @@ describe('handleMention -- full pipeline integration', () => {
     ]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention1, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
-    await handleMention(mention2, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention1, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention2, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const user = db.getUser('user_1');
     expect(user).not.toBeNull();
@@ -371,7 +376,7 @@ describe('handleMention -- full pipeline integration', () => {
       },
     };
     const walletResolver = new MockWalletResolver(db);
-    const deps = { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
+    const deps = { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) };
 
     const first = await handleMention(mention, deps);
     const second = await handleMention(mention, deps);
@@ -389,7 +394,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(0); // silent, per composeRejectionReply
@@ -403,7 +408,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('rejected');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -421,7 +426,7 @@ describe('handleMention -- full pipeline integration', () => {
     }]]));
     const walletResolver = new MockWalletResolver(db);
 
-    await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     const launchTx = treasurySigner.sentTransactions.find((t) => t.to === executableDeployment().factory);
     // Decoded against the CURRENT deployment's ABI, which is what was actually sent. The
@@ -441,7 +446,7 @@ describe('handleMention -- full pipeline integration', () => {
     const parser = new MockParser(new Map([[mention.text, HIGH_CONFIDENCE_MOON]]));
     const walletResolver = new MockWalletResolver(db);
 
-    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
+    const outcome = await handleMention(mention, { db, publicLaunchEnabled: true, parser, walletResolver, xClient, treasurySigner, provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {}, getLiveFeeWei: async () => LIVE_FEE, getTreasuryBalanceWei: async () => FUNDED_TREASURY, getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }) });
 
     expect(outcome.kind).toBe('onchain_failure');
     expect(xClient.sentReplies).toHaveLength(1);
@@ -473,7 +478,7 @@ describe('a failed reply must not rewrite a successful launch', () => {
         walletResolver: new MockWalletResolver(db),
         xClient,
         treasurySigner,
-        provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+        provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
         monitor,
         getLiveFeeWei: async () => LIVE_FEE,
         getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
@@ -564,7 +569,7 @@ describe("X's 7-day crypto-address rule", () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -744,7 +749,7 @@ describe('launching paired against an approved asset', () => {
               pairToken: req.pairAsset.address,
               creatorTaxBps: 0,
               buybackEnabled: false,
-              expectedEconomics: '0x' + 'ab'.repeat(32),
+              expectedEconomics: ECONOMICS,
               salt: launchSalt(executableDeployment(), req.tweetId),
             },
             fee,
@@ -766,7 +771,7 @@ describe('launching paired against an approved asset', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -782,15 +787,16 @@ describe('launching paired against an approved asset', () => {
     });
     expect(outcome.kind).toBe('launched');
     /*
-     * TWO builds, not one, and the difference is the point.
+     * ONE build, and the difference is the point.
      *
-     * The orchestrator builds once against a PLACEHOLDER recipient purely to inspect where
-     * the transaction goes, before the splitter is deployed and paid for -- a target that
-     * declares the current factory and then builds elsewhere has to be caught before money
-     * moves, not after. The second build is the one that is sent.
+     * There were briefly two -- a dry build inspected before the splitter deploy and the
+     * real one after it -- which left a stateful target free to answer honestly the first
+     * time and lie the second, with a paid splitter deploy in between. The splitter's
+     * address is predicted now, so the launch is built once, inspected once, and those
+     * exact bytes are sent.
      */
-    expect(built).toHaveLength(2);
-    expect(built.at(-1)!.pairAsset.symbol).toBe('AAPL');
+    expect(built).toHaveLength(1);
+    expect(built[0].pairAsset.symbol).toBe('AAPL');
   });
 
   // Silence here would be the worst outcome: the person gets a token priced in
@@ -830,7 +836,7 @@ describe('launching paired against an approved asset', () => {
       pairAssets: { resolve: async () => { throw new Error('must not be consulted'); } },
     });
     expect(outcome.kind).toBe('launched');
-    expect(built.at(-1)!.pairAsset).toMatchObject({ address: ETH_ASSET.address, symbol: 'ETH' });
+    expect(built[0].pairAsset).toMatchObject({ address: ETH_ASSET.address, symbol: 'ETH' });
   });
 
   // A deployment with no registry configured must still launch, against ETH.
@@ -838,7 +844,7 @@ describe('launching paired against an approved asset', () => {
     const { built, target } = recordingTarget();
     const outcome = await run('AAPL', { launchTarget: target });
     expect(outcome.kind).toBe('launched');
-    expect(built.at(-1)!.pairAsset.symbol).toBe('ETH');
+    expect(built[0].pairAsset.symbol).toBe('ETH');
   });
 });
 
@@ -878,7 +884,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
@@ -905,7 +911,7 @@ describe('when the parser cannot be reached', () => {
       walletResolver: new MockWalletResolver(db),
       xClient,
       treasurySigner,
-      provider: {} as any, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
+      provider: {} as any, getTreasuryNonce: async () => SPLITTER_NONCE, readLaunchEconomics: async () => ECONOMICS, launchTarget: injectedTarget(), readLaunchRecord: async (_d: any, token: string) => treasurySigner.launchRecord(token), verifyIdentity: async () => {}, assertPairApproved: async () => {},
       getLiveFeeWei: async () => 500_000_000_000_000n,
       getTreasuryBalanceWei: async () => 50_000_000_000_000_000n,
       getLaunchReadiness: async () => ({ canLaunch: true, launchConfigUsable: true }),
