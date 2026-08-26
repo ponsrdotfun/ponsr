@@ -141,6 +141,16 @@ export interface StatusDeps {
    */
   observedThrough?: string;
   /**
+   * Index into `describeRpc().endpoints` of the endpoint THIS response actually used.
+   *
+   * Carried by value rather than read from `activeIndex` at render time. The pool's
+   * preferred endpoint is mutable global state: a concurrent request can move it between
+   * this response acquiring endpoint A and rendering its `rpc-endpoint` line, so the page
+   * could publish `observedThrough=A` in the machine-readable envelope while telling a
+   * human that B was serving. Two answers to the same question, in one document.
+   */
+  sessionEndpointIndex?: number;
+  /**
    * Deployment identity, on its own budget and cadence.
    *
    * Split out of the launchpad check because a 48 KB bytecode download sharing a deadline
@@ -404,7 +414,11 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   // debugging a slow readiness check needs this first, not buried under the consequences.
   if (deps.describeRpc) {
     const pool = deps.describeRpc();
-    const active = pool.activeIndex === null ? null : pool.endpoints[pool.activeIndex];
+    // THIS response's endpoint when one was pinned; the pool's preferred one only as a
+    // fallback for callers that do not pin a session. Never the mutable value when a
+    // pinned one exists.
+    const usedIndex = deps.sessionEndpointIndex ?? pool.activeIndex;
+    const active = usedIndex === null || usedIndex === undefined ? null : pool.endpoints[usedIndex];
     const refused = pool.endpoints.filter((e) => e.refusedBecause && e.refusedBecause !== 'not probed yet');
     const where = active
       ? `${active.identity.origin ?? 'unparseable'} (fingerprint ${active.identity.fingerprint})`
@@ -420,7 +434,11 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
       // A refused endpoint is not an outage: the primary may be serving perfectly while a
       // misconfigured fallback sits refused beside it. Reported, not escalated.
       state: active ? 'ok' : 'degraded',
-      detail: `${where}; ${extra.join('; ')}`,
+      detail:
+        `${where}; ${extra.join('; ')}` +
+        // Said explicitly, because "the pool prefers B" and "this page was built from B"
+        // are different claims and only the second one belongs on this response.
+        (deps.sessionEndpointIndex !== undefined ? '; served this response' : ''),
     });
   }
 
@@ -555,25 +573,42 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
   const calendarSpent = deps.spentTodayWei();
   const rollingSpent = deps.rollingSpendLast24hWei?.();
   const cap = deps.dailyCapWei;
-  const operative = rollingSpent ?? calendarSpent;
-  const pct = cap > 0n ? Number((operative * 100n) / cap) : 0;
-  const window = rollingSpent === undefined ? 'UTC day (rolling figure unavailable)' : 'rolling 24h';
-  checks.push({
-    name: 'daily-cap',
-    // Hitting the cap is the circuit breaker working, not a fault -- but it does mean every
-    // further launch is refused, and it is worth saying when that ends. A rolling window
-    // frees up gradually as the oldest spend ages out, not all at once at midnight.
-    state: pct >= 100 ? 'degraded' : 'ok',
-    detail:
-      `${eth(operative)} of ${eth(cap)} spent in the last ${window} (${pct}%), ` +
-      `${deps.launchesToday()} launch(es) today` +
-      (rollingSpent === undefined
-        ? ''
-        : `; UTC-day figure ${eth(calendarSpent)} is accounting only`) +
-      (pct >= 100
-        ? '. Launches are refused until enough of the oldest spend ages out of the 24h window'
-        : ''),
-  });
+
+  if (rollingSpent === undefined) {
+    /**
+     * UNKNOWN IS NOT HEADROOM.
+     *
+     * This used to fall back to the calendar figure and report `ok` whenever that was under
+     * cap. But the calendar figure is not what admits a launch -- the rolling one is -- so a
+     * missing rolling value with a quiet calendar day produced a confident green light for a
+     * breaker whose state nobody had read. That is the same defect as an unreadable launch
+     * fee becoming zero, in a different file.
+     */
+    checks.push({
+      name: 'daily-cap',
+      state: 'degraded',
+      detail:
+        `the rolling 24h spend could not be read, so the operative cap state is UNKNOWN. ` +
+        `${eth(calendarSpent)} of ${eth(cap)} is the UTC-day figure and is accounting only -- ` +
+        `it is not what the circuit breaker admits against`,
+    });
+  } else {
+    const pct = cap > 0n ? Number((rollingSpent * 100n) / cap) : 0;
+    checks.push({
+      name: 'daily-cap',
+      // Hitting the cap is the circuit breaker working, not a fault -- but it does mean
+      // every further launch is refused, and it is worth saying when that ends. A rolling
+      // window frees up gradually as the oldest spend ages out, not all at once at midnight.
+      state: pct >= 100 ? 'degraded' : 'ok',
+      detail:
+        `${eth(rollingSpent)} of ${eth(cap)} spent in the last rolling 24h (${pct}%), ` +
+        `${deps.launchesToday()} launch(es) today; UTC-day figure ${eth(calendarSpent)} is ` +
+        `accounting only` +
+        (pct >= 100
+          ? '. Launches are refused until enough of the oldest spend ages out of the 24h window'
+          : ''),
+    });
+  }
 
   checks.push({
     name: 'treasury-cold',

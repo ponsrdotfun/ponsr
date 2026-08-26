@@ -419,12 +419,15 @@ describe('the cap the page reports is the cap that refuses launches', () => {
     expect(d).toContain('accounting only');
   });
 
-  it('falls back to the calendar figure only when the rolling one is unavailable, and says so', async () => {
+  it('does NOT fall back to the calendar figure when the rolling one is unavailable', async () => {
+    // An earlier revision used `rollingSpent ?? calendarSpent`, so a missing rolling value
+    // with a quiet calendar day published `ok` -- a confident green light for a breaker
+    // nobody had read. Unknown is not headroom. Full coverage in statusSession.test.ts.
     const r = await buildStatus(
-      deps({ dailyCapWei: CAP, spentTodayWei: () => CAP, rollingSpendLast24hWei: undefined })
+      deps({ dailyCapWei: CAP, spentTodayWei: () => 0n, rollingSpendLast24hWei: undefined })
     );
     const c = find(r, 'daily-cap')!;
-    expect(c.state).toBe('degraded');
-    expect(c.detail).toContain('rolling figure unavailable');
+    expect(c.state).not.toBe('ok');
+    expect(c.detail).toContain('UNKNOWN');
   });
 });
