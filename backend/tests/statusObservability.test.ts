@@ -284,3 +284,148 @@ describe('/status reports deployment identity as its own check', () => {
     expect(find(r, 'launchpad')!.state).toBe('ok');
   });
 });
+
+describe('one response, one observed view', () => {
+  it('names the endpoint that supplied the observed chain, inside the envelope', async () => {
+    const r = await buildStatus(
+      deps({ observedThrough: '78ccdeee5ef1', rollingSpendLast24hWei: () => 0n })
+    );
+    // A consumer binding a spend decision to `chainId` has to know which view produced it.
+    // The page used to read chain/fee/balance through one provider and readiness through
+    // another, then label the whole thing with the second.
+    expect(r.spend?.observedThrough).toBe('78ccdeee5ef1');
+    expect(r.spend?.chainId).toBe(4663);
+  });
+
+  it('omits the envelope entirely when the chain could not be observed', async () => {
+    const r = await buildStatus(
+      deps({
+        getChainId: async () => {
+          throw new Error('no admitted RPC endpoint');
+        },
+        rollingSpendLast24hWei: () => 0n,
+      })
+    );
+    // Absent refuses; a value sourced from nowhere would admit.
+    expect(r.spend).toBeUndefined();
+    expect(find(r, 'rpc')!.state).toBe('down');
+  });
+});
+
+describe('a verdict reached with gaps is not a clean pass', () => {
+  it('degrades launchpad when part of the evidence never answered', async () => {
+    const r = await buildStatus(
+      deps({
+        getLaunchReadiness: async () => ({
+          launchEnabled: true,
+          whitelisted: false,
+          canLaunch: true,
+          incomplete: 'answered with gaps: launchConfigCount',
+        }),
+      })
+    );
+    const c = find(r, 'launchpad')!;
+    // "We could not read part of this" and "everything is fine" must not look identical.
+    expect(c.state).toBe('degraded');
+    expect(c.detail).toContain('evidence is incomplete');
+    expect(c.detail).toContain('launchConfigCount');
+  });
+
+  it('stays ok when nothing was missing', async () => {
+    const r = await buildStatus(
+      deps({
+        getLaunchReadiness: async () => ({ launchEnabled: true, whitelisted: false, canLaunch: true }),
+      })
+    );
+    expect(find(r, 'launchpad')!.state).toBe('ok');
+  });
+});
+
+describe('the whole response is bounded, not each check', () => {
+  it('answers within roughly one budget even when several dependencies hang', async () => {
+    const hang = () => new Promise<never>(() => {});
+    const started = Date.now();
+    const r = await buildStatus(
+      deps({
+        getChainId: hang,
+        getBlockNumber: hang,
+        getLiveFeeWei: hang,
+        getLaunchReadiness: hang,
+        getTreasuryBalanceWei: hang,
+        getDeploymentIdentity: hang,
+      }),
+      300
+    );
+    const elapsed = Date.now() - started;
+
+    // Six hanging checks used to cost six full timeouts, in sequence. One budget now.
+    expect(elapsed).toBeLessThan(1200);
+    expect(find(r, 'rpc')!.state).toBe('down');
+    expect(r.state).toBe('down');
+  }, 20_000);
+
+  it('says when a check was never reached, rather than blaming it for timing out', async () => {
+    const r = await buildStatus(
+      deps({
+        getChainId: () => new Promise<never>(() => {}),
+        getBlockNumber: () => new Promise<never>(() => {}),
+        // This one is healthy; it simply never gets a chance.
+        getTreasuryBalanceWei: async () => ETH,
+        getLiveFeeWei: () => new Promise<never>(() => {}),
+        getLaunchReadiness: () => new Promise<never>(() => {}),
+      }),
+      120
+    );
+    const detail = r.checks.map((c) => c.detail).join(' | ');
+    // Reporting an exhausted budget as "the treasury balance timed out" blames a
+    // dependency that was never asked.
+    expect(detail).toContain('had already used its whole budget');
+  }, 20_000);
+});
+
+describe('the cap the page reports is the cap that refuses launches', () => {
+  const CAP = ETH / 100n;
+
+  it('degrades on the ROLLING window even when the UTC day reads zero', async () => {
+    // 00:01 UTC: the calendar figure has just reset, the rolling breaker has not.
+    const r = await buildStatus(
+      deps({
+        dailyCapWei: CAP,
+        spentTodayWei: () => 0n,
+        rollingSpendLast24hWei: () => CAP,
+      })
+    );
+    const c = find(r, 'daily-cap')!;
+    // The old check read the calendar figure and would have said ok with a full cap of
+    // apparent headroom while every launch was being refused.
+    expect(c.state).toBe('degraded');
+    expect(c.detail).toContain('rolling 24h');
+  });
+
+  it('does not claim refusals end at midnight UTC', async () => {
+    const r = await buildStatus(
+      deps({ dailyCapWei: CAP, spentTodayWei: () => 0n, rollingSpendLast24hWei: () => CAP })
+    );
+    // A rolling window frees up gradually as the oldest spend ages out.
+    expect(find(r, 'daily-cap')!.detail).not.toContain('midnight');
+    expect(find(r, 'daily-cap')!.detail).toContain('ages out');
+  });
+
+  it('still publishes the UTC-day figure, labelled as accounting only', async () => {
+    const r = await buildStatus(
+      deps({ dailyCapWei: CAP, spentTodayWei: () => CAP / 2n, rollingSpendLast24hWei: () => CAP / 4n })
+    );
+    const d = find(r, 'daily-cap')!.detail;
+    expect(d).toContain('accounting only');
+  });
+
+  it('falls back to the calendar figure only when the rolling one is unavailable, and says so', async () => {
+    const r = await buildStatus(
+      deps({ dailyCapWei: CAP, spentTodayWei: () => CAP, rollingSpendLast24hWei: undefined })
+    );
+    const c = find(r, 'daily-cap')!;
+    expect(c.state).toBe('degraded');
+    expect(c.detail).toContain('rolling figure unavailable');
+  });
+});
+

@@ -11,6 +11,7 @@ import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { probeLaunchPermission } from './readinessProbe';
 import { RpcPool, parseEndpointList } from './rpcPool';
+import { RpcEndpointDescription } from './rpcIdentity';
 import { IdentityWatch } from './identityWatch';
 import { handleMention } from './orchestrator';
 import { TreasuryMonitor, createNotifier } from './monitor';
@@ -103,6 +104,11 @@ const provider = createProvider();
  * ride-along with a status-page fix.
  */
 const rpcPool = new RpcPool(parseEndpointList(config.RPC_URL, config.RPC_FALLBACK_URLS));
+
+/** The fingerprint of whichever endpoint answered, for binding caches and labelling views. */
+function endpointFingerprint(e: RpcEndpointDescription): string {
+  return e.fingerprint;
+}
 
 /** Deployment identity, cached with a published age, off the launchpad check's deadline. */
 const identityWatch = new IdentityWatch();
@@ -306,36 +312,56 @@ app.get('/health', (_req, res) => {
  */
 app.get('/status', async (_req, res) => {
   try {
+    /**
+     * ONE endpoint for this whole response.
+     *
+     * Chain id, block, fee, balance, readiness and identity used to arrive through two
+     * different providers -- the pinned one and whatever the pool happened to pick -- while
+     * the page labelled the result with the POOL's endpoint. That produced a document whose
+     * `rpc-endpoint` line named B above evidence gathered from A, with nothing on the page
+     * able to say so. Pinned here, once, so "one request, one observed truth" is true of the
+     * endpoint as well as of the chain read.
+     *
+     * Null when nothing can be admitted. The chain checks then fail as they should, and
+     * `rpc-endpoint` reports why each candidate was refused.
+     */
+    const session = await rpcPool.acquire();
+    const readProvider = session?.provider;
+    const unavailable = () => {
+      throw new Error('no admitted RPC endpoint is available to serve this status request');
+    };
+
     const report = await buildStatus({
       expectedChainId: config.CHAIN_ID,
-      getChainId: async () => Number((await provider.getNetwork()).chainId),
-      getBlockNumber: () => provider.getBlockNumber(),
-      getTreasuryBalanceWei: deps.getTreasuryBalanceWei,
-      getLiveFeeWei: deps.getLiveFeeWei,
+      getChainId: async () =>
+        readProvider ? Number((await readProvider.getNetwork()).chainId) : unavailable(),
+      getBlockNumber: () => (readProvider ? readProvider.getBlockNumber() : unavailable()),
+      getTreasuryBalanceWei: async () =>
+        readProvider ? getBalanceWei(readProvider, await treasurySigner.address()) : unavailable(),
+      getLiveFeeWei: async () =>
+        readProvider ? getLiveFeeWei(readProvider, launchTarget.deployment) : unavailable(),
       // Read from the deployment the bot launches through, using that contract's own
       // canLaunch predicate. Reading a superseded factory is precisely how /status
       // reported the launchpad closed for a week while it was open.
       getLaunchReadiness: async () => {
         const d = launchTarget.deployment;
-        if (!d) return deps.getLaunchReadiness();
+        if (!d || !readProvider) return deps.getLaunchReadiness();
         // ONE round trip, and each call timed. This used to be readCurrentReadiness, which
         // makes four sequential trips -- a 48 KB bytecode download, then feeEscrow alone,
         // then the permission batch, then the launch config -- inside a single 5 000 ms
         // deadline. It did not fail because the launchpad was closed or the RPC was
         // broken; it failed whenever one round trip cost more than about a second.
         const launcher = await treasurySigner.address();
-        const probe = await rpcPool.run((p) =>
-          probeLaunchPermission(
-            p,
-            launcher,
-            config.PONS_LAUNCH_CONFIG_ID,
-            '0x0000000000000000000000000000000000000000',
-            d
-          )
+        const probe = await probeLaunchPermission(
+          readProvider,
+          launcher,
+          config.PONS_LAUNCH_CONFIG_ID,
+          '0x0000000000000000000000000000000000000000',
+          d
         );
         const r = probe.verdict;
         if (!r) {
-          // A permission read did not answer. Thrown rather than reported as a closed
+          // A required read did not answer. Thrown rather than reported as a closed
           // launchpad: not knowing is not the same as being refused.
           throw new Error(probe.failure ?? 'launch readiness could not be determined');
         }
@@ -348,14 +374,20 @@ app.get('/status', async (_req, res) => {
           detail: r.reason ? `${r.reason}` : r.detail,
           timings: probe.timings,
           totalMs: probe.totalMs,
+          // Carried through rather than dropped. A verdict reached with gaps in the
+          // evidence is not the same claim as one reached with all of it.
+          incomplete: probe.failure,
         };
       },
-      describeRpc: () => rpcPool.status(),
-      // Bound to the endpoint that actually answered. The pool can fail over between two
-      // status requests, so an unbound cache could report a pass measured through the
-      // primary while a fallback was serving.
+      // Bound to the endpoint that actually answered, and it is the SAME endpoint every
+      // other chain read above used.
       getDeploymentIdentity: () =>
-        rpcPool.run((p, endpoint) => identityWatch.check(p, endpoint.fingerprint)),
+        readProvider && session
+          ? identityWatch.check(readProvider, endpointFingerprint(session.endpoint))
+          : Promise.reject(new Error('no admitted RPC endpoint is available')),
+      /** Which endpoint every chain observation in this response came from. */
+      observedThrough: session ? endpointFingerprint(session.endpoint) : undefined,
+      describeRpc: () => rpcPool.status(),
       /**
        * The UTC CALENDAR DAY, for the human-facing line only.
        *
