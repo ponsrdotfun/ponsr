@@ -466,4 +466,3 @@ describe('a shared admission does not share the first caller waiting budget', ()
     await first;
   }, 20_000);
 });
-
