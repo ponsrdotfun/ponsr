@@ -339,6 +339,67 @@ missing authoritative figure plus a quiet calendar day published `daily-cap: ok`
 concurrent request could leave one response carrying `observedThrough=A` in the envelope
 while telling a human that B was serving.
 
+**Production runs v36 (`dd5a72e`) since 2026-08-26**, and the readiness fix works there:
+`/status` went from **HTTP 503 at 12.772 s** to **200 at 0.757 s**, with the readiness read
+at **74 ms**. The public gate stays false and `public-launches` is the only intended
+degraded check.
+
+**What remained was a TAIL, and attributing it needed measurement rather than instinct.**
+Sampled 25 times against v36, three responses took 3 s or more; on two of those the non-ok
+check was `read-credits` — twitterapi.io, nothing to do with the chain — and on the third
+the readiness read itself took 3 012 ms. An outside diagnostic timing each keyless
+dependency directly could NOT attribute it, because from a laptop the chain reads take
+2–4.7 s while production answers in 0.4 s. A vantage point that differs from production's by
+an order of magnitude cannot attribute production's latency, and saying so is part of the
+finding.
+
+The fix is structural rather than a bet on which dependency is slow: `statusCore.ts` is a
+stable contract (`ponsr.status-core` v1) for the facts a spend decision rests on, built
+under its own deadline BEFORE optional telemetry starts, and `/status/core` serves it alone
+without ever starting pair discovery or the credits call. Optional telemetry keeps its real
+state on `/status` — never deleted, never reported green when it failed.
+
+**A hostile review of the core contract (2026-08-26) found fourteen defects, and the
+shape of them is worth carrying forward: a validator is only as good as the WORST input
+it is handed, not the input you had in mind.** Reproduced before fixing: malformed public
+JSON made the validator THROW instead of fail; an inflated `capWei` in the body PASSED,
+because spend was compared against the cap the response itself supplied; a dead-address
+treasury passed, because the pin was optional in the default command; `ok:true` beside
+`problems:['chain-mismatch']` passed; a readable ZERO balance passed beside a live fee it
+could not pay; `buildCoreEvidence` promised never to throw while a SYNCHRONOUS call inside
+it did, and the route then published the raw `DB path /secret/path failed`; an unreadable
+identity refresh still published HTTP 200 with `ok:true` when a cached pass existed; and
+the "one total deadline" was topped up by two fresh 250 ms floors after it had expired.
+
+A **sixth review (2026-08-26) found the never-throws claim was still false**, and the
+shape is worth keeping: only the synchronous rolling-spend callback had been wrapped. The
+other six dependencies are *invoked synchronously* when their promises are constructed, so
+any implementation throwing before it returns one escaped `buildCoreEvidence` entirely and
+the legacy `/status` catch published the raw message — one integration bug away from leaking
+an internal path through a public endpoint. It also found the producer publishing
+`ok: true` beside `canLaunchOnChain: false`, **relying on its own consumer to repair it**:
+an authoritative endpoint has to be internally valid before anybody reads it, because a
+second opinion is not a substitute for being right.
+
+A **seventh review (2026-08-26) found two of my own claims false at the exact place I was
+most confident**, and both are worth keeping. The report said "both route catches are
+sanitised": only `/status` was, and the real `/status/core` catch still published
+`detail: String(err.message)` — while the test meant to prove otherwise **built its own
+express app and mirrored a sanitised copy**, so it passed against production source that
+was still vulnerable. The handlers live in `statusRoutes.ts` now, `index.ts` mounts those,
+and the tests import those. And a test asserting `JSON.stringify(error).not.toContain(...)`
+proved **nothing at all** — `JSON.stringify(new Error('SECRET'))` is `{}`, because Error's
+properties are not enumerable, so the assertion passed while the function was still
+rejecting with the secret in `error.message`. A test with a broken oracle is worse than no
+test: it reports the boundary as closed.
+
+Three general rules came out of it. **A limit must never be evidence about itself** —
+every quantity a verdict depends on is caller-pinned now. **A promise that never throws is
+worth nothing if a plain function call beside it can.** And **`getNetwork()` under
+`staticNetwork` is configured metadata, not an observation** — the core reads `eth_chainId`
+off the wire, because admission's transport check is cached for minutes and a response can
+otherwise look freshly chain-bound while nothing asked the endpoint anything.
+
 **A fifth review (2026-08-26) found the fix's own optimisation defeating it.** The pool
 coalesces concurrent admissions, and `admit()` handed a later caller the in-flight promise
 as-is — so a `/status` request with a **300 ms budget took 983 ms**, waiting under a stalled

@@ -10,7 +10,7 @@ import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { probeLaunchPermission } from './readinessProbe';
-import { RpcPool, parseEndpointList } from './rpcPool';
+import { RpcPool, parseChainId, parseEndpointList } from './rpcPool';
 import { RpcEndpointDescription } from './rpcIdentity';
 import { IdentityWatch } from './identityWatch';
 import { handleMention } from './orchestrator';
@@ -21,8 +21,8 @@ import { checkTreasurySetup, startTreasuryWatch, treasuryPolicyFromConfig } from
 import { InboundMention } from './types';
 import { webhookAuthorised } from './webhookAuth';
 import { startMentionCrossCheck } from './mentionCrossCheck';
-import { statusHttpCode } from './statusReport';
-import { assembleStatus } from './statusSession';
+import { statusHandler, statusCoreHandler } from './statusRoutes';
+import { assembleCore, assembleStatus, AcquiredSession } from './statusSession';
 import { startLaunchpadWatch } from './launchpadWatch';
 import { PairAssetRegistry } from './pairTokens';
 import { ChainPairTokenSource } from './pairTokenSource';
@@ -311,22 +311,43 @@ app.get('/health', (_req, res) => {
  * the only way to authenticate a URL somebody opens in a browser is to put a
  * secret in a query string, which writes it into every proxy log in between.
  */
-app.get('/status', async (_req, res) => {
+/**
+ * The dependency set for one status response, built once and shared by BOTH routes.
+ *
+ * `/status` and `/status/core` must never be able to describe different worlds. A core
+ * endpoint reading the chain through its own definition would be a second source of truth,
+ * which is the shape of every defect in this file's history.
+ *
+ * ONE endpoint per response, pinned by the caller. Chain id, block, fee, balance, readiness
+ * and identity used to arrive through two different providers -- the pinned one and whatever
+ * the pool happened to pick -- while the page labelled the result with the POOL's endpoint.
+ * Null session means nothing could be admitted; the chain checks then fail as they should.
+ */
+/**
+ * The PUBLIC treasury address, resolved once, without the signer.
+ *
+ * Serving a status page used to call `treasurySigner.address()`, which resolves through the
+ * Turnkey client. That does not sign anything, but it made a read-only endpoint depend on
+ * the signer path -- and it made the claim "the endpoint loads no Turnkey credential" false
+ * at the composition boundary even though every leaf module was clean.
+ *
+ * The address is public and already pinned in configuration, so status reads it from there.
+ * No second signer is built and no additional credential is loaded.
+ *
+ * BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT FIX: the endpoint performs no signing and
+ * grants no authority, but the production PROCESS is still signer-capable -- `index.ts`
+ * constructs a treasury signer at startup for the launch path. Serving `/status` no longer
+ * touches it; the process it lives in is not thereby keyless.
+ */
+const statusTreasuryAddress = (() => {
   try {
-    /**
-     * ONE endpoint for this whole response.
-     *
-     * Chain id, block, fee, balance, readiness and identity used to arrive through two
-     * different providers -- the pinned one and whatever the pool happened to pick -- while
-     * the page labelled the result with the POOL's endpoint. That produced a document whose
-     * `rpc-endpoint` line named B above evidence gathered from A, with nothing on the page
-     * able to say so. Pinned here, once, so "one request, one observed truth" is true of the
-     * endpoint as well as of the chain read.
-     *
-     * Null when nothing can be admitted. The chain checks then fail as they should, and
-     * `rpc-endpoint` reports why each candidate was refused.
-     */
-    const report = await assembleStatus(rpcPool, (session) => {
+    return pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string });
+  } catch {
+    return undefined;
+  }
+})();
+
+const statusDepsFor = (session: AcquiredSession | null) => {
       const readProvider = session?.provider;
       const unavailable = () => {
         throw new Error('no admitted RPC endpoint is available to serve this status request');
@@ -334,11 +355,33 @@ app.get('/status', async (_req, res) => {
 
       return {
       expectedChainId: config.CHAIN_ID,
-      getChainId: async () =>
-        readProvider ? Number((await readProvider.getNetwork()).chainId) : unavailable(),
+      /**
+       * A FRESH `eth_chainId` OVER THE WIRE, not `getNetwork()`.
+       *
+       * The pool builds providers with `staticNetwork: true`, and `getNetwork()` then
+       * answers from the CONFIGURED value without sending a request -- the same property
+       * that made the pool's admission gate inert until it was rewritten. Admission does
+       * check the transport, but an admission PASS is cached for up to five minutes, so a
+       * core response could look freshly chain-bound while nothing had asked the endpoint
+       * anything during that response.
+       *
+       * `provider.send` bypasses the static-network shortcut, and the result is parsed
+       * strictly rather than coerced: `Number('')` is 0 and `parseInt('4663junk')` is 4663.
+       */
+      getChainId: async () => {
+        if (!readProvider) return unavailable();
+        const raw = await readProvider.send('eth_chainId', []);
+        const observed = parseChainId(raw);
+        if (observed === null) {
+          throw new Error('the endpoint did not return a valid hex chain id');
+        }
+        return observed;
+      },
       getBlockNumber: () => (readProvider ? readProvider.getBlockNumber() : unavailable()),
       getTreasuryBalanceWei: async () =>
-        readProvider ? getBalanceWei(readProvider, await treasurySigner.address()) : unavailable(),
+        readProvider && statusTreasuryAddress
+          ? getBalanceWei(readProvider, statusTreasuryAddress)
+          : unavailable(),
       getLiveFeeWei: async () =>
         readProvider ? getLiveFeeWei(readProvider, launchTarget.deployment) : unavailable(),
       // Read from the deployment the bot launches through, using that contract's own
@@ -352,7 +395,8 @@ app.get('/status', async (_req, res) => {
         // then the permission batch, then the launch config -- inside a single 5 000 ms
         // deadline. It did not fail because the launchpad was closed or the RPC was
         // broken; it failed whenever one round trip cost more than about a second.
-        const launcher = await treasurySigner.address();
+        if (!statusTreasuryAddress) return unavailable();
+        const launcher = statusTreasuryAddress;
         const probe = await probeLaunchPermission(
           readProvider,
           launcher,
@@ -409,7 +453,7 @@ app.get('/status', async (_req, res) => {
        */
       treasuryAddress: (() => {
         try {
-          return pinnedTreasuryAddress(config as { TURNKEY_SIGN_WITH?: string; TREASURY_ADDRESS?: string });
+          return statusTreasuryAddress;
         } catch {
           return undefined;
         }
@@ -432,14 +476,19 @@ app.get('/status', async (_req, res) => {
       readCredits: () => (deps.xClient as { getReadCredits?: () => Promise<{ credits: number; bonus: number } | null> }).getReadCredits?.() ?? Promise.resolve(null),
       sweepStaleAfterMs: Math.max(config.MENTION_POLL_SECONDS * 3, 900) * 1000,
       };
-    });
-    res.status(statusHttpCode(report)).json(report);
-  } catch (err) {
-    // buildStatus is written not to throw; if it does, saying so beats a 500 with
-    // no body, which is indistinguishable from the process being gone.
-    res.status(503).json({ state: 'down', error: String((err as Error)?.message ?? err) });
-  }
-});
+};
+
+/**
+ * Both status routes, mounted from the ONE extracted definition.
+ *
+ * They used to be written inline here, and a test that mirrored a sanitised copy of the
+ * core handler passed while this file still published `detail: String(err.message)`. A test
+ * standing next to the thing instead of on it confirms only what its author believed. There
+ * is one copy now, in `statusRoutes.ts`, and the tests import it.
+ */
+const statusRouteDeps = { pool: rpcPool, makeDeps: statusDepsFor };
+app.get('/status', statusHandler(statusRouteDeps));
+app.get('/status/core', statusCoreHandler(statusRouteDeps));
 
 function startOfUtcDay(): string {
   const d = new Date();

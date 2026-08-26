@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import { RpcEndpointDescription } from './rpcIdentity';
 import { PoolStatus } from './rpcPool';
 import { StatusDeps, StatusReport, buildStatus } from './statusReport';
+import { CoreDeps, CoreEvidence, DEFAULT_CORE_BUDGET_MS, buildCoreEvidence } from './statusCore';
+import { TimingRecorder } from './dependencyTiming';
 
 /**
  * Assembling one `/status` response: acquire an endpoint, then report, under ONE deadline.
@@ -44,6 +46,14 @@ export interface StatusPool {
 export interface AssembleOptions {
   /** Total wall clock for the WHOLE response, acquisition included. */
   totalBudgetMs?: number;
+  /**
+   * The core's own deadline, nested inside the total.
+   *
+   * The core must not be able to spend the whole response budget waiting for chain reads
+   * either -- it is smaller than the total on purpose, so optional telemetry still gets a
+   * chance to answer and the page stays useful to an operator.
+   */
+  coreBudgetMs?: number;
   now?: () => number;
 }
 
@@ -58,6 +68,134 @@ export const DEFAULT_STATUS_BUDGET_MS = 5000;
  * body that says what happened.
  */
 export const REPORTING_FLOOR_MS = 250;
+
+/**
+ * Turns core evidence back into dependency functions that RETURN WHAT WAS ALREADY OBSERVED.
+ *
+ * WHY ONE DOCUMENT MUST NOT READ THE CHAIN TWICE
+ * ---------------------------------------------
+ * `assembleStatus` built the core and then handed the SAME dependency set to `buildStatus`,
+ * which started its own fresh chain, fee, readiness, balance and identity reads. So one
+ * response could embed core evidence from observation A while its human checks described
+ * observation B -- two worlds presented as one document, with nothing on the page able to
+ * say so. Sharing a function definition is not sharing an observation.
+ *
+ * These replay the core's values instead. A core axis that failed rejects here too, so the
+ * human check reports the same failure rather than getting a lucky second attempt: a page
+ * where `core.ok` is false while `launchpad` is green would be the same contradiction in
+ * the other direction.
+ */
+function replayCore(deps: StatusDeps, core: CoreEvidence): StatusDeps {
+  const refuse = (axis: string) => () =>
+    Promise.reject(new Error(`${axis} was not observed in this response`));
+
+  return {
+    ...deps,
+    getChainId: core.chainId === null ? refuse('chain id') : async () => core.chainId!,
+    getBlockNumber: core.block === null ? refuse('block') : async () => core.block!,
+    getLiveFeeWei:
+      core.launchFeeWei === null ? refuse('launch fee') : async () => BigInt(core.launchFeeWei!),
+    getTreasuryBalanceWei:
+      core.treasuryBalanceWei === null
+        ? refuse('treasury balance')
+        : async () => BigInt(core.treasuryBalanceWei!),
+    getLaunchReadiness: core.readiness
+      ? async () => ({
+          launchEnabled: core.readiness!.launchEnabled,
+          whitelisted: core.readiness!.whitelisted,
+          canLaunch: core.readiness!.ready,
+          canLaunchOnChain: core.readiness!.canLaunchOnChain ?? undefined,
+          detail: core.readiness!.detail,
+          incomplete: core.readiness!.complete ? undefined : 'evidence was incomplete',
+        })
+      : refuse('launch readiness'),
+    getDeploymentIdentity: core.identity
+      ? async () => ({
+          result: { ok: core.identity!.ok, mismatches: [] },
+          ageMs: core.identity!.ageMs,
+          fromCache: core.identity!.fromCache,
+          unreadable: core.identity!.unreadable ? 'the identity refresh could not be made' : undefined,
+        })
+      : refuse('deployment identity'),
+  };
+}
+
+/**
+ * Turns the status dependency set into the core's narrower one.
+ *
+ * Kept as a projection rather than a second dependency set so the two cannot describe
+ * different worlds: every core field is read from exactly the same function the page reads.
+ */
+export function coreDepsFrom(
+  deps: StatusDeps,
+  session: AcquiredSession | null,
+  endpointOrigin: string | null
+): CoreDeps {
+  return {
+    expectedChainId: deps.expectedChainId,
+    capWei: deps.dailyCapWei,
+    publicLaunchEnabled: deps.publicLaunchEnabled,
+    deploymentId: deps.deploymentId,
+    deploymentFactory: deps.deploymentFactory,
+    treasuryAddress: deps.treasuryAddress,
+    observedThrough: session ? session.endpoint.fingerprint : undefined,
+    endpointOrigin: endpointOrigin ?? undefined,
+    endpointAvailable: Boolean(session),
+    getChainId: () => deps.getChainId(),
+    getBlockNumber: () => deps.getBlockNumber(),
+    getLiveFeeWei: () => deps.getLiveFeeWei(),
+    getTreasuryBalanceWei: () => deps.getTreasuryBalanceWei(),
+    getLaunchReadiness: () => deps.getLaunchReadiness(),
+    getDeploymentIdentity: deps.getDeploymentIdentity
+      ? () => deps.getDeploymentIdentity!()
+      : undefined,
+    rollingSpendLast24hWei: deps.rollingSpendLast24hWei,
+  };
+}
+
+/** The origin of an acquired endpoint, or null. Never a path or query. */
+function originOf(session: AcquiredSession | null): string | null {
+  const id = session?.endpoint as { origin?: string | null } | undefined;
+  return id?.origin ?? null;
+}
+
+/**
+ * Acquires an endpoint and produces ONLY the authoritative core.
+ *
+ * This is what `/status/core` serves. It never starts pair discovery or the read-provider
+ * credits call, so no third party can make it slow -- which is the structural version of
+ * the guarantee, stronger than ordering the work inside one function.
+ */
+export async function assembleCore(
+  pool: StatusPool,
+  makeDeps: (session: AcquiredSession | null) => StatusDeps,
+  options: AssembleOptions = {}
+): Promise<CoreEvidence> {
+  const now = options.now ?? (() => Date.now());
+  const total = options.totalBudgetMs ?? DEFAULT_STATUS_BUDGET_MS;
+  const startedAt = now();
+  const deadline = startedAt + total;
+
+  const acquisitionDeadline = Math.max(startedAt, deadline - REPORTING_FLOOR_MS);
+  let session: AcquiredSession | null = null;
+  try {
+    session = await pool.acquire({ deadlineMs: acquisitionDeadline });
+  } catch {
+    session = null;
+  }
+
+  // Whatever is genuinely left, never a fresh allowance. `Math.max(FLOOR, ...)` CREATED
+  // time once the deadline was exhausted: with a zero total budget and hanging
+  // dependencies the route still ran ~690 ms, because the floor was granted again after
+  // the one absolute deadline had already passed. The reserve is subtracted BEFORE
+  // acquisition; it is never re-issued after.
+  const remaining = Math.max(0, deadline - now());
+  return buildCoreEvidence(coreDepsFrom(makeDeps(session), session, originOf(session)), {
+    budgetMs: Math.min(options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS, remaining),
+    now,
+    recorder: new TimingRecorder(now(), now),
+  });
+}
 
 export async function assembleStatus(
   pool: StatusPool,
@@ -83,12 +221,36 @@ export async function assembleStatus(
     session = null;
   }
 
-  const remaining = Math.max(REPORTING_FLOOR_MS, deadline - now());
   const deps = makeDeps(session);
+
+  /**
+   * THE CORE RUNS FIRST, under its own deadline, before any optional telemetry starts.
+   *
+   * Ordering is the guarantee: a third-party credits API cannot delay a chain fact that was
+   * already read and recorded. Sampled on v36, `read-credits` was the non-ok check on two
+   * of three slow responses and on none of the twenty-two fast ones.
+   */
+  const coreRecorder = new TimingRecorder(now(), now);
+  // Only what is left of the ONE deadline. See assembleCore for why the floor is not
+  // re-applied here: reserving time before acquisition is correct, granting it again
+  // afterwards manufactures budget the response already promised it would not use.
+  const coreBudget = Math.min(
+    options.coreBudgetMs ?? DEFAULT_CORE_BUDGET_MS,
+    Math.max(0, deadline - now())
+  );
+  const core = await buildCoreEvidence(coreDepsFrom(deps, session, originOf(session)), {
+    budgetMs: coreBudget,
+    now,
+    recorder: coreRecorder,
+  });
+
+  const remaining = Math.max(0, deadline - now());
 
   return buildStatus(
     {
-      ...deps,
+      // Every overlapping human check replays what the core already observed, so one
+      // document describes one world.
+      ...replayCore(deps, core),
       /**
        * The endpoint THIS response used, by value.
        *
@@ -100,6 +262,9 @@ export async function assembleStatus(
        */
       sessionEndpointIndex: session?.index,
       observedThrough: session ? sessionFingerprint(session) : undefined,
+      endpointOrigin: originOf(session) ?? undefined,
+      core,
+      coreDependencies: core.dependencies,
     },
     remaining
   );

@@ -96,19 +96,18 @@ describe('the fallback pool is wired to the read path only', () => {
     expect(found.sort()).toEqual(['src/index.ts', 'src/rpcPool.ts', 'src/statusSession.ts']);
   });
 
-  it('reaches the pool only inside the /status handler', () => {
+  it('is reached only from the status path, never from the launch or orchestrator wiring', () => {
+    // Positional "after app.get('/status')" was the old rule and it is no longer the right
+    // one: the dependency builder is shared by BOTH status routes and is declared above
+    // them. The property that matters is unchanged -- the pool is reachable only from the
+    // status path -- so the rule now names that path instead of a line number.
+    const builderAt = src.indexOf('const statusDepsFor');
     const statusAt = src.indexOf("app.get('/status'");
-    expect(statusAt).toBeGreaterThan(-1);
+    const coreAt = src.indexOf("app.get('/status/core'");
+    expect(builderAt).toBeGreaterThan(-1);
+    expect(statusAt).toBeGreaterThan(builderAt);
+    expect(coreAt).toBeGreaterThan(statusAt);
 
-    // Every mention of the pool instance, wherever it appears, including aliases created
-    // by assignment. The construction line is the one legitimate exception.
-    const uses: number[] = [];
-    let at = src.indexOf('rpcPool');
-    while (at !== -1) {
-      uses.push(at);
-      at = src.indexOf('rpcPool', at + 1);
-    }
-    // Two legitimate mentions outside the handler: the import, and the construction.
     const importAt = src.indexOf("from './rpcPool'");
     const construction = src.indexOf('const rpcPool = new RpcPool');
     expect(importAt).toBeGreaterThan(-1);
@@ -116,12 +115,25 @@ describe('the fallback pool is wired to the read path only', () => {
     const isDeclaration = (u: number) =>
       (u > importAt - 60 && u < importAt + 20) || (u > construction - 5 && u < construction + 40);
 
+    const uses: number[] = [];
+    let at = src.indexOf('rpcPool');
+    while (at !== -1) {
+      uses.push(at);
+      at = src.indexOf('rpcPool', at + 1);
+    }
     const operational = uses.filter((u) => !isDeclaration(u));
     expect(operational.length).toBeGreaterThan(0);
-    // Every actual USE sits inside the /status handler.
-    for (const u of operational) expect(u).toBeGreaterThan(statusAt);
+    // Every actual USE sits inside the shared status dependency builder or below it, which
+    // is the status path and nothing else.
+    for (const u of operational) expect(u).toBeGreaterThan(builderAt);
 
-    // And no alias escapes the handler under a different name.
+    // The builder is declared once and handed to the route deps once. The handlers live in
+    // statusRoutes.ts now, so this counts the wiring rather than the call sites.
+    const consumers = [...src.matchAll(/statusDepsFor/g)].map((m) => m.index!);
+    expect(consumers.length).toBe(2); // the declaration plus the route-deps object
+    for (const c of consumers.slice(1)) expect(c).toBeGreaterThan(builderAt);
+
+    // And no alias escapes under a different name.
     expect(src).not.toMatch(/const\s+\w+\s*=\s*rpcPool\s*;/);
   });
 
@@ -229,5 +241,135 @@ describe('rpc-diagnose loads no credential or signer module', () => {
     expect(stdout).toContain('read-only, nothing is signed or broadcast');
     expect(stdout).toContain('http://127.0.0.1:1');
     expect(stdout).not.toContain('nothing-is-listening');
+  });
+});
+
+/**
+ * The core endpoint and its consumer are readers. Asserted against the shipped sources,
+ * because "it does not sign" is the kind of claim that stays true only while someone keeps
+ * checking.
+ */
+describe('the core evidence path imports nothing that can spend', () => {
+  const FORBIDDEN = [
+    '@turnkey',
+    'treasurySigner',
+    'signedTxFlow',
+    'canaryJournal',
+    'createTreasurySigner',
+    'broadcastTransaction',
+    'sendTransaction',
+    'signTransaction',
+  ];
+
+  it.each([
+    'src/statusCore.ts',
+    'src/coreValidator.ts',
+    'src/dependencyTiming.ts',
+    'src/strictParse.ts',
+    'src/sampleGuards.ts',
+  ])(
+    '%s imports no signer, credential loader or broadcast path',
+    (file) => {
+      const src = code(file);
+      for (const forbidden of FORBIDDEN) expect(src).not.toContain(forbidden);
+      // src/config calls dotenv at module load and parses every credential field, so
+      // importing it IS reading the credentials whether or not they are used.
+      expect(src).not.toMatch(/from '\.\/config'/);
+    }
+  );
+
+  it.each(['scripts/check-core-readiness.ts', 'scripts/sample-status-latency.ts'])(
+    '%s is a reader: no signer, no credential, no write to the chain',
+    (file) => {
+      const src = code(file);
+      for (const forbidden of FORBIDDEN) expect(src).not.toContain(forbidden);
+      expect(src).not.toContain('--execute');
+      expect(src).not.toMatch(/from '\.\.\/src\/config'/);
+    }
+  );
+
+  it('the production status route resolves the treasury WITHOUT the signer', () => {
+    // The leaf modules were always clean, but the deployed route called
+    // `treasurySigner.address()`, which resolves through the Turnkey client. That signs
+    // nothing, yet it made a read-only endpoint depend on the signer path -- and made the
+    // claim "loads no Turnkey credential" false at the composition boundary.
+    const src = code('src/index.ts');
+    const builderAt = src.indexOf('const statusDepsFor');
+    const routesEnd = src.indexOf("app.get('/status/core'");
+    expect(builderAt).toBeGreaterThan(-1);
+    expect(routesEnd).toBeGreaterThan(builderAt);
+
+    const statusPath = src.slice(builderAt, routesEnd);
+    expect(statusPath).not.toContain('treasurySigner');
+    expect(statusPath).toContain('statusTreasuryAddress');
+
+    // And exactly one signer is CONSTRUCTED in the whole file: no second one was added.
+    // Counted on the call, not on the identifier -- the import mentions it too, and an
+    // assertion that cannot tell an import from a construction is not measuring the thing
+    // it names.
+    const constructions = [...src.matchAll(/createTreasurySigner\s*\(/g)];
+    expect(constructions.length).toBe(1);
+  });
+
+  it('index.ts mounts the EXTRACTED handlers rather than writing its own', () => {
+    // The previous round reported both route catches sanitised. Only /status was: the real
+    // /status/core catch here still published `detail: String(err.message)`, while the test
+    // that was meant to prove otherwise built its own express app and mirrored a sanitised
+    // copy. A test standing next to the thing instead of on it confirms only what its
+    // author believed. There is one copy now, and this asserts index.ts uses it.
+    const src = code('src/index.ts');
+    expect(src).toContain("app.get('/status', statusHandler(");
+    expect(src).toContain("app.get('/status/core', statusCoreHandler(");
+    // And no inline handler survives beside them.
+    expect(src).not.toMatch(/app\.get\('\/status[^']*',\s*async/);
+  });
+
+  it('no HTTP route handler publishes exception text', () => {
+    // A source invariant, because a mirrored test cannot speak about production wiring.
+    //
+    // SCOPED TO THE ROUTE SURFACE, deliberately. `reportFatal` in index.ts DOES send a
+    // stack trace -- to the operator's alert channel, on the way to exiting the process.
+    // That is the one place a stack belongs: an operator debugging a crash loop needs it,
+    // and a Telegram alert is not a public HTTP response. The rule is about what a stranger
+    // can read over the wire, not about whether the string exists anywhere in the file.
+    const routes = code('src/statusRoutes.ts');
+    for (const forbidden of [/detail:\s*String\(/, /error:\s*String\(/, /message:\s*String\(/, /\.stack/]) {
+      expect(routes).not.toMatch(forbidden);
+    }
+    // `void err` is the shape that says the value is deliberately discarded.
+    expect(routes.match(/catch \(err\)/g)?.length).toBe(routes.match(/void err/g)?.length);
+
+    // And index.ts must not have grown a handler of its own beside the mounted ones.
+    const src = code('src/index.ts');
+    const inline = src.match(/app\.get\('\/status[^']*',\s*async/g);
+    expect(inline).toBeNull();
+  });
+
+  it('the core route asks the endpoint for its chain id rather than reading configuration', () => {
+    // `getNetwork()` answers from the configured value under staticNetwork, which is how
+    // the pool's admission gate came to compare a constant to itself.
+    const src = code('src/index.ts');
+    const builderAt = src.indexOf('const statusDepsFor');
+    const routesEnd = src.indexOf("app.get('/status/core'");
+    const statusPath = src.slice(builderAt, routesEnd);
+    expect(statusPath).toContain("send('eth_chainId'");
+    expect(statusPath).not.toContain('getNetwork()');
+  });
+
+  it('the launch path does not import the core validator as a substitute for its own checks', () => {
+    // The endpoint may become an ADDITIONAL gate. It must never become a weaker one: an
+    // endpoint that says yes is easier to satisfy than a chain that does.
+    const launch = code('scripts/phase-b-launch.ts');
+    expect(launch).not.toContain('coreValidator');
+    expect(launch).not.toContain('fetchAndValidateCore');
+    expect(launch).not.toContain('/status/core');
+  });
+
+  it('phase-b-launch still performs its own live preflight, unchanged', () => {
+    const launch = code('scripts/phase-b-launch.ts');
+    // The direct checks that must not be replaced by a status endpoint.
+    expect(launch).toContain('assertDeploymentIdentity');
+    expect(launch).toContain('getLaunchReadiness');
+    expect(launch).toContain('getLiveFeeWei');
   });
 });
