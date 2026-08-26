@@ -261,6 +261,32 @@ invalidates any earlier dry run.
 NO-GO pending independent audit and renewed explicit financial authorisation. See
 `PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
 
+**The canary execute was ATTEMPTED and ABORTED at preflight on 2026-08-25**, twice, with no
+signature and no broadcast. The authorisation is **unused, not consumed**. It stopped because
+`/status` was returning 503 with `launchpad` down, which fails gates 2, 6 and 9. The reviewer's
+independent verification found 8/8 requests failing afterwards, so the brief recovery observed
+during the attempt was a lucky window, not a fix. Reports: `PONSR-CANARY-EXECUTE-ABORTED-REPORT.txt`,
+`PONSR-CANARY-EXECUTE-ABORT-AND-LAUNCHPAD-FINDING.txt`.
+
+**ROOT CAUSE FOUND 2026-08-26, and it was NOT the upstream RPC.** That diagnosis — recorded in
+the abort reports and repeated here — was wrong. The launch-readiness check made **four
+sequential HTTP round trips** inside a single 5 000 ms deadline: `eth_getCode` for 24 177 bytes
+of runtime bytecode, then `feeEscrow()` alone, then the batched permission reads, then
+`getLaunchConfig` waiting on the count from the trip before it. That divides the budget into
+~1 250 ms slices, so the check failed whenever ONE round trip cost over a second and passed only
+when the network happened to be fast. Measured live in the same minute: **pre-fix 7 354 ms,
+post-fix 1 561 ms, identical verdict**. The lesson is the same one §11 of the findings teaches —
+`rpc: ok` sitting beside `launchpad: down` was read as a statement about pons, when nothing had
+measured pons at all.
+
+Fixed by `readinessProbe.ts` (one round trip, per-call timings marked `shared` because batching
+destroys attribution), `identityWatch.ts` (the bytecode check on its own budget and cadence,
+never weakened on the launch path), `rpcIdentity.ts` (publish WHICH endpoint answered without
+publishing the URL — `RPC_URL` is an unreadable Fly secret, and that missing fact is why this
+was misdiagnosed), and `rpcPool.ts` (a bounded fallback that admits an endpoint only if its
+chain id and factory bytecode match the registry, wired to the read path only). Not yet
+deployed. See `PONSR-READINESS-OBSERVABILITY-REPORT.txt`.
+
 **The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
 table; the journal is operator state outside the container, deliberately, so a deploy cannot
 erase a record of transactions that are still on chain. Migrations to it — such as the
