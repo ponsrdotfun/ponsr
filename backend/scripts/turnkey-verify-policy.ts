@@ -17,8 +17,8 @@
  */
 import { config } from '../src/config';
 import { deploymentById, executableDeployment } from '../src/deployments';
-import { classifyTurnkeyOutcome, describeOutcome, Outcome } from '../src/turnkeyOutcome';
-import { ALL_PROBES, PROBE_LABELS, classifyPolicy, verdictExitCode } from '../src/turnkeyVerdict';
+import { classifyTurnkeyOutcome, Outcome } from '../src/turnkeyOutcome';
+import { renderVerification, resolveTargetArg } from '../src/turnkeyVerifyCli';
 import { splitterArtifactFor } from '../src/splitterDeployer';
 
 const ARBITRARY = '0x000000000000000000000000000000000000dEaD';
@@ -30,24 +30,16 @@ function line(label: string, value: unknown) {
 /**
  * The rollout target, refused BEFORE anything is constructed or signed.
  *
- * Parsed at module scope on purpose: a usage error must not cost a Turnkey client, a
- * provider, a nonce read or four signing requests. It also must be a deployment the bot
- * could actually launch through -- naming a superseded one used to be accepted and then
- * checked against the v1 probe, which is a DENY test, so "the rollout target is allowed"
- * would have meant the opposite of what it says.
+ * Resolved at module scope on purpose: a usage error must not cost a Turnkey client, a
+ * provider, a nonce read or six signing requests. The rule itself lives in
+ * `src/turnkeyVerifyCli.ts` so it can be tested without any of that.
  */
-const targetArg = process.argv
-  .find((a) => a.startsWith('--target-deployment='))
-  ?.slice('--target-deployment='.length);
-const rolloutTarget = targetArg ? deploymentById(targetArg) : null;
-if (rolloutTarget && !rolloutTarget.executable) {
-  console.error(
-    `--target-deployment names ${rolloutTarget.id}, which is not executable ` +
-      `(superseded by ${rolloutTarget.supersededBy ?? 'the current deployment'}). ` +
-      'Rollback is a previous application image, not a superseded factory.'
-  );
-  process.exit(2);
+const targetArg = resolveTargetArg(process.argv);
+if (targetArg.kind === 'usage') {
+  for (const l of targetArg.lines) console.error(l);
+  process.exit(targetArg.exitCode);
 }
+const rolloutTarget = targetArg.rolloutTarget;
 
 (async () => {
   const { Turnkey } = require('@turnkey/sdk-server');
@@ -104,31 +96,14 @@ if (rolloutTarget && !rolloutTarget.executable) {
     }
   }
 
-  const show = describeOutcome;
-
   // From the registry, because a config address is how this went wrong twice.
   //
   // On 2026-08-20 this script read `PONS_V2_FACTORY_ADDRESS` and reported PASSED for
   // 0x7E1EAbd5…, a deployment pons replaced on 2026-08-03 and which the bot no longer
-  // calls. Every tick was green and none of them described the launch path. That is the
-  // §11 lesson arriving inside the tool written to apply it: an address is not an
-  // identity, and the registry is the only thing that knows which one is executable.
+  // calls. Every tick was green and none of them described the launch path.
   const target = executableDeployment();
   const superseded = deploymentById('pons-v2-legacy-7e1');
 
-  console.log('=== VERIFYING THE BOT POLICY ===');
-  line('signer', from);
-  line('v1 factory (deny-test only)', deploymentById('pons-v1').factory);
-  line('current factory', `${target.factory}  (${target.id})`);
-  line('superseded factory', `${superseded.factory}  (not launched through)`);
-  line('bot launches through', `${target.id}  <- the one that has to be ALLOWED`);
-  console.log('');
-
-  // Both factories, always. This script used to test only v1 and print PASSED, which on
-  // 2026-08-19 reported a healthy policy immediately after an attempt to widen it to v2
-  // had silently failed to run at all. A green tick about the contract you are not
-  // changing is worse than no tick: it answers a question nobody asked, in the voice of
-  // the one they did.
   // BOTH superseded factories, and both are DENY tests. The v1 probe used to be asked,
   // printed with an expected label of `allowed`, counted toward the "could not ask" tally
   // -- and then left out of the verdict, so the script could print PASSED while v1 was
@@ -139,7 +114,6 @@ if (rolloutTarget && !rolloutTarget.executable) {
     value: 500000000000000n,
     data: '0x12345678',
   });
-  line('1. tx to the v1 factory', show(v1Factory, 'denied'));
 
   const legacyFactory = await attempt('legacy factory', {
     ...base,
@@ -147,7 +121,6 @@ if (rolloutTarget && !rolloutTarget.executable) {
     value: 500000000000000n,
     data: superseded.launchSelector,
   });
-  line('2. tx to the superseded v2 factory', show(legacyFactory, 'denied'));
 
   const currentFactory = await attempt('current factory', {
     ...base,
@@ -155,26 +128,33 @@ if (rolloutTarget && !rolloutTarget.executable) {
     value: 500000000000000n,
     data: target.launchSelector,
   });
-  line('3. tx to the CURRENT factory', show(currentFactory, 'allowed'));
-
-  if (rolloutTarget) line('rollout target', `${rolloutTarget.id}  <- must be ALLOWED`);
-  // Only an executable target can be named -- refused at module scope otherwise -- and
-  // there is exactly one, so this is the current probe. Never a superseded one, which is
-  // a DENY test and would make "the rollout target is allowed" mean its opposite.
-  const rolloutOk = !rolloutTarget || currentFactory.kind === 'allowed';
 
   // The ACTUAL splitter initcode, not a ten-byte prefix.
   //
   // A prefix proves a creation is allowed in general. If exact-initcode binding is ever
-  // chosen -- it is one of the two designs for closing the funded-creation finding --
-  // a prefix would pass a rule that the real deployment then fails, which is the worst
-  // possible time to discover the difference.
+  // chosen -- one of the two designs for closing the funded-creation finding -- a prefix
+  // would pass a rule the real deployment then fails, which is the worst possible time to
+  // discover the difference.
   const zeroValueCreation = await attempt('zero-value creation', {
     ...base,
     data: splitterArtifactFor(target).bytecode,
     value: 0n,
   });
-  line('4. zero-value contract creation', show(zeroValueCreation, 'allowed'));
+
+  /**
+   * The check this script was missing, and the reason its verdict was wrong.
+   *
+   * Every destination probe asks about a TO. A contract creation has none -- that is what
+   * makes `eth.tx.to == ''` a workable rule and what makes it dangerous. `value` rides
+   * along on a creation exactly as it does on a transfer, and it lands in the contract
+   * being created, whose code the sender writes. Measured 2026-08-21: Turnkey signed a
+   * creation carrying 1 ETH.
+   */
+  const fundedCreation = await attempt('funded creation', {
+    ...base,
+    data: splitterArtifactFor(target).bytecode,
+    value: 1000000000000000000n,
+  });
 
   const arbitraryDestination = await attempt('arbitrary destination', {
     ...base,
@@ -182,98 +162,35 @@ if (rolloutTarget && !rolloutTarget.executable) {
     value: 1000000000000000000n,
     data: '0x',
   });
-  line('6. tx to an arbitrary address', show(arbitraryDestination, 'denied'));
 
   /**
-   * The check this script was missing, and the reason its verdict was wrong.
+   * THE DECISION IS NOT MADE HERE, AND NEITHER IS THE EXIT CODE.
    *
-   * Cases 1-3 all ask about a DESTINATION. A contract creation has none -- that is what
-   * makes `eth.tx.to == ''` a workable rule and what makes it dangerous. `value` rides
-   * along on a creation exactly as it does on a transfer, and it lands in the contract
-   * being created, whose code the sender writes.
+   * This script printed `=== NOT SAFE YET ===` and then exited 0: the branch fell out of
+   * the async function without setting `process.exitCode`, which was set only on the
+   * INCONCLUSIVE and PASS paths. The ceremony's gate is "final exit 0 and the PASS
+   * matrix", so exit 0 was satisfied by the exact state the ceremony exists to remove.
    *
-   * So a key that may create contracts with value attached may move the whole balance in
-   * one transaction, and case 3 will still print `denied ✅` because no arbitrary address
-   * was ever named. Measured 2026-08-21: Turnkey signed a creation carrying 1 ETH.
+   * Both now come from one place, and it is testable with synthetic outcomes.
    */
-  const fundedCreation = await attempt('funded creation', {
-    ...base,
-    data: splitterArtifactFor(target).bytecode,
-    value: 1000000000000000000n,
-  });
-  line('5. contract creation CARRYING FUNDS', show(fundedCreation, 'denied'));
-
-  console.log('');
-
-  /**
-   * The verdict is NOT computed here.
-   *
-   * It lives in `src/turnkeyVerdict.ts`, where it can be driven with synthetic outcomes
-   * without spending signing quota -- and where the defect that stood in this file is now
-   * impossible to reintroduce quietly: v1 was ASKED, PRINTED, counted toward the unknown
-   * tally, and then omitted from the pass condition, so this script could announce
-   *
-   *     === PASSED ===   Safe to set TURNKEY_POLICY_CONFIRMED=true
-   *
-   * while v1 remained an allowed destination.
-   */
-  const verdict = classifyPolicy({
-    currentFactory,
-    zeroValueCreation,
-    v1Factory,
-    legacyFactory,
-    arbitraryDestination,
-    fundedCreation,
+  const result = renderVerification({
+    outcomes: {
+      currentFactory,
+      zeroValueCreation,
+      v1Factory,
+      legacyFactory,
+      arbitraryDestination,
+      fundedCreation,
+    },
+    signer: from,
+    target,
+    superseded,
+    v1: deploymentById('pons-v1'),
+    rolloutTarget,
   });
 
-  if (verdict.kind === 'inconclusive') {
-    console.log('=== INCONCLUSIVE ===');
-    console.log(`  ${verdict.unknown.length} of ${ALL_PROBES.length} checks could not be asked, so this run proves nothing.`);
-    for (const p of verdict.unknown) console.log(`    - ${PROBE_LABELS[p]}`);
-    console.log('  The most common cause is the Turnkey organisation being over its signing');
-    console.log('  quota, which disables signing for everything and is not a policy problem.');
-    console.log('  Nothing here says the policy is wrong, and nothing says it is right.');
-    process.exitCode = verdictExitCode(verdict);
-    return;
-  }
-
-  if (verdict.kind === 'pass' && rolloutOk) {
-    console.log('=== PASSED ===');
-    console.log(`The bot can launch on ${target.id} and deploy splitters, and`);
-    console.log('cannot move funds anywhere else, including by attaching them to a deploy.');
-    console.log('Both superseded factories are denied.');
-    console.log('');
-    console.log('Safe to set TURNKEY_POLICY_CONFIRMED=true in backend/.env.');
-    process.exitCode = 0;
-    return;
-  }
-
-  console.log('=== NOT SAFE YET ===');
-  if (verdict.kind === 'not-safe') for (const p of verdict.problems) console.log(`  ${p}`);
-  if (rolloutTarget && !rolloutOk) {
-    console.log(`  The rollout target ${rolloutTarget.id} is DENIED by the policy.`);
-    console.log('  The next runbook step launches through it, producing a bot refused by');
-    console.log('  its own signer after the splitter is paid for.');
-  }
-  if (fundedCreation.kind === 'allowed') {
-    console.log('  THE TREASURY IS DRAINABLE BY THIS KEY.');
-    console.log('  Turnkey signed a contract creation carrying funds. A creation has no');
-    console.log('  destination, so the arbitrary-address check above cannot see it: the value');
-    console.log('  lands in a contract whose code the sender chooses. One transaction empties');
-    console.log('  the hot wallet, and every destination-only check still reports green.');
-    console.log('  Do NOT claim anywhere that a leak of this key costs only launches.');
-    console.log('  Closing it is an operator action -- see docs/TURNKEY-CREATION-AUTHORITY.md');
-  }
-  if (v1Factory.kind === 'allowed' || legacyFactory.kind === 'allowed') {
-    console.log('  A superseded factory is still an allowed destination. Removing it is an');
-    console.log('  owner ceremony -- see docs/TURNKEY-V1-REVOCATION-CEREMONY.md, and read the');
-    console.log('  ordering there first: the v1 rule also carries the only zero-value');
-    console.log('  contract-creation clause, so deleting it alone leaves a bot that can launch');
-    console.log('  and then cannot deploy its splitter.');
-  }
-  if (currentFactory.kind !== 'allowed') {
-    console.log('  Fix: powershell -File scripts\apply-v2-policy.ps1 -Execute');
-  }
+  for (const l of result.lines) console.log(l);
+  process.exitCode = result.exitCode;
 })().catch((err) => {
   console.error('FAILED:', err?.message ?? err);
   process.exit(1);
