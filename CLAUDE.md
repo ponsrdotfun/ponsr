@@ -320,6 +320,25 @@ carrying forward as general rules:
   being refused — and it told the operator refusals end "at midnight UTC", which is not when
   a rolling window frees up.
 
+**A third review (2026-08-26) found three more, all at the STATUS BOUNDARY rather than in
+any single unit, and the first one carries its own lesson.**
+
+`buildStatus` was bounded and tested as bounded. The ROUTE was not: it called
+`await rpcPool.acquire()` first, and acquisition admits candidates serially at the full
+admission timeout. Measured: **8 020 ms of acquisition before the "one budget for the whole
+response" even started**, 8 023 ms total against a claimed 5 000 ms. **The unit test passed
+the entire time, because it called `buildStatus` directly.** A bound that holds for a
+function says nothing about the composition that calls it, and nothing was testing the
+composition. It is `statusSession.ts` now, and the tests drive it: 4 767 ms for the same
+scenario, with a body still returned.
+
+The other two: **an unknown rolling spend was falling back to the calendar day**, so a
+missing authoritative figure plus a quiet calendar day published `daily-cap: ok` — the same
+"missing input treated as permissive" defect as the launch fee, in a different file. And
+**`rpc-endpoint` read the pool's mutable preferred endpoint at render time**, so a
+concurrent request could leave one response carrying `observedThrough=A` in the envelope
+while telling a human that B was serving.
+
 **The canary journal is NOT in the bot's database.** `/data/bot.sqlite` has no `canary_tx`
 table; the journal is operator state outside the container, deliberately, so a deploy cannot
 erase a record of transactions that are still on chain. Migrations to it — such as the
