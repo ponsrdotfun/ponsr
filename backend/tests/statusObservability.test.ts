@@ -428,4 +428,3 @@ describe('the cap the page reports is the cap that refuses launches', () => {
     expect(c.detail).toContain('rolling figure unavailable');
   });
 });
-
