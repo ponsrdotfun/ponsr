@@ -148,9 +148,25 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
   fees were unrouted (the splitters exist and are wired; the DB row is what is missing).
   The setting, `V1Target`, `PONS_FACTORY_ADDRESS` and `PONS_LOCKER_ADDRESS` are all gone.
   The registry decides, and `executableDeployment()` throws unless exactly one entry is
-  executable. **The signer still allows v1** until the owner runs
-  `docs/TURNKEY-V1-REVOCATION-CEREMONY.md` — code cannot remove a permission that lives in
-  Turnkey.
+  executable. The signer allowed v1 for two days longer than the code did, because code
+  cannot remove a permission that lives in Turnkey.
+
+  **CLOSED 2026-08-28 by the owner ceremony.** The signer now holds exactly two policies:
+  `ece2a399-…` (the current factory) and `60ef12fa-c498-4eaa-a6bb-f20c502152d6`
+  (`eth.tx.to == '' && eth.tx.value == 0`, contract creation only). The combined
+  `b647cc07-…` and the legacy-v2 `1b8b585f-…` are gone. A signed six-probe matrix measured
+  v1 **denied**, legacy-v2 **denied**, the current factory ALLOWED, zero-value creation
+  ALLOWED, a funded creation **denied** and an arbitrary destination **denied** — PASS,
+  exit 0, nothing broadcast.
+
+  The ORDER was the load-bearing part, and it is why the creation-only rule was created
+  before either deletion: `b647cc07` carried the ONLY contract-creation clause, so deleting
+  it first would have left a bot that can launch and then cannot deploy its splitter —
+  after the launch fee is already spent. It is also why the intermediate probe is
+  EXPECTED to fail: while both rules grant creation, no probe can tell which one is
+  enforcing. Only the final matrix, with `60ef12fa` alone, proves the replacement works.
+  Residual is unchanged: initcode is still unbound, so a zero-value deploy of arbitrary
+  code costs gas and never treasury.
 
 - **The fee model works, and `FeeSplitter.sol` was broken.** Not for the escrow reason
   feared: fees are **pushed** to `feeRedirects[token]`, and any contract can be the recipient.
@@ -243,8 +259,10 @@ Still blocked on the owner:
    second authenticator is recommended and costs nothing; it gates neither the ceremony nor
    a canary unless the owner decides otherwise.
 
-   Ceremony step 1 is DONE. Steps 2–9 — disposable credential, inventory, creation-only
-   replacement, intermediate probe, the two removals, final probe, destroy — remain open.
+   **The ceremony is COMPLETE as of 2026-08-28** — creation-only replacement, intermediate
+   probe, both removals, final probe. No disposable credential was ever created: the owner
+   authorised every step with the EXISTING root passkey, so the ceremony added no
+   credential to destroy afterwards. The step that used to exist for one is gone.
    See `docs/TURNKEY-V1-REVOCATION-CEREMONY.md`.
 3. ~~Backend hosting, for the listener to run 24/7~~ — **done, and has been for a while.**
    `ponsr-backend` runs on Fly in `iad`, machine `867634bee0e048`, `min_machines_running = 1`
