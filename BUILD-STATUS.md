@@ -25,8 +25,11 @@
 > **What is deployed IS what is in this repository.** Production runs release **v38**, source
 > `55f23bd`, image `sha256:bddce971…ede5c9`. `/status` serves the typed `spend` envelope —
 > `rolling-24h`, chain 4663, `pons-v2-current-7ed`, treasury pinned to the hot wallet,
-> `publicLaunchEnabled: false`. Overall `degraded` is correct: of sixteen checks,
-> `public-launches` is the only non-ok one and must stay paused.
+> `publicLaunchEnabled: false`. Overall `degraded` is correct, and `public-launches` must stay
+> paused. During the v38 paused-deploy and canary acceptance window, `public-launches` was the
+> only **core-relevant** non-ok check. Optional telemetry such as `read-credits` may degrade
+> independently and does not alter core readiness — so "the only non-ok check" is an
+> observation bound to that window, not a standing property of `/status`.
 >
 > This paragraph said **v35 / `dd9fcbe`** until 2026-08-28, through two deploys. Name the
 > release AND its source commit when you change it, and before describing what production
