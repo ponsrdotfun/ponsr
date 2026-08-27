@@ -110,10 +110,12 @@ describe('the signer-active script wires the verdict rather than reimplementing 
     expect(source).toMatch(/v1Factory/);
   });
 
-  it('takes its verdict from classifyPolicy', () => {
-    expect(source).toMatch(/classifyPolicy\(/);
-    // Supporting evidence only -- the arithmetic itself is covered above. What this
-    // catches is a second, weaker predicate being reintroduced beside the shared one.
+  it('takes its verdict from the shared controller, not from arithmetic of its own', () => {
+    // `classifyPolicy` is now reached through `renderVerification`, which also owns the
+    // EXIT CODE -- the script printed NOT SAFE and exited 0 while the verdict itself was
+    // correct. Supporting evidence only; the behaviour is covered in turnkeyCliExit.
+    expect(source).toMatch(/renderVerification\(/);
+    expect(source).not.toMatch(/classifyPolicy\(/);
     expect(source).not.toMatch(/const good\s*=/);
   });
 
@@ -123,10 +125,11 @@ describe('the signer-active script wires the verdict rather than reimplementing 
     expect(source).not.toMatch(/fine while the bot runs v1/i);
   });
 
-  it('refuses a non-executable --target-deployment before any signer is constructed', () => {
-    // Ordering matters: the refusal must precede the Turnkey client, not follow four
-    // signing requests.
-    const refusal = source.indexOf('is not executable');
+  it('resolves the --target-deployment refusal before any signer is constructed', () => {
+    // Ordering matters: the refusal must precede the Turnkey client, not follow six
+    // signing requests. The rule itself lives in `turnkeyVerifyCli` and is tested there;
+    // what this pins is that the script calls it FIRST.
+    const refusal = source.indexOf('resolveTargetArg(process.argv)');
     const client = source.indexOf('new Turnkey(');
     expect(refusal).toBeGreaterThan(-1);
     expect(client).toBeGreaterThan(-1);

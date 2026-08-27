@@ -67,8 +67,14 @@ export function normalizeCondition(condition: string | undefined): string {
   return raw.replace(/\s+/g, '').toLowerCase();
 }
 
-/** Same for the consensus expression, which encodes which user the policy binds. */
-function normalizeConsensus(consensus: string | undefined): string {
+/**
+ * Same for the consensus expression, which encodes which user the policy binds.
+ *
+ * EXPORTED so the inventory projection uses THIS rule rather than a second one written
+ * beside it. Two normalizers that agree today and drift tomorrow is how a policy gets
+ * matched by one tool and missed by another.
+ */
+export function normalizeConsensus(consensus: string | undefined): string {
   return String(consensus ?? '').replace(/\s+/g, '');
 }
 
