@@ -14,10 +14,15 @@ import { PolicyLike, normalizeCondition, normalizeConsensus } from './turnkeyPol
  * expression. The projection simply did not print them, which is a different failure from
  * not having them and a worse one -- it looks like a complete inventory.
  *
- * FAIL CLOSED ON INCOMPLETE IDENTITY. A row missing an id, an organisation, an effect, a
- * condition or a consensus is not a row with an empty field; it is a row whose authority
- * nobody has established. Turning a missing consensus into `''` and calling it bound is
- * the same defect as an unreadable cap becoming zero.
+ * FAIL CLOSED ON INCOMPLETE IDENTITY. A row missing an id, an effect, a condition or a
+ * consensus is not a row with an empty field; it is a row whose authority nobody has
+ * established. Turning a missing consensus into `''` and calling it bound is the same
+ * defect as an unreadable cap becoming zero.
+ *
+ * The ORGANISATION is the exception, and getting that wrong was a defect of its own: the
+ * API scopes it on the REQUEST and does not repeat it per row, so an absent one inherits
+ * the caller's pin. Only a row claiming a DIFFERENT organisation fails. See
+ * `projectPolicyInventory` for what that cost.
  */
 
 /** What a policy names, in closed categories rather than prose. */
@@ -46,7 +51,6 @@ export interface PolicyProjection {
 
 export type ProjectionProblem =
   | 'missing-policy-id'
-  | 'missing-organization'
   | 'organization-mismatch'
   | 'missing-effect'
   | 'missing-condition'
@@ -119,13 +123,32 @@ export function classifyCapabilities(normalized: string): PolicyCapability[] {
 /**
  * Projects raw `getPolicies` rows into bindable identities.
  *
- * `expectedOrganizationId` is CALLER-PINNED. Reading the organisation out of the same
- * response it is meant to validate would be a limit acting as evidence about itself.
+ * `expectedOrganizationId` is CALLER-PINNED and REQUIRED. Reading the organisation out of
+ * the same response it is meant to validate would be a limit acting as evidence about
+ * itself, so a missing pin THROWS rather than being filled in from a row.
+ *
+ * A ROW THAT OMITS `organizationId` IS NORMAL, and treating it as a defect was a real
+ * one. `getPolicies({ organizationId })` scopes the request; the response does not repeat
+ * the organisation on every policy. The first live run marked all three genuine policies
+ * `missing-organization` and declared a perfect snapshot unusable -- because every test
+ * fixture had carried a field the API never sends. The fixtures asserted an assumption
+ * about the response shape rather than the shape itself.
+ *
+ * So an absent row organisation INHERITS the caller pin: that is not trusting the
+ * response, it is carrying the authority scope the request was made under. A row that
+ * CARRIES a different organisation is still a mismatch and still fails closed -- which is
+ * the only case the check was ever for.
  */
 export function projectPolicyInventory(
   rows: readonly PolicyLike[],
   expectedOrganizationId: string
 ): InventorySnapshot {
+  if (!String(expectedOrganizationId ?? '').trim()) {
+    throw new Error(
+      'projectPolicyInventory requires a caller-pinned organization id. It is the scope ' +
+        'the request was made under and cannot be recovered from the response.'
+    );
+  }
   const problems: InventorySnapshot['problems'] = [];
   const policies: PolicyProjection[] = [];
   const seenIds = new Set<string>();
@@ -139,9 +162,10 @@ export function projectPolicyInventory(
     else if (seenIds.has(policyId)) note('duplicate-policy-id');
     seenIds.add(policyId);
 
-    const organizationId = String(row.organizationId ?? '').trim();
-    if (!organizationId) note('missing-organization');
-    else if (organizationId !== expectedOrganizationId) note('organization-mismatch');
+    // Absent means "inherited from the request scope". Present means it must agree.
+    const claimed = String(row.organizationId ?? '').trim();
+    if (claimed && claimed !== expectedOrganizationId) note('organization-mismatch');
+    const organizationId = claimed || expectedOrganizationId;
 
     const effect = String(row.effect ?? '').trim();
     if (!effect) note('missing-effect');
