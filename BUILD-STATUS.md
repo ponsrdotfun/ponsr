@@ -22,19 +22,36 @@
 > live service; the backend runs on Fly as `ponsr-backend` (`iad`,
 > `min_machines_running = 1`), health check passing.
 >
-> **What is deployed IS what is in this repository (2026-08-25).** Release **v35** runs commit
-> `dd9fcbe`, image `sha256:bca351d2…`; rollback target is the exact digest `sha256:2676be63…`
-> (v34, source `e92b23b`). `/status` serves the typed `spend` envelope — `rolling-24h`, chain
-> 4663, `pons-v2-current-7ed`, treasury pinned to the hot wallet, `publicLaunchEnabled: false`.
-> Overall `degraded` is correct: `public-launches` is the only non-ok check and must stay
-> paused. Evidence in `PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
+> **What is deployed IS what is in this repository.** Production runs release **v38**, source
+> `55f23bd`, image `sha256:bddce971…ede5c9`. `/status` serves the typed `spend` envelope —
+> `rolling-24h`, chain 4663, `pons-v2-current-7ed`, treasury pinned to the hot wallet,
+> `publicLaunchEnabled: false`. Overall `degraded` is correct, and `public-launches` must stay
+> paused. During the v38 paused-deploy and canary acceptance window, `public-launches` was the
+> only **core-relevant** non-ok check. Optional telemetry such as `read-credits` may degrade
+> independently and does not alter core readiness — so "the only non-ok check" is an
+> observation bound to that window, not a standing property of `/status`.
 >
-> **A live keyless mainnet dry run is ADMITTING** for the final identity **PONSR STONKS /
-> PSTONKS / native ETH**: chain 4663, exact deployment identity, live readiness and fee, the
-> bot ledger bound from the deployed typed `/status`, no signer, no signature, no broadcast.
-> `--execute` is still NO-GO — it needs an independent audit and renewed explicit financial
-> authorisation against a maximum exposure of **0.0025 ETH** (fee 0.0005 + combined gas at
-> most 0.002).
+> This paragraph said **v35 / `dd9fcbe`** until 2026-08-28, through two deploys. Name the
+> release AND its source commit when you change it, and before describing what production
+> believes, read `/status` — this file is a summary of the past, not an observation of the
+> present.
+>
+> **THE CANARY RAN AND SUCCEEDED (2026-08-28), so the current-V2 launch path is proven on
+> mainnet.** Verdict CANARY SUCCESS, fully reconciled, one authorisation, one execute, no retry.
+> **PONSR STONKS / PSTONKS**, token `0x7803f37e0Db73105c47D5A5F3D054a0ae47E2199`, splitter
+> `0xF78DC0166665Bc69d0e40fbf735BdA0D049f088a`, paired against **native ETH**. Both transactions
+> mined status 1; balance delta reconciles exactly to fee + actual gas, **0.000702 ETH** against
+> a 0.0025 ceiling; nonce moved 4 → 6. Evidence in
+> `PONSR-STONKS-CANARY-COMPLETION-REPORT.txt`.
+>
+> **The fee-collection path is still UNTESTED, and 95/5 is not proven by this run.** No swap,
+> trade or claim was authorised or performed; the split is asserted by the splitter's constants
+> (9500/500) and its escrow binding, not by value having moved. Proving it means trading against
+> the curve and running `collect:v2`, which moves value and therefore needs its own fresh
+> financial authorisation. The one-canary authorisation is **consumed**.
+>
+> **The backend is FROZEN from 2026-08-28**, and the next focus is website, data and
+> distribution. The public gate stays false; security and correctness fixes stay in scope.
 >
 > **Public launching is off, and that is now a decision rather than an accident.** The
 > paragraph replaced here said the stale deploy was acting as a brake because the running bot
