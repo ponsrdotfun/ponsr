@@ -200,6 +200,27 @@ Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key)
 
 ## Immediate next actions
 
+**THE BACKEND IS FROZEN as of 2026-08-28.** The launch path is proven end to end on mainnet
+through the current V2 factory, the signer holds only the two policies it needs, and production
+is serving on v38 with the public gate false. Nothing about the backend is the bottleneck any
+more, so it stops being where effort goes.
+
+**Next focus is website, data and distribution.** Whatever a reader can see: the board and token
+pages, what the site can honestly show from the chain, and how anyone finds Ponsr at all.
+
+The freeze is a default, not a prohibition. What it means concretely:
+
+- No backend feature work, refactor or dependency change without a reason that names a defect
+  or a brief. "While I'm in here" is exactly what it exists to stop.
+- The public gate stays **false**. Opening it is an owner decision with its own authorisation,
+  not a step in some other task.
+- **Every remaining chain action that moves value needs its own fresh authorisation.** The
+  one-canary authorisation of 2026-08-28 is consumed. The obvious next one — trading against
+  the curve and running `collect:v2` to prove the 95/5 split end to end — is a financial action
+  and is NOT covered by anything already granted.
+- Security and correctness fixes are always in scope. A freeze on features is not a freeze on
+  defects.
+
 Items 1-3 and 5 closed 2026-08-06. Every external provider is now wired and **verified
 against the live service**, not merely configured:
 
@@ -305,16 +326,41 @@ The final canary identity is **PONSR STONKS / PSTONKS / native ETH**, chosen by 
 salt is deterministic per identity, so changing the name or symbol changes the salt and
 invalidates any earlier dry run.
 
-**A live keyless mainnet dry run against v35 is ADMITTING** (2026-08-25). `--execute` remains
-NO-GO pending independent audit and renewed explicit financial authorisation. See
-`PONSR-V35-FINAL-DRYRUN-REPORT.txt`.
+**THE CANARY RAN, AND THE CURRENT-V2 LAUNCH PATH IS PROVEN ON MAINNET (2026-08-28).**
+Verdict CANARY SUCCESS, fully reconciled, under a fresh one-launch authorisation that is now
+**consumed** — anything further needs a new one.
 
-**The canary execute was ATTEMPTED and ABORTED at preflight on 2026-08-25**, twice, with no
-signature and no broadcast. The authorisation is **unused, not consumed**. It stopped because
-`/status` was returning 503 with `launchpad` down, which fails gates 2, 6 and 9. The reviewer's
-independent verification found 8/8 requests failing afterwards, so the brief recovery observed
-during the attempt was a lucky window, not a fix. Reports: `PONSR-CANARY-EXECUTE-ABORTED-REPORT.txt`,
-`PONSR-CANARY-EXECUTE-ABORT-AND-LAUNCHPAD-FINDING.txt`.
+```
+token      PONSR STONKS / PSTONKS   0x7803f37e0Db73105c47D5A5F3D054a0ae47E2199
+splitter   0xF78DC0166665Bc69d0e40fbf735BdA0D049f088a
+pair       0x0000000000000000000000000000000000000000   native ETH
+splitter   0x361125a10fbeefdba22bbb64e382b77bafe5c8b2cda417ced69ac461cd3ac3f1  status 1
+launch     0xf392c31b4f30eb1b758acc8530e2ba0136b80dd5125f5d5187bbb35dc351b5ce  status 1
+cost       0.000702 ETH = fee 0.0005 + gas 0.000202, against a 0.0025 ceiling
+```
+
+Balance delta reconciles exactly to fee + actual gas, nonce moved 4 → 6, the journal holds two
+`confirmed` rows with the fee recorded once, and the public gate never moved off false. The
+splitter's escrow immutable reads back the deployment's escrow and its shares are 9500/500.
+See `PONSR-STONKS-CANARY-COMPLETION-REPORT.txt`.
+
+**Three things this does NOT establish, and they matter more than the success line.**
+
+- **The fee-collection path is untested.** No swap, trade or claim was authorised or made.
+  95/5 is asserted by the splitter's constants and its escrow binding, not by any value having
+  moved. Do not describe the revenue path as proven anywhere.
+- **Admission is not atomic**, and the tool prints so itself: the bot ledger and the canary
+  journal are separate stores, so a running bot could in principle admit a launch between the
+  preflight read and the launch landing. `PUBLIC_LAUNCH_ENABLED=false` narrows that window but
+  is a state, not an invariant. Nothing overlapped this time; that was measured, not guaranteed.
+- **`/status` rolling-24h reads 0 after the canary, and that is correct.** The canary spends
+  from the operator journal, deliberately outside the container. The bot's ledger is not the
+  record of this launch and never was.
+
+The two aborted attempts of 2026-08-25 are history now, kept in
+`PONSR-CANARY-EXECUTE-ABORTED-REPORT.txt` and
+`PONSR-CANARY-EXECUTE-ABORT-AND-LAUNCHPAD-FINDING.txt`. What survives from them is the lesson,
+not the status: they stopped on a `/status` 503 that was misdiagnosed as the upstream RPC.
 
 **ROOT CAUSE FOUND 2026-08-26, and it was NOT the upstream RPC.** That diagnosis — recorded in
 the abort reports and repeated here — was wrong. The launch-readiness check made **four
