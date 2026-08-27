@@ -212,21 +212,40 @@ Still blocked on the owner:
    What remains is an owner fact no code here can confirm: that the address is a wallet
    whose key is genuinely held offline. A cold address that is merely a second hot wallet
    passes every check in this repository and provides none of the protection.
-2. **Turnkey root key: a third copy exists and was used on 2026-08-20.** The 2026-08-19
-   cleanup removed `~/ponsr-turnkey-root-key.txt` and the dashboard's original `.json` in
-   `~/Downloads`, and was recorded here as done. It was not: a copy in
-   `~/Downloads/Telegram Desktop/` survived, and it is the one that created the v2 policy
-   on 2026-08-20. Two copies were found by searching; the third was found by needing it.
+2. ~~**Turnkey root key**~~ — **REVOKED 2026-08-26, and the dashboard is the proof.**
 
-   That is the lesson worth keeping, more than the file itself. A credential that has been
-   sent through a chat client exists wherever that client writes attachments, and "I
-   deleted it" describes the copies you remembered. Root bypasses the policy engine
-   entirely, so every surviving copy is a full bypass of the scoping the bot relies on.
+   The lesson is worth more than the file, and it took two attempts to learn. The
+   2026-08-19 cleanup was recorded here as done and was not: a copy in
+   `~/Downloads/Telegram Desktop/` survived. **A credential that has been sent through a
+   chat client exists wherever that client writes attachments, and "I deleted it"
+   describes the copies you remembered.**
 
-   Owner action: delete that file, and delete the root API key from the Turnkey dashboard.
-   Root keys are disposable — mint one with a passkey when an administrative act needs it.
-   The bot never needed root: it runs on a scoped key that can reach the pons factories and
-   nothing else.
+   Then the second half, which is the one that actually mattered: **deleting the file was
+   never revocation, and neither was storing it carefully.** Authority lives where the
+   credential is REGISTERED. The local copies were verified gone on 2026-08-26 — a full
+   profile sweep, Downloads, Desktop, Documents, all three Recycle Bin SIDs and 35
+   archived reports — and the key was still live the whole time.
+
+   Owner-revoked in the Turnkey dashboard on 2026-08-26. Verified two ways: the Root user
+   now shows *No API keys registered*, and `scripts/turnkey-read-policies.ts` still
+   authenticates with the BOT key and returns all three policies, which is what proves the
+   right key was removed. **Owner/dashboard-proven — not reproducible by anything in this
+   repository**, which has no way to read the API-key list.
+
+   **A recorded fact here was wrong.** This entry said the key was created 2026-08-20 and
+   that it created policy `ece2a399-…` that day. The dashboard shows it was created
+   **2026-08-05 10:35 and last used 2026-08-05 10:35** — the same minute, so it was never
+   used again after the day it was made. 2026-08-20 was the date of the FILE, not of the
+   key; the policy work that day went through the dashboard passkey.
+
+   **Residual, accepted and not a blocker:** one root user, one passkey, a 1-of-1 root
+   quorum — Turnkey flags this in red itself. Losing that device loses the organisation. A
+   second authenticator is recommended and costs nothing; it gates neither the ceremony nor
+   a canary unless the owner decides otherwise.
+
+   Ceremony step 1 is DONE. Steps 2–9 — disposable credential, inventory, creation-only
+   replacement, intermediate probe, the two removals, final probe, destroy — remain open.
+   See `docs/TURNKEY-V1-REVOCATION-CEREMONY.md`.
 3. ~~Backend hosting, for the listener to run 24/7~~ — **done, and has been for a while.**
    `ponsr-backend` runs on Fly in `iad`, machine `867634bee0e048`, `min_machines_running = 1`
    and `auto_stop_machines = false`, health check passing. This entry sat here as an open
