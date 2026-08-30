@@ -68,30 +68,27 @@ export async function tokenArtDataUri(logo, { fetchImpl = fetch } = {}) {
     if (!bytes.length || bytes.length > MAX_BYTES) return null;
 
     /**
-     * How a picture meets a round frame depends on its shape.
+     * NEVER CROP THE PICTURE SOMEBODY CHOSE.
      *
-     * `cover` fills the circle and is right for the ordinary case. Measured by
-     * rendering real images: a 16:9 photo -- the commonest shape a camera
-     * produces -- looks best filling the frame, and letterboxing every one of
-     * them would waste it. But against a 3:1 banner `cover` was plainly wrong:
-     * most of the picture was thrown away and the crop sliced a word in half,
-     * which reads as a broken card rather than a tight one.
+     * `cover` filled the frame and threw away whatever did not fit -- against a
+     * 3:1 banner it discarded most of the image and cut through the middle of a
+     * word. It looked tidy, and tidiness is not ours to buy with somebody
+     * else's picture: the image on the card is the one the launcher attached,
+     * whole, or it is not their image any more.
      *
-     * So only an unusually long picture is fitted whole, on the card's own
-     * ground. Something is lost either way; losing the frame's tidiness beats
-     * losing the picture.
+     * So it is always fitted entire, on the card's own ground, and the frame
+     * that receives it is a rounded rectangle rather than a circle -- a circular
+     * mask would cut the corners off every square picture, which is the same
+     * loss wearing a nicer shape.
+     *
+     * What is still not byte-identical, and cannot be: the bytes are re-encoded
+     * by this process and scaled to the card's size. That is the safety rule
+     * above, not a design choice -- nothing may ride onto the page inside a file
+     * that merely claims to be a picture. Every pixel of the image survives; the
+     * container does not.
      */
-    const source = sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false });
-    const { width = 0, height = 0 } = await source.metadata();
-    const ratio = width && height ? width / height : 1;
-    const elongated = ratio > 2.0 || ratio < 1 / 2.0;
-
-    const png = await source
-      .resize(RENDER_PX, RENDER_PX, {
-        fit: elongated ? 'contain' : 'cover',
-        position: 'attention',
-        background: '#0A0D11',
-      })
+    const png = await sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false })
+      .resize(RENDER_PX, RENDER_PX, { fit: 'contain', background: '#0A0D11' })
       .png({ compressionLevel: 9 })
       .toBuffer();
 

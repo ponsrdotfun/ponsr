@@ -115,11 +115,11 @@ export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = ''
   // Raised off the baseline: at cy 445 the outer ring crossed the hairline at
   // y 558, which reads as a mistake rather than a frame.
   const portrait = art
-    ? `<clipPath id="art"><circle cx="995" cy="428" r="115"/></clipPath>
-       <circle cx="995" cy="428" r="126" fill="#050607" fill-opacity=".55"/>
-       <image href="${art}" x="880" y="313" width="230" height="230" preserveAspectRatio="xMidYMid slice" clip-path="url(#art)"/>
-       <circle cx="995" cy="428" r="115" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-opacity=".85"/>
-       <circle cx="995" cy="428" r="126" fill="none" stroke="#C4CDDA" stroke-opacity=".16"/>`
+    ? `<clipPath id="art"><rect x="880" y="313" width="230" height="230" rx="34"/></clipPath>
+       <rect x="869" y="302" width="252" height="252" rx="42" fill="#050607" fill-opacity=".55"/>
+       <image href="${art}" x="880" y="313" width="230" height="230" preserveAspectRatio="xMidYMid meet" clip-path="url(#art)"/>
+       <rect x="880" y="313" width="230" height="230" rx="34" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-opacity=".85"/>
+       <rect x="869" y="302" width="252" height="252" rx="42" fill="none" stroke="#C4CDDA" stroke-opacity=".16"/>`
     : '';
   const mascot = art
     ? portrait
