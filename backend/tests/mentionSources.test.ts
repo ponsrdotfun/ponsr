@@ -260,3 +260,50 @@ describe('the reconciler holds its watermark when coverage was partial', () => {
     expect(state.get('reconciler:watermark')).toBeUndefined();
   });
 });
+
+/* --------------------------------------------------------------------------
+ * A BLANK HANDLE IS PERMANENT, SO IT MUST NEVER BE WRITTEN.
+ *
+ * A first-time launcher's Privy wallet is created write-once with
+ * `display_name: ponsr:@<handle>`. The new reading source is the only path that
+ * could deliver a mention whose handle did not arrive with it, and correcting a
+ * wallet name afterwards needs exactly the provider mutation this project
+ * forbids. So the handle is resolved, and the sink refuses to bake a blank.
+ * -------------------------------------------------------------------------- */
+describe('a handle is never delivered blank', () => {
+  const tweetOnly = {
+    data: [{ id: '1', author_id: '42', text: 'hi @ponsrdotfun', created_at: '2026-08-30T11:58:00.000Z' }],
+    includes: {},
+  };
+
+  it('looks the username up when the expansion did not carry it', async () => {
+    const doFetch = jest.fn(async (url: any) => {
+      const u = String(url);
+      if (u.includes('/users/by/username/')) return { ok: true, status: 200, json: async () => ({ data: { id: '999' } }) } as any;
+      if (u.includes('/mentions')) return { ok: true, status: 200, json: async () => tweetOnly } as any;
+      return { ok: true, status: 200, json: async () => ({ data: { id: '42', username: 'recovered' } }) } as any;
+    });
+    const src = new XApiMentionsSource('token', 'ponsrdotfun', doFetch as any);
+    const [m] = await src.getRecentMentions('2026-08-30T11:00:00.000Z');
+    expect(m.authorHandle).toBe('recovered');
+  });
+
+  it('still delivers the mention when the handle cannot be recovered', async () => {
+    // Losing a launch request is worse than an unnamed author.
+    const doFetch = jest.fn(async (url: any) => {
+      const u = String(url);
+      if (u.includes('/users/by/username/')) return { ok: true, status: 200, json: async () => ({ data: { id: '999' } }) } as any;
+      if (u.includes('/mentions')) return { ok: true, status: 200, json: async () => tweetOnly } as any;
+      return { ok: false, status: 404, json: async () => ({}) } as any;
+    });
+    const src = new XApiMentionsSource('token', 'ponsrdotfun', doFetch as any);
+    const [m] = await src.getRecentMentions('2026-08-30T11:00:00.000Z');
+    expect(m.tweetId).toBe('1');
+    expect(m.authorHandle).toBe('');
+  });
+
+  it('never writes `ponsr:@` as a wallet name', () => {
+    const source = require('fs').readFileSync(require('path').join(__dirname, '../src/walletResolver.ts'), 'utf8');
+    expect(source).toMatch(/xHandle \? `ponsr:@\$\{xHandle\}` : `ponsr:id:\$\{xUserId\}`/);
+  });
+});

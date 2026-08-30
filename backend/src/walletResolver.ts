@@ -79,7 +79,10 @@ export class PrivyWalletResolver implements WalletResolver {
         // Write-once and unique on Privy's side. See the class comment: this is the
         // idempotency guarantee that does not depend on our database being intact.
         external_id: externalIdFor(xUserId),
-        display_name: `ponsr:@${xHandle}`,
+        // The name is write-once, so a blank handle would read `ponsr:@` for the
+        // life of the wallet and only a forbidden provider mutation could fix it.
+        // The immutable numeric id is always available, so it is the fallback.
+        display_name: xHandle ? `ponsr:@${xHandle}` : `ponsr:id:${xUserId}`,
       })) as { id: string; address: string };
     } catch (err: any) {
       // A duplicate external_id means this user already has a wallet and our table has lost

@@ -84,6 +84,38 @@ export class XApiMentionsSource implements MentionSource {
     private maxResults = 25
   ) {}
 
+  private handles = new Map<string, string>();
+
+  /**
+   * A HANDLE MUST NOT ARRIVE BLANK.
+   *
+   * `expansions=author_id` populates `includes.users` for every returned tweet,
+   * so this is a narrow gap -- but the consequence is permanent. A first-time
+   * launcher's Privy wallet is created write-once with
+   * `display_name: ponsr:@<handle>`, so an empty handle names that wallet
+   * `ponsr:@` forever, and the provider mutation needed to correct it is
+   * exactly what this project forbids. One cached lookup closes it.
+   */
+  private async resolveHandle(authorId: string, fromExpansion: string): Promise<string> {
+    if (fromExpansion) return fromExpansion;
+    const cached = this.handles.get(authorId);
+    if (cached) return cached;
+    try {
+      const res = await this.fetchImpl(`https://api.x.com/2/users/${authorId}?user.fields=username`, {
+        headers: { Authorization: `Bearer ${this.bearerToken}` },
+      });
+      const body: any = await res.json();
+      const username = String(body?.data?.username ?? '');
+      if (res.ok && username) {
+        this.handles.set(authorId, username);
+        return username;
+      }
+    } catch {
+      // Fall through: the mention is still worth delivering.
+    }
+    return '';
+  }
+
   private async resolveUserId(): Promise<string> {
     if (this.userId) return this.userId;
     const res = await this.fetchImpl(
@@ -130,10 +162,11 @@ export class XApiMentionsSource implements MentionSource {
       (body?.includes?.media ?? []).map((m: any) => [String(m?.media_key ?? ''), m])
     );
 
-    return tweets.flatMap((t: any): InboundMention[] => {
+    const out: InboundMention[] = [];
+    for (const t of tweets) {
       const tweetId = String(t?.id ?? '');
       const authorXUserId = String(t?.author_id ?? '');
-      if (!tweetId || !authorXUserId) return [];
+      if (!tweetId || !authorXUserId) continue;
 
       const repliedTo = (t?.referenced_tweets ?? []).find(
         (r: any) => String(r?.type ?? '') === 'replied_to'
@@ -147,18 +180,17 @@ export class XApiMentionsSource implements MentionSource {
         .filter(Boolean)
         .map((m: any) => ({ type: m?.type, media_url_https: m?.url }));
 
-      return [
-        {
-          tweetId,
-          authorXUserId,
-          authorHandle: usersById.get(authorXUserId) ?? '',
-          text: String(t?.text ?? ''),
-          createdAt: new Date(t?.created_at ?? Date.now()).toISOString(),
-          photoUrl: trustedPhotoUrl(structuredPhotoUrls({ media })),
-          inReplyToTweetId: repliedTo ? String(repliedTo.id) : null,
-        },
-      ];
-    });
+      out.push({
+        tweetId,
+        authorXUserId,
+        authorHandle: await this.resolveHandle(authorXUserId, usersById.get(authorXUserId) ?? ''),
+        text: String(t?.text ?? ''),
+        createdAt: new Date(t?.created_at ?? Date.now()).toISOString(),
+        photoUrl: trustedPhotoUrl(structuredPhotoUrls({ media })),
+        inReplyToTweetId: repliedTo ? String(repliedTo.id) : null,
+      });
+    }
+    return out;
   }
 }
 
