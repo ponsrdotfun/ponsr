@@ -30,6 +30,8 @@ import { createLaunchTarget } from './launchTarget';
 import { executableDeployment, deploymentById, PonsDeployment } from './deployments';
 import { readCurrentReadiness } from './currentReadiness';
 import { FixedWindowRateLimit } from './webhookRateLimit';
+import { AccountAuthService, XOAuthProvider } from './accountAuth';
+import { accountRouter } from './accountRoutes';
 
 const app = express();
 app.use(express.json());
@@ -163,6 +165,21 @@ const pairAssets = (() => {
 })();
 
 const launchTarget = createLaunchTarget(provider);
+const walletResolver = new PrivyWalletResolver(db, config.PRIVY_APP_ID ?? '', config.PRIVY_APP_SECRET ?? '');
+const accountAuth = new AccountAuthService(
+  db,
+  walletResolver,
+  new XOAuthProvider(config.X_OAUTH_CLIENT_ID ?? '', config.X_OAUTH_CLIENT_SECRET ?? ''),
+  {
+    enabled: config.ACCOUNT_AUTH_ENABLED,
+    clientId: config.X_OAUTH_CLIENT_ID ?? '',
+    clientSecret: config.X_OAUTH_CLIENT_SECRET ?? '',
+    callbackUrl: config.X_OAUTH_CALLBACK_URL ?? '',
+    siteOrigin: config.ACCOUNT_SITE_ORIGIN,
+    walletContinuityConfigured: !!config.PRIVY_APP_ID && !!config.PRIVY_APP_SECRET,
+  }
+);
+app.use('/api', accountRouter(accountAuth));
 
 /**
  * What a leaked webhook secret costs.
@@ -209,7 +226,7 @@ const deps = {
     if (!p) throw new Error('No parser credential. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY.');
     return p;
   })(),
-  walletResolver: new PrivyWalletResolver(db, config.PRIVY_APP_ID ?? '', config.PRIVY_APP_SECRET ?? ''),
+  walletResolver,
   xClient: createXClient(),
   treasurySigner,
   provider,

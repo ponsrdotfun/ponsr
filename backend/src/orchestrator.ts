@@ -486,6 +486,7 @@ export async function handleMention(mention: InboundMention, deps: OrchestratorD
       {
         tokenName,
         tokenSymbol,
+        logo: mention.photoUrl ?? null,
         description,
         splitterAddress: predictedSplitter,
         tweetId: mention.tweetId,

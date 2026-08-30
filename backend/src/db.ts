@@ -100,6 +100,31 @@ export class Db {
         FOREIGN KEY (launch_id) REFERENCES launches(id)
       );
 
+      CREATE TABLE IF NOT EXISTS account_oauth_pending (
+        token_hash TEXT PRIMARY KEY,
+        state_hash TEXT NOT NULL,
+        pkce_verifier TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS account_sessions (
+        token_hash TEXT PRIMARY KEY,
+        csrf_hash TEXT NOT NULL,
+        x_user_id TEXT NOT NULL,
+        x_handle TEXT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        wallet_provider_ref TEXT NOT NULL,
+        verified_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (x_user_id) REFERENCES users(x_user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_session_user ON account_sessions(x_user_id);
+      CREATE INDEX IF NOT EXISTS idx_account_session_expiry ON account_sessions(expires_at);
+
       CREATE TABLE IF NOT EXISTS treasury_spend_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         launch_id TEXT NOT NULL,
@@ -330,14 +355,15 @@ export class Db {
   }
 
   upsertUser(xUserId: string, xHandle: string, wallet: ResolvedWallet) {
-    this.db
-      .prepare(
-        `INSERT INTO users (x_user_id, x_handle, wallet_address, wallet_provider_ref, created_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(x_user_id) DO UPDATE SET x_handle = excluded.x_handle`
-      )
-      .run(xUserId, xHandle, wallet.walletAddress, wallet.providerRef, new Date().toISOString());
+    this.db.prepare(`INSERT INTO users (x_user_id,x_handle,wallet_address,wallet_provider_ref,created_at) VALUES (?,?,?,?,?) ON CONFLICT(x_user_id) DO UPDATE SET x_handle=excluded.x_handle`).run(xUserId,xHandle,wallet.walletAddress,wallet.providerRef,new Date().toISOString());
   }
+
+  createOAuthPending(p:{tokenHash:string;stateHash:string;verifier:string;expiresAt:string}) { const now=new Date().toISOString();this.db.transaction(()=>{this.db.prepare('DELETE FROM account_oauth_pending WHERE expires_at<=? OR consumed_at IS NOT NULL').run(now);this.db.prepare('INSERT INTO account_oauth_pending(token_hash,state_hash,pkce_verifier,expires_at) VALUES (?,?,?,?)').run(p.tokenHash,p.stateHash,p.verifier,p.expiresAt);})(); }
+  consumeOAuthPending(tokenHash:string,stateHash:string,now:string):any|null { return this.db.transaction(()=>{const r:any=this.db.prepare('SELECT * FROM account_oauth_pending WHERE token_hash=? AND state_hash=? AND consumed_at IS NULL AND expires_at>?').get(tokenHash,stateHash,now);if(!r)return null;const u=this.db.prepare('UPDATE account_oauth_pending SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL').run(now,tokenHash);return u.changes===1?r:null;})(); }
+  createAccountSession(s:{tokenHash:string;csrfHash:string;xUserId:string;xHandle:string;walletAddress:string;providerRef:string;verifiedAt:string;expiresAt:string}) { this.db.transaction(()=>{this.db.prepare('DELETE FROM account_sessions WHERE expires_at<=? OR revoked_at IS NOT NULL').run(s.verifiedAt);this.db.prepare('INSERT INTO account_sessions(token_hash,csrf_hash,x_user_id,x_handle,wallet_address,wallet_provider_ref,verified_at,last_seen_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)').run(s.tokenHash,s.csrfHash,s.xUserId,s.xHandle,s.walletAddress,s.providerRef,s.verifiedAt,s.verifiedAt,s.expiresAt);})(); }
+  getAccountSession(tokenHash:string,now:string,idleCutoff:string):any|null { return this.db.transaction(()=>{const row:any=this.db.prepare('SELECT * FROM account_sessions WHERE token_hash=? AND revoked_at IS NULL AND expires_at>? AND last_seen_at>?').get(tokenHash,now,idleCutoff);if(!row)return null;this.db.prepare('UPDATE account_sessions SET last_seen_at=? WHERE token_hash=? AND revoked_at IS NULL').run(now,tokenHash);return row;})(); }
+  revokeAccountSession(tokenHash:string,csrfHash:string,now:string):boolean { return this.db.prepare('UPDATE account_sessions SET revoked_at=? WHERE token_hash=? AND csrf_hash=? AND revoked_at IS NULL').run(now,tokenHash,csrfHash).changes===1; }
+  listLaunchesForUser(xUserId:string):any[] { return this.db.prepare(`SELECT id,source_tweet_id AS sourceTweetId,token_name AS tokenName,token_symbol AS tokenSymbol,token_address AS tokenAddress,tx_hash AS txHash,status,created_at AS createdAt FROM launches WHERE x_user_id=? ORDER BY created_at DESC`).all(xUserId) as any[]; }
 
   insertLaunch(record: LaunchRecord) {
     this.db

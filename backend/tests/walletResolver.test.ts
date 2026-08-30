@@ -45,6 +45,18 @@ describe('PrivyWalletResolver', () => {
     expect(resolved.walletAddress).toBe(wallet.address);
   });
 
+  it('account lookup never creates a wallet, including concurrent retries', async () => {
+    const wallet = generateMockWallet('existing-user');
+    const create=jest.fn(),list=jest.fn(async()=>({data:[{id:wallet.providerRef,address:wallet.address}]}));
+    const resolver = new PrivyWalletResolver(db, '', '', {wallets:()=>({create,list})});
+    db.upsertUser('existing-user', 'someone', { xUserId: 'existing-user', walletAddress: wallet.address, providerRef: wallet.providerRef });
+    const results=await Promise.all(Array.from({length:8},()=>resolver.lookupExistingVerified('existing-user')));
+    expect(results.every((entry)=>entry?.walletAddress===wallet.address)).toBe(true);
+    await expect(resolver.lookupExistingVerified('missing-user')).resolves.toBeNull();
+    expect(create).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(8);
+  });
+
   it('CRITICAL: refuses to run unconfigured rather than inventing a wallet', async () => {
     // A resolver that silently fell back to generating a local key would hand a user an
     // address whose private key this server holds -- the exact custody property Privy is

@@ -1,68 +1,41 @@
-# Ponsr — website
+# Ponsr website V2
 
-Single self-contained `index.html`. No build step, no framework, no JS dependencies —
-the only external request is the Google Fonts stylesheet.
+A dependency-light static site with modular CSS/ES modules, generated canonical token routes, and one Netlify read function. Netlify publishes `website/`; no backend or financial path is modified.
 
-## View it locally
+## Public scope
 
-Open `index.html` in any browser, or serve the folder:
+The public feed contains **only launches attributed to Ponsr through current V2**:
 
-```bash
-npx serve website/
-```
+- deployment: `pons-v2-current-7ed`
+- factory: `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e`
+- registry start block: `26841846`
+- canonical token identity: contract-address route, lower-cased in URLs
+
+V1, legacy V2, and test launches are historical documentation only. They are intentionally excluded from public cards, counts, search, and sitemap. See `docs/v1-historical-launches.md`.
+
+## Data contract
+
+`website/data/launches.json` is the reviewed last-known-good snapshot. `/.netlify/functions/launch-feed` overlaps the snapshot by 128 blocks, reads only bounded ranges, halves failed ranges to a minimum, retries with bounded backoff, and deduplicates on the launch transaction hash while preserving the exact log index. A Ponsr launch transaction emits one selected-factory `TokenLaunched` record, and the transaction key lets an older snapshot with a missing log index reconcile rather than duplicate. Browsers fetch this compact feed; they never scan chain history.
+
+The function reads the backend's public `/status/core` endpoint only to reflect `publicLaunchEnabled`. It performs no mutation. A failure preserves the last-known-good false gate as `stale`, never as enabled.
+
+Each source reports `complete`, `partial`, `stale`, or `error`. `generatedAt` is the snapshot watermark; `observedAt` is request time; each launch's `blockTimestamp` comes only from its authoritative block. Missing block time remains unknown.
 
 ## Routes
 
-Three views live in the one file, each with a real URL so it can be linked from the bot's
-reply on X, refreshed, bookmarked and shared:
+- `/` — Decide / Learn landing with real PSTONKS evidence
+- `/explore` — Monitor current V2 launches
+- `/token/0x…` — Command / Inspect token provenance
+- `/terms` — mechanism-aware terms
 
-| URL | View |
-|---|---|
-| `/` | Landing page — hero, live ticker, stats, how it works, spotlight, FAQ |
-| `?view=explore` | The board — card grid, search, sort, status filter, pagination |
-| `?token=SYMBOL` | Token detail — chart, stats, contract address, "what if I held" panel |
+`npm run build:website` generates static address pages with canonical, OG, description, and JSON-LD metadata plus `sitemap.xml`.
 
-Query parameters are used because they work on any static host with no configuration.
-Behind a host rewrite (Vercel/Netlify) these become `ponsr.fun/explore` and
-`ponsr.fun/token/SYMBOL`. The router reads either shape, so the rewrites work the moment
-they are deployed; flip `PRETTY_URLS` in the same commit so it also *writes* them.
-
-## What's real vs. mock
-
-**Real:** every route, interaction, animation, the search/sort/filter/pagination logic,
-the accessibility work, and the responsive behaviour.
-
-**Mock:** all of the data.
-
-- `MOCK_TOKENS` near the top of the `<script>` block is the dataset. A seeded generator
-  pads it to a realistic size so paging and sorting are exercised properly.
-- **`fetchLedger()` is the single integration point.** Replace its body with the real API
-  call and drive `startLedgerRealtime()`'s update helpers from a websocket instead of the
-  simulated feed.
-- Contract addresses are deterministic placeholders from `previewAddress()`. Swap in the
-  real `token_address` from the `launches` table.
-- The what-if panel's **Connect wallet** button is a labelled preview that reveals sample
-  figures. The real per-wallet history calculation is the Phase 6 indexer described in
-  Part 3 of `docs/MASTER-twitter-launch-bot.md` — it is not implemented here.
-
-## Motion
-
-The motion layer implements the GSAP presets from the `ui-ux-pro-max` skill natively
-(CSS/Web APIs), rather than pulling in GSAP: per-character headline reveal, magnetic CTA,
-staggered card entrance, layered parallax, shared-element page transitions via the View
-Transitions API, and shimmer loading skeletons. Each is commented with the preset it
-implements and the constraint that preset imposes.
-
-Everything is disabled under `prefers-reduced-motion`, and route changes still work on
-browsers without the View Transitions API — they just cut instead of morphing.
-
-## Re-running the smoke test
+## Verification
 
 ```bash
-node smoke-test.js
+npm run test:website
+npm run build:website
+npm run test:website
 ```
 
-39 checks (needs `jsdom`, already in the repo's root `package.json`), covering routing,
-the grid, sorting/search/pagination, the what-if gate, the motion layer, and regression
-guards for three bugs found in audit: duplicate view-transition names, duplicate token
-symbols, and focus stranded inside a hidden view.
+The current simulator is deliberately unavailable until verified `getReserves` data is part of the canonical feed. It does not use legacy pool mechanics; current V2 trade semantics are `CurveBuy`/`CurveSell`. Reserve, liquidity, valuation, momentum, and price-history claims are not fabricated.

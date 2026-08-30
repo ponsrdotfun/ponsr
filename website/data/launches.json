@@ -1,0 +1,142 @@
+{
+  "schema": "ponsr.launch-feed",
+  "version": 1,
+  "chainId": 4663,
+  "deployment": {
+    "id": "pons-v2-current-7ed",
+    "factory": "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e",
+    "startBlock": 26841846,
+    "mechanism": "current-v2-bonding-curve"
+  },
+  "generatedAt": "2026-08-28T04:25:31.000Z",
+  "observedAt": "2026-08-28T04:25:31.000Z",
+  "asOfBlock": 47693658,
+  "publicGate": {
+    "enabled": false,
+    "checkedAt": "2026-08-28T04:25:31.000Z",
+    "source": "https://ponsr-backend.fly.dev/status/core",
+    "state": "complete"
+  },
+  "sources": [
+    {
+      "id": "current-v2-chain",
+      "state": "stale",
+      "fromBlock": 26841846,
+      "throughBlock": 47693658,
+      "authoritativeTimestamps": true,
+      "scope": "verified last-known-good canary snapshot; live function advances with 128-block overlap"
+    },
+    {
+      "id": "ponsr-public-gate",
+      "state": "stale",
+      "checkedAt": "2026-08-28T04:25:31.000Z"
+    }
+  ],
+  "launches": [
+    {
+      "chainId": 4663,
+      "deploymentId": "pons-v2-current-7ed",
+      "factory": "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e",
+      "token": "0x7803f37e0Db73105c47D5A5F3D054a0ae47E2199",
+      "name": "PONSR STONKS",
+      "symbol": "PSTONKS",
+      "logo": null,
+      "description": "Validation launch for ponsr.fun. Not a project, not an investment, holds no value.",
+      "metadata": {
+        "state": "stale",
+        "observedThroughBlock": 49723450
+      },
+      "curve": "0xD15546882A51423f2A54A93c9224Cf4AB4b11f91",
+      "splitter": "0xF78DC0166665Bc69d0e40fbf735BdA0D049f088a",
+      "deployer": "0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa",
+      "pairToken": "0x0000000000000000000000000000000000000000",
+      "pairLabel": "native ETH",
+      "transactionHash": "0xf392c31b4f30eb1b758acc8530e2ba0136b80dd5125f5d5187bbb35dc351b5ce",
+      "logIndex": 207,
+      "blockNumber": 47693658,
+      "blockTimestamp": "2026-08-27T19:30:30.000Z",
+      "observedAt": "2026-08-28T04:25:31.000Z",
+      "launchFeeEth": "0.0005",
+      "launchConfigId": 0,
+      "graduationThreshold": "4200000000000000000",
+      "reserves": {
+        "state": "observed",
+        "observedAt": "2026-08-27T20:27:00.000Z",
+        "quoteReserveWei": "1685344697858840480",
+        "realQuoteReserveWei": "5344697858840480",
+        "tokenReserveWei": "996828721230956080714724798",
+        "trackedQuoteWei": "5598606380252075",
+        "graduated": false
+      },
+      "liquidity": {
+        "state": "not-reported",
+        "reason": "Reserves are shown directly; no market-cap or executable-liquidity claim is inferred."
+      },
+      "feeCollection": {
+        "state": "untested"
+      },
+      "activity": {
+        "state": "observed",
+        "observedThroughBlock": 47727489,
+        "curveBuys": 3,
+        "curveSells": 1,
+        "observedAt": "2026-08-27T20:27:00.000Z",
+        "events": [
+          {
+            "kind": "buy",
+            "blockNumber": 47693716,
+            "blockTimestamp": "2026-08-27T19:30:36.000Z",
+            "transactionHash": "0xd0ad0ff7b84c8f6f5b7596a3aa933603b066ca2389b522b28c9b59b353a479a6",
+            "logIndex": 1,
+            "actor": "0xbDb0B32d79fe5EABd043B2Bdec3A102535729680",
+            "recipient": "0xbDb0B32d79fe5EABd043B2Bdec3A102535729680",
+            "quoteWei": "10000000000000000",
+            "tokenWei": "5858334812710811290608911",
+            "feeWei": "100000000000000",
+            "taxWei": "0"
+          },
+          {
+            "kind": "buy",
+            "blockNumber": 47695166,
+            "blockTimestamp": "2026-08-27T19:33:04.000Z",
+            "transactionHash": "0x1cd384458d218087939402466096d27b28b2edd21cdde2c41c42f4654e413867",
+            "logIndex": 3,
+            "actor": "0x0f2730c4B0c279C8C7e3e5F9b7032Eb7d42d06c0",
+            "recipient": "0x0f2730c4B0c279C8C7e3e5F9b7032Eb7d42d06c0",
+            "quoteWei": "3960000000000000",
+            "tokenWei": "2300971805629598353766607",
+            "feeWei": "39600000000000",
+            "taxWei": "0"
+          },
+          {
+            "kind": "sell",
+            "blockNumber": 47697086,
+            "blockTimestamp": "2026-08-27T19:36:16.000Z",
+            "transactionHash": "0x6d5bae77290abafc1573cb0e73a182c291528d95f8fc7cc053de5ea76482ecd7",
+            "logIndex": 25,
+            "actor": "0xbDb0B32d79fe5EABd043B2Bdec3A102535729680",
+            "recipient": "0xbDb0B32d79fe5EABd043B2Bdec3A102535729680",
+            "quoteWei": "9846393619747925",
+            "tokenWei": "5858334812710811290608911",
+            "feeWei": "99458521411595",
+            "taxWei": "0"
+          },
+          {
+            "kind": "buy",
+            "blockNumber": 47699099,
+            "blockTimestamp": "2026-08-27T19:39:40.000Z",
+            "transactionHash": "0x50e65bc608e5798cfe90d3b8433b7545ad93be10d99d54f2384ba7eb88c361d2",
+            "logIndex": 128,
+            "actor": "0x0f2730c4B0c279C8C7e3e5F9b7032Eb7d42d06c0",
+            "recipient": "0x0f2730c4B0c279C8C7e3e5F9b7032Eb7d42d06c0",
+            "quoteWei": "1485000000000000",
+            "tokenWei": "870306963414320931508595",
+            "feeWei": "14850000000000",
+            "taxWei": "0"
+          }
+        ],
+        "sourceState": "stale"
+      }
+    }
+  ]
+}

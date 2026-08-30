@@ -17,6 +17,9 @@ secrets.json
 # (SQLite in WAL mode also writes -wal and -shm sidecar files.)
 # ---------------------------------------------------------------------------
 data/
+# Reviewed public website snapshot; unlike backend data/, this is source content.
+!website/data/
+!website/data/launches.json
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

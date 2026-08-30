@@ -197,6 +197,13 @@ const ConfigSchema = z.object({
   PRIVY_APP_ID: z.string().optional(),
   PRIVY_APP_SECRET: z.string().optional(),
 
+  // -- Account Phase B. Fail-closed until every value is configured. --
+  ACCOUNT_AUTH_ENABLED: z.enum(['true','false']).default('false').transform((value)=>value==='true'),
+  X_OAUTH_CLIENT_ID: z.string().optional(),
+  X_OAUTH_CLIENT_SECRET: z.string().optional(),
+  X_OAUTH_CALLBACK_URL: z.string().url().optional(),
+  ACCOUNT_SITE_ORIGIN: z.string().url().default('https://ponsr.fun'),
+
   // -- Treasury signer: Turnkey (Part 10) --
   // The API key below only asks Turnkey to sign. What restricts WHAT it will sign is a
   // policy configured in Turnkey, not anything in this codebase -- see treasurySigner.ts.

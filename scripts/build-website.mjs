@@ -1,0 +1,591 @@
+/**
+ * Builds the static website from the canonical launch snapshot.
+ *
+ * WHY THE PAGES ARE NOW REAL RATHER THAN SHELLS
+ * ---------------------------------------------
+ * The previous build emitted a 1.3 KB shell whose entire body was
+ * "Loading verified launch record…", and `app.mjs` replaced it on boot. Three
+ * things followed, and all three were the reason the design read as an
+ * internal console rather than a product:
+ *
+ *   1. the first thing a visitor saw was a loading string;
+ *   2. anyone without JS, and every crawler that does not execute it, saw
+ *      nothing but that string;
+ *   3. the markup could not be reviewed or tested as HTML, only as DOM built
+ *      at runtime.
+ *
+ * Now each route ships complete, readable HTML built from the verified
+ * snapshot, and `app.mjs` refreshes the data-bound parts in place.
+ *
+ * THE ONE HONESTY RULE THAT SHAPES THIS FILE
+ * ------------------------------------------
+ * A static build cannot know whether the chain source is healthy right now, so
+ * every page ships marked `stale` — "Last-known-good snapshot" — and the public
+ * gate ships as whatever the snapshot last verified, which is `false`.
+ * JavaScript may only ever UPGRADE that after it has actually read the feed.
+ * A build can never publish freshness it has not observed, and a page whose JS
+ * fails degrades to a true statement rather than a flattering one.
+ */
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import sharp from 'sharp';
+import { activityLine, curveFlowSeries, ethFromWei, eventTime, plural, reserveRows, shortAddress, whole } from '../website/assets/format.mjs';
+
+const site = path.join(process.cwd(), 'website');
+const feed = JSON.parse(await fs.readFile(path.join(site, 'data/launches.json'), 'utf8'));
+
+const EXPLORER = 'https://robinhoodchain.blockscout.com';
+const ZERO = '0x0000000000000000000000000000000000000000';
+
+const esc = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+
+const socialDir = path.join(site, 'social');
+await fs.mkdir(socialDir, { recursive: true });
+const socialOrigin = (() => {
+  try {
+    const url = new URL(process.env.DEPLOY_PRIME_URL || process.env.URL || 'https://ponsr.fun');
+    if (url.protocol !== 'https:') throw new Error('social origin must use HTTPS');
+    return url.origin;
+  } catch {
+    return 'https://ponsr.fun';
+  }
+})();
+let socialMascot = '';
+try {
+  const logo = await fs.readFile(path.join(site, 'logo-transparent.png'));
+  socialMascot = `data:image/png;base64,${logo.toString('base64')}`;
+} catch {
+  // Throwaway test builds intentionally copy only canonical data/content. The
+  // card still renders deterministically there; production builds add the exact
+  // original mascot asset.
+}
+
+function socialSvg({ eyebrow, title, detail, badge, detailSize = 25 }) {
+  const titleLines = String(title).split('\n').slice(0, 2);
+  const mascot = socialMascot ? `<image href="${socialMascot}" x="825" y="95" width="300" height="300" preserveAspectRatio="xMidYMid meet"/>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+    <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#050607"/><stop offset="0.58" stop-color="#0A0D11"/><stop offset="1" stop-color="#10261C"/></linearGradient><radialGradient id="glow"><stop stop-color="#46C88C" stop-opacity=".26"/><stop offset="1" stop-color="#46C88C" stop-opacity="0"/></radialGradient><linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#FDFEFF"/><stop offset=".48" stop-color="#C4CDDA"/><stop offset="1" stop-color="#8D98A7"/></linearGradient></defs>
+    <rect width="1200" height="630" fill="url(#bg)"/><circle cx="965" cy="255" r="330" fill="url(#glow)"/><path d="M70 72H1130M70 558H1130" stroke="#C4CDDA" stroke-opacity=".14"/><circle cx="91" cy="91" r="18" fill="none" stroke="#82E3B3" stroke-width="3"/><circle cx="91" cy="91" r="5" fill="#82E3B3"/><text x="125" y="104" fill="#F1F5FA" font-family="Arial,sans-serif" font-size="28" font-weight="700" letter-spacing="8">PONSR</text>
+    <text x="76" y="190" fill="#82E3B3" font-family="monospace" font-size="20" letter-spacing="4">${esc(String(eyebrow).toUpperCase())}</text>
+    ${titleLines.map((line, index) => `<text x="72" y="${285 + index * 76}" fill="url(#metal)" font-family="Georgia,serif" font-size="68">${esc(line)}</text>`).join('')}
+    <text x="76" y="${titleLines.length > 1 ? 455 : 375}" fill="#C4CDDA" font-family="Arial,sans-serif" font-size="${detailSize}">${esc(detail)}</text>
+    <rect x="76" y="500" width="${Math.max(190, String(badge).length * 15 + 48)}" height="48" rx="24" fill="#46C88C" fill-opacity=".10" stroke="#46C88C" stroke-opacity=".7"/><text x="100" y="531" fill="#82E3B3" font-family="monospace" font-size="17" letter-spacing="2">${esc(String(badge).toUpperCase())}</text>${mascot}
+  </svg>`;
+}
+
+async function socialCard(file, data) {
+  const output = path.join(socialDir, file);
+  // Netlify must publish the exact reviewed Git bytes. Native libvips builds can
+  // produce visually equivalent but byte/pixel-different PNGs across images.
+  // Local/CI builds still regenerate below and prove those committed bytes.
+  if (process.env.NETLIFY === 'true') {
+    try { await fs.access(output); return `/social/${file}`; } catch { /* generate a missing test-only card */ }
+  }
+  await sharp(Buffer.from(socialSvg(data))).png({ compressionLevel: 9, adaptiveFiltering: false }).toFile(output);
+  return `/social/${file}`;
+}
+
+const socialImages = {
+  home: await socialCard('home.png', { eyebrow: 'Current V2 · Robinhood Chain', title: 'Every launch,\non the record.', detail: 'Verified launch records. No invented market data.', badge: 'ponsr.fun' }),
+  explore: await socialCard('explore.png', { eyebrow: 'The public record', title: 'Every verified\nPonsr launch.', detail: 'Factory, curve, block, event time, and source state.', badge: 'Explore launches' }),
+  account: await socialCard('account.png', { eyebrow: 'Account unavailable', title: 'Your launches.\nYour wallet.', detail: 'Secure X and existing-wallet access is not yet enabled.', badge: 'Public preview', detailSize: 27 }),
+  tokens: new Map(),
+};
+for (const token of feed.launches) {
+  const address = String(token.token).toLowerCase();
+  socialImages.tokens.set(address, await socialCard(`token-${address}.png`, {
+    eyebrow: `Current V2 · Robinhood Chain · ${token.symbol}`,
+    title: `${token.name}\n${token.symbol}`,
+    detail: token.token,
+    badge: `Verified · block ${whole(token.blockNumber)}`,
+    detailSize: 18,
+  }));
+}
+
+/** An address cell that links to the explorer, or plain text when absent. */
+const addressCell = (value, kind = 'address') => (value
+  ? `<a class="text-link" href="${EXPLORER}/${kind}/${esc(value)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(value))}</a>`
+  : 'Not published');
+
+/**
+ * A block number is a number, not an address.
+ *
+ * This shipped once as `47693658…693658`, because the block was passed through
+ * the address cell and truncated by `shortAddress`. Abbreviation belongs to
+ * things that are long and opaque; a block height is neither.
+ */
+const blockCell = (value) => (value
+  ? `<a class="text-link" href="${EXPLORER}/block/${esc(value)}" target="_blank" rel="noopener noreferrer">${esc(whole(value))}</a>`
+  : 'Not published');
+
+
+const facts = (rows) => `<dl class="facts">${rows
+  .map(([label, value]) => `<div class="fact"><dt>${esc(label)}</dt><dd>${value}</dd></div>`)
+  .join('')}</dl>`;
+
+function nav(current) {
+  const link = ([label, href]) => {
+    const active = href === current || (href === '/account' && current.startsWith('/account/')) ? ' aria-current="page"' : '';
+    return `<a href="${href}"${active}>${esc(label)}</a>`;
+  };
+  return `<nav class="nav"><div class="nav-inner">` +
+    `<a class="brand" href="/"><img src="/logo-transparent.png" alt="" width="32" height="32"><span>PONSR</span></a>` +
+    `<div class="nav-links">${[['Home', '/'], ['Explore', '/explore'], ['Account', '/account']].map(link).join('')}</div>` +
+    `</div></nav>`;
+}
+
+/**
+ * Ships `stale`. See the honesty rule at the top of this file — the build has
+ * observed nothing about right now, and says so.
+ */
+function statusStrip() {
+  return `<section class="status-strip state-stale" data-status-strip aria-live="polite">` +
+    `<span class="group"><span class="dot"></span><strong data-status-label>Last-known-good snapshot</strong></span>` +
+    `<span class="sep" aria-hidden="true">·</span>` +
+    `<span class="detail" data-status-detail>Registry snapshot through block ${esc(whole(feed.asOfBlock))}</span>` +
+    `<span class="sep" aria-hidden="true">·</span>` +
+    `<span class="gate-pill" data-gate-pill>Ponsr launch tooling ${feed.publicGate.enabled ? 'open' : 'paused'}</span>` +
+    `<span class="gate" data-gate-message>${esc(gateMessage(feed.publicGate.enabled))}</span>` +
+    `</section>`;
+}
+
+/** Kept identical in wording to `data-state.mjs`, which the tests pin. */
+const gateMessage = (enabled) => (enabled
+  ? 'Ponsr launch tooling is accepting public requests.'
+  : 'Creation of new launches through Ponsr is paused; existing records remain available.');
+
+function footer() {
+  return `<footer class="footer"><div class="footer-inner">` +
+    `<div class="footer-top"><strong>PONSR</strong><span class="lede">Launches recorded from the chain, and nothing that is not.</span></div>` +
+    `<div class="footer-links">` +
+      `<a href="https://ponsfamily.com" target="_blank" rel="noopener noreferrer">pons ↗</a>` +
+      `<a href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer">@ponsrdotfun ↗</a>` +
+      `<a href="/terms">Terms</a>` +
+    `</div>` +
+    `<p class="footer-note">Ponsr is independent. It is not operated by, affiliated with, or endorsed by pons, Robinhood, or X. ` +
+    `Launch records are observations — not recommendations, prices, or valuations.</p>` +
+    `</div></footer>`;
+}
+
+/** The mascot, with the pieces app.mjs animates. Decorative throughout. */
+function mascot() {
+  return `<div class="hero-stage" data-hero-stage><div class="bot" data-bot>` +
+    `<span class="bot-halo" aria-hidden="true"></span>` +
+    `<svg class="bot-gauge" viewBox="0 0 200 200" aria-hidden="true"><circle cx="100" cy="100" r="96" fill="none" stroke="rgba(196,205,218,0.26)" stroke-width="2" stroke-dasharray="1.5 6.2"/></svg>` +
+    `<span class="bot-ring" aria-hidden="true"></span>` +
+    `<span class="bot-ring r2" aria-hidden="true"></span>` +
+    `<span class="bot-orbit o1" aria-hidden="true"><i></i></span>` +
+    `<span class="bot-orbit o2" aria-hidden="true"><i></i></span>` +
+    `<span class="motion-mote m1" aria-hidden="true"></span><span class="motion-mote m2" aria-hidden="true"></span><span class="motion-mote m3" aria-hidden="true"></span><span class="motion-mote m4" aria-hidden="true"></span>` +
+    `<span class="bot-tilt" data-bot-tilt><span class="bot-avatar" data-bot-avatar><img src="/logo-noeyes.png" alt="The Ponsr robot" width="512" height="507"><span class="bot-eyes" aria-hidden="true"><span class="eye eye-l" data-bot-eye><i></i></span><span class="eye eye-r" data-bot-eye><i></i></span></span></span></span><span class="bot-shadow" aria-hidden="true"></span></div><span class="stage-caption" aria-hidden="true">PONSR · ROBINHOOD CHAIN</span></div>`;
+}
+
+function officialStage() {
+  return `<aside class="official-identity-strip" data-official-showcase><span class="official-sigil" aria-hidden="true"><i></i></span><div><p class="eyebrow">Official token status</p><strong>No official Ponsr token has been published.</strong><p>Contract, artwork, and launch record remain unpublished. Verified launches in Explore are not automatically official.</p></div><a class="section-action" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer"><span>Registry updates</span><i class="action-icon" aria-hidden="true">↗</i></a></aside>`;
+}
+
+function page({ title, description, canonical, body, socialImage = socialImages.home, noindex = false }) {
+  const socialUrl = `${socialOrigin}${socialImage}`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><meta name="description" content="${esc(description)}">${noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}<link rel="canonical" href="${canonical}"><meta property="og:type" content="website"><meta property="og:site_name" content="Ponsr"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="${socialUrl}"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:site" content="@ponsrdotfun"><meta name="twitter:image" content="${socialUrl}"><link rel="icon" href="/logo-transparent.png"><link rel="apple-touch-icon" href="/logo-transparent.png"><link rel="stylesheet" href="/assets/site.css"><script type="module" src="/assets/app.mjs"></script></head><body><a class="skip" href="#content">Skip to content</a><div class="scroll-progress" data-scroll-progress aria-hidden="true"></div><div class="ambient" data-motion-field aria-hidden="true"><span class="ambient-stars"></span><span class="ambient-grid"></span><span class="ambient-aurora aurora-a"></span><span class="ambient-aurora aurora-b"></span><span class="ambient-beam beam-a"></span><span class="ambient-beam beam-b"></span><span class="ambient-sweep"></span><span class="ambient-orb orb-a"></span><span class="ambient-orb orb-b"></span></div><span class="cursor-glow" data-cursor-glow aria-hidden="true"></span>${nav(canonical.replace('https://ponsr.fun', '') || '/')}<div id="content" data-ponsr-app>${body}</div>${footer()}</body></html>
+`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Home                                                                        */
+/* -------------------------------------------------------------------------- */
+
+const launches = feed.launches.slice().sort((a, b) => {
+  if (!a.blockTimestamp && !b.blockTimestamp) return Number(b.blockNumber || 0) - Number(a.blockNumber || 0);
+  if (!a.blockTimestamp) return 1;
+  if (!b.blockTimestamp) return -1;
+  return b.blockTimestamp.localeCompare(a.blockTimestamp);
+});
+const officialLaunches = launches.filter((launch) => launch.officialPonsr === true);
+
+function home() {
+  const body =
+    `<main>` +
+    `<section class="hero"><div class="hero-inner">` +
+      `<div class="hero-copy reveal">` +
+        `<p class="eyebrow">Protocol V2 · Robinhood Chain</p>` +
+        `<h1 aria-label="Every launch, on the record."><span aria-hidden="true" class="metal">Every launch,</span> ` +
+          `<span aria-hidden="true" class="sheen metal-emerald"><em>on the record.</em></span></h1>` +
+        `<p class="lede">Ponsr launches tokens from a tag on X and writes down what actually happened — the factory, the curve, the block, the fee. ` +
+          `If a number cannot be read from the chain, this site does not show it.</p>` +
+        `<div class="hero-cta home-actions">` +
+          `<a class="btn btn-primary home-action" href="/explore" data-home-action="explore"><span>Explore launches</span><i class="action-icon" aria-hidden="true">→</i></a>` +
+          `<a class="btn btn-secondary home-action" href="/account" data-home-action="dashboard"><span>Open dashboard</span><i class="action-icon" aria-hidden="true">→</i></a>` +
+          `<a class="home-tertiary" href="#verification-policy" data-home-action="verification"><span>How Ponsr verifies records</span><i class="action-icon" aria-hidden="true">↓</i></a>` +
+        `</div>` +
+      `</div>` +
+      `<div class="reveal">${mascot()}</div>` +
+    `</div></section>` +
+
+    statusStrip() +
+
+    `<section class="section reveal home-product-section"><div class="section-head product-head"><div><p class="eyebrow">Built as a product—not a promise</p><h2>Three surfaces. One verifiable record.</h2><p class="lede">Discover launches, inspect exact token mechanics, or enter the account command center. Every surface keeps public facts separate from unavailable private state.</p></div></div>` +
+    `<div class="product-pathways">` +
+      `<a href="/explore"><span class="pathway-index">01</span><div><p class="eyebrow">Discovery</p><h3>Explore launchpad</h3><p>Sort verified Protocol V2 launches by canonical activity and open exact token records.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+      `<a href="/account"><span class="pathway-index">02</span><div><p class="eyebrow">Private workspace</p><h3>Account command center</h3><p>Launches, creator fees, wallet continuity, and security—only after verified identity exists.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+      `<a href="/explore"><span class="pathway-index">03</span><div><p class="eyebrow">Market context</p><h3>Inspect token workstations</h3><p>Chart, curve ledger, holders, transfers, provenance, and read-only wallet analysis.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+    `</div></section>` +
+    `<section class="section reveal protocol-section"><div class="section-head"><p class="eyebrow">How a record becomes public</p><h2>Signal to chain, without the mythology.</h2></div><div class="protocol-flow"><span class="flow-trace" aria-hidden="true"></span>` +
+      `<article><b>01</b><span>X signal</span><small>A recognized launch request begins the process.</small></article>` +
+      `<article><b>02</b><span>Verified factory</span><small>Only the exact current Protocol V2 deployment counts.</small></article>` +
+      `<article><b>03</b><span>Bonding curve</span><small>Native-pair reserves and canonical events define lifecycle.</small></article>` +
+      `<article><b>04</b><span>Public record</span><small>Block, curve, deployer, activity, and source state become inspectable.</small></article>` +
+    `</div></section>` +
+    `<section class="section reveal compact-official-section" id="latest-launches"><div class="compact-official-head"><p class="eyebrow">Official Ponsr identity</p><a class="text-link" href="/explore">Browse verified launches →</a></div>` +
+      (officialLaunches.length ? `<aside class="official-identity-strip published" data-official-showcase><span class="official-sigil" aria-hidden="true"><i></i></span><div><p class="eyebrow">Official token status</p><strong>${esc(officialLaunches[0].name)} · ${esc(officialLaunches[0].symbol)}</strong><p>Explicitly marked official in the verified Ponsr feed.</p></div><a class="section-action" href="/token/${esc(officialLaunches[0].token.toLowerCase())}"><span>Inspect token</span><i class="action-icon" aria-hidden="true">→</i></a></aside>` : officialStage()) +
+    `</section>` +
+
+    `<section class="section reveal verification-policy" id="verification-policy"><div class="section-head">` +
+      `<p class="eyebrow">How the record is kept</p>` +
+      `<h2>Three rules, and the third is the one that matters.</h2>` +
+    `</div><div class="steps">` +
+      `<article class="step"><span class="num">01</span><h3>Only Ponsr's own launches</h3>` +
+        `<p>The feed reads one factory and one deployer. An older factory Ponsr used to call is excluded from everything public — it stays documented, not displayed.</p></article>` +
+      `<article class="step"><span class="num">02</span><h3>Time comes from the block</h3>` +
+        `<p>A launch is dated by its confirmed block, never by your clock or by when this page happened to load. When the block time cannot be read, the page says so instead of guessing.</p></article>` +
+      `<article class="step"><span class="num">03</span><h3>A failure never looks like calm</h3>` +
+        `<p>If the source is partial, stale, or down, the strip above says which — because an empty list and a broken reader look identical, and only one of them is good news.</p></article>` +
+    `</div></section>` +
+    `</main>`;
+
+  return page({
+    title: 'Ponsr — every launch, on the record.',
+    description: 'Ponsr launches tokens on Robinhood Chain and publishes what can be read from the chain: factory, curve, block, event time and fee. No prices, no valuations, no invented numbers.',
+    canonical: 'https://ponsr.fun/',
+    body,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Explore                                                                     */
+/* -------------------------------------------------------------------------- */
+
+function curveProgress(token) {
+  const reserve=BigInt(token.reserves?.realQuoteReserveWei||0);const threshold=BigInt(token.graduationThreshold||0);
+  return threshold>0n ? Number((reserve*100000n)/threshold)/1000 : 0;
+}
+function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(String(value));if(url.protocol!=='https:'||url.hostname!=='pbs.twimg.com'||url.username||url.password||url.port||!/^\/media\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname))return null;for(const key of url.searchParams.keys())if(!['format','name'].includes(key))return null;return url.toString();}catch{return null;}}
+function tokenArt(token) {
+  const logo=trustedLogoUrl(token.logo);
+  if(logo)return `<div class="token-art has-image"><img src="${esc(logo)}" alt="${esc(token.name)} token image" loading="lazy" decoding="async"></div>`;
+  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="record-fingerprint"><i></i><i></i><i></i></span><small>Token image unavailable</small></div>`;
+}
+function tokenCard(token) {
+  const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);
+  return `<article class="token-card">${tokenArt(token)}<div class="launch-card-body"><p class="eyebrow">Current V2 · ${esc(token.pairLabel)}</p><div class="launch-title"><div><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><a class="go" href="${href}">INSPECT →</a></div><p class="deployer">Deployed by <a href="${EXPLORER}/address/${esc(token.deployer)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(token.deployer))}</a></p><button class="ca-copy" type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span class="mono">${esc(shortAddress(token.token))}</span><span data-copy-label role="status" aria-live="polite">Copy CA</span></button><div class="curve-progress"><div><span>Curve progress</span><strong>${esc(progress.toFixed(2))}%</strong></div><progress max="100" value="${esc(progress)}">${esc(progress.toFixed(2))}%</progress></div><p class="launch-meta"><span>Block ${esc(whole(token.blockNumber))}</span><span>${esc(eventTime(token.blockTimestamp))}</span></p></div></article>`;
+}
+function latestCanonicalBuyTime(token) {
+  return (token.activity?.events || []).filter((event) => event.kind === 'buy' && event.blockTimestamp).map((event) => event.blockTimestamp).sort().at(-1) || token.blockTimestamp || null;
+}
+function relativeTime(iso, anchor = feed.observedAt) {
+  const delta = new Date(anchor).getTime() - new Date(iso).getTime();
+  if (!Number.isFinite(delta) || delta < 0) return 'Time unavailable';
+  const seconds=Math.floor(delta/1000);if(seconds<60)return seconds<5?'now':`${seconds}s ago`;
+  const minutes=Math.floor(seconds/60);if(minutes<60)return `${minutes}m ago`;
+  const hours=Math.floor(minutes/60);if(hours<24)return `${hours}h ago`;
+  return `${Math.floor(hours/24)}d ago`;
+}
+function launchpadCard(token) {
+  const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);const recent=relativeTime(latestCanonicalBuyTime(token));
+  return `<article class="launchpad-card"><a class="launchpad-card-link" href="${href}" aria-label="Inspect ${esc(token.name)}"></a><div class="launchpad-media">${tokenArt(token)}<span class="protocol-badge" data-protocol-badge>V2</span></div><div class="launchpad-card-body"><h3>${esc(token.name)}</h3><p class="launchpad-symbol">$${esc(token.symbol)}</p><p class="launchpad-mcap" data-card-market-cap><strong>Market cap unavailable</strong></p><div class="launchpad-progress"><span>${esc(progress.toFixed(2))}%</span><progress max="100" value="${esc(progress)}">${esc(progress.toFixed(2))}%</progress></div><p class="launchpad-deployer">by ${esc(shortAddress(token.deployer))}</p><div class="launchpad-bottom"><button type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span>${esc(shortAddress(token.token))}</span><i data-copy-label role="status" aria-live="polite">Copy</i></button><time datetime="${esc(token.blockTimestamp || '')}" data-card-relative-time>${esc(recent)}</time></div></div></article>`;
+}
+
+function explore() {
+  const count = launches.length;
+  const body =
+    `<main class="launchpad-shell" data-launch-scope="all-verified-v2">` +
+    `<section class="launchpad-panel reveal">` +
+      `<header class="launchpad-head"><div class="launchpad-intro"><div class="launchpad-title-row"><h1>Explore</h1><span data-launch-count>${count} launched</span></div>` +
+      `<p>Verified tokens launched through Ponsr Protocol V2 on Robinhood Chain.</p></div>` +
+      `<div class="launchpad-tools"><div class="sort-segments" role="group" aria-label="Sort launches">` +
+        `<button type="button" aria-pressed="true" data-launch-sort="recent-buys">Recent buys</button>` +
+        `<button type="button" aria-pressed="false" data-launch-sort="newest">Newest</button>` +
+        `<button type="button" aria-pressed="false" data-launch-sort="oldest">Oldest</button>` +
+        `<button type="button" aria-pressed="false" data-launch-sort="market-cap" disabled title="Market cap source unavailable">Market cap</button>` +
+      `</div><label class="launchpad-search"><span class="sr-only">Search launches</span><input type="search" inputmode="search" autocomplete="off" placeholder="Search name, ticker, or CA" data-launch-search></label></div></header>` +
+      `<div class="launchpad-truth"><strong>Current V2 provenance</strong><span>Inclusion is not endorsement, official status, price, or safety.</span><span data-result-detail>Recent canonical buys · last-known snapshot</span></div>` +
+      `<div class="launchpad-grid" data-launchpad-grid>${launches.map(launchpadCard).join('')}</div>` +
+      `<p class="note" data-empty-note hidden><strong>No matching launches</strong>Try a token name, symbol, or exact 0x address.</p>` +
+    `</section></main>`;
+
+  return page({
+    title: 'Explore · Ponsr',
+    description: 'Every current V2 token Ponsr has launched on Robinhood Chain, with source state, block and authoritative event time.',
+    canonical: 'https://ponsr.fun/explore',
+    socialImage: socialImages.explore,
+    body,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Token                                                                       */
+/* -------------------------------------------------------------------------- */
+
+function curveActivityBlock(token) {
+  const series = curveFlowSeries(token.activity);
+  if (!series.length) return `<p class="note"><strong>Curve activity not published</strong>This feed publishes no verified CurveBuy or CurveSell events for this token.</p>`;
+  const width=640, height=220, padX=34, padY=26;
+  const numeric=series.map((event)=>Number(BigInt(event.netQuoteWei))/1e18);
+  const min=Math.min(0,...numeric), max=Math.max(0,...numeric), span=max-min||1;
+  const points=series.map((event,index)=>({event,x:series.length===1?width/2:padX+(index*(width-padX*2))/(series.length-1),y:height-padY-((numeric[index]-min)/span)*(height-padY*2)}));
+  const zeroY=height-padY-((0-min)/span)*(height-padY*2);
+  const line=points.map((point,index)=>index===0?`M ${point.x.toFixed(2)} ${zeroY.toFixed(2)} V ${point.y.toFixed(2)}`:`H ${point.x.toFixed(2)} V ${point.y.toFixed(2)}`).join(' ');
+  const markers=points.map(({event,x,y})=>`<g class="flow-marker ${event.kind}"><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="9"></circle><text x="${x.toFixed(2)}" y="${(y-17).toFixed(2)}" text-anchor="middle">${event.kind==='buy'?'BUY':'SELL'}</text></g>`).join('');
+  const timeline=series.slice().reverse().map((event)=>`<li class="flow-event ${event.kind}"><span class="flow-kind">${event.kind==='buy'?'BUY':'SELL'}</span><span><strong>${event.kind==='buy'?'Quote in +':'Quote out −'}${esc(ethFromWei(event.quoteWei,18))}</strong><small>Cumulative ${esc(ethFromWei(event.netQuoteWei,18))} · ${esc(eventTime(event.blockTimestamp))} · block ${esc(whole(event.blockNumber))}</small></span><a class="text-link" href="${EXPLORER}/tx/${esc(event.transactionHash)}" target="_blank" rel="noopener noreferrer">tx ↗</a></li>`).join('');
+  const maxWei=series.reduce((best,event)=>BigInt(event.netQuoteWei)>best?BigInt(event.netQuoteWei):best,0n).toString();
+  const buyWei=series.filter((event)=>event.kind==='buy').reduce((sum,event)=>sum+BigInt(event.quoteWei),0n);
+  const sellWei=series.filter((event)=>event.kind==='sell').reduce((sum,event)=>sum+BigInt(event.quoteWei),0n);
+  const netWei=BigInt(series.at(-1).netQuoteWei), netDirection=netWei>=0n?'inflow':'outflow';
+  const activityFresh=token.activity?.sourceState==='complete';
+  const gridLines=[.25,.5,.75].map((ratio)=>{const y=(padY+(height-padY*2)*ratio).toFixed(2);return `<line class="flow-grid-line" x1="${padX}" x2="${width-padX}" y1="${y}" y2="${y}"></line>`;}).join('');
+  return `<section class="panel curve-flow reveal" data-curve-flow-chart><div class="curve-flow-head"><div><p class="eyebrow">Cumulative quote accounting · authoritative block time</p><h2>Net ETH flow</h2><p class="flow-intro">See how much native ETH entered through buys, exited through sells, and remained as net transaction flow.</p></div><div class="flow-summary ${netDirection}"><span class="flow-not-price">Not token price · liquidity · PnL</span><span class="flow-summary-label">Net ${netDirection}</span><p class="mono">${esc(ethFromWei(netWei<0n?-netWei:netWei,18))}</p></div></div>` +
+    `<p class="flow-source ${activityFresh?'complete':'stale'}">${activityFresh?'Activity indexed':'Last-known activity'} through block ${esc(whole(token.activity.observedThroughBlock))}${token.activity?.sourceState==='partial'?' · source partial':''}</p>` +
+    `<div class="flow-metric-rail"><article data-flow-buy-inflow><span>Buy inflow</span><strong>+${esc(ethFromWei(buyWei,18))}</strong><small>Σ verified CurveBuy quote in</small></article><article data-flow-sell-outflow><span>Sell outflow</span><strong>${esc(ethFromWei(sellWei,18))}</strong><small>Unsigned magnitude · subtracted from buys</small></article><article class="net ${netDirection}" data-flow-net-inflow><span>Net ${netDirection}</span><strong>${netDirection==='inflow'?'+':'−'}${esc(ethFromWei(netWei<0n?-netWei:netWei,18))}</strong><small>Buy inflow − sell outflow</small></article></div>` +
+    `<div class="flow-ledger-note"><span aria-hidden="true">◇</span><p><strong>Transaction-flow ledger</strong>Direction and cumulative ETH movement through exact curve events—not valuation or available reserve.</p></div>` +
+    `<div class="flow-plot"><div class="flow-plot-head"><span>Running net flow</span><span>Older events → newer events</span></div><span class="flow-scale flow-scale-max">${esc(ethFromWei(maxWei,18))}</span><span class="flow-scale flow-scale-zero">0 ETH</span>` +
+    `<svg class="flow-chart" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="flow-title flow-desc"><title id="flow-title">Running net ETH flow through the bonding curve</title><desc id="flow-desc">${series.length} verified CurveBuy and CurveSell events, oldest to newest, plotted from exact quoteIn minus quoteOut values.</desc>${gridLines}<line class="flow-zero" x1="${padX}" x2="${width-padX}" y1="${(height-padY-((0-min)/span)*(height-padY*2)).toFixed(2)}" y2="${(height-padY-((0-min)/span)*(height-padY*2)).toFixed(2)}"></line><path class="flow-line-glow" d="${line}"></path><path class="flow-line" d="${line}"></path>${markers}</svg><div class="flow-legend"><span class="buy">● BUY adds ETH</span><span class="sell">● SELL removes ETH</span></div></div>` +
+    `<div class="flow-list-head"><div><p class="eyebrow">Canonical event ledger</p><h3>Verified curve events</h3></div><span class="eyebrow">Newest first</span></div><ol class="flow-events">${timeline}</ol></section>`;
+}
+
+function marketTerminalBlock(token) {
+  const chart=`https://www.geckoterminal.com/robinhood/tokens/${esc(token.token.toLowerCase())}`;
+  const chartEmbed=`${chart}?embed=1&amp;info=0&amp;swaps=0`;
+  const canonicalSeries=curveFlowSeries(token.activity);
+  const canonicalRows=canonicalSeries.length
+    ? canonicalSeries.slice().reverse().map((event)=>`<li class="market-trade ${event.kind}"><span class="market-kind">${event.kind.toUpperCase()}</span><span><strong>${event.kind==='buy'?'Quote in +':'Quote out −'}${esc(ethFromWei(event.quoteWei,18))}</strong><small>${esc(eventTime(event.blockTimestamp))} · block ${esc(whole(event.blockNumber))}</small></span><a class="text-link" href="${EXPLORER}/tx/${esc(event.transactionHash)}" target="_blank" rel="noopener noreferrer">tx ↗</a></li>`).join('')
+    : `<li class="market-empty">Canonical CurveBuy / CurveSell activity is unavailable for this observation range.</li>`;
+  const canonicalCount=canonicalSeries.length?String(canonicalSeries.length):'Unavailable';
+  return `<section class="panel market-terminal token-workstation reveal" data-market-terminal data-token="${esc(token.token.toLowerCase())}" data-curve="${esc(token.curve.toLowerCase())}">` +
+    `<div class="terminal-head"><div><p class="eyebrow">External market layer · GeckoTerminal</p><h2>Chart + activity</h2></div><div class="terminal-source"><span class="terminal-source-dot"></span><span data-market-state>Loading indexed sources</span></div></div>` +
+    `<div class="market-metrics"><article><span>Price USD</span><strong data-market-price>Unavailable</strong><small>GeckoTerminal</small></article><article><span>24h volume</span><strong data-market-volume>Unavailable</strong><small>GeckoTerminal</small></article><article><span>24h flow</span><strong data-market-transactions>Unavailable</strong><small>GeckoTerminal aggregate</small></article><article><span>FDV</span><strong data-market-fdv>Unavailable</strong><small>Provider estimate · not market cap</small></article><article><span>Holders</span><strong data-holder-count>Unavailable</strong><small>Chain-derived Transfer logs</small></article></div>` +
+    `<div class="workstation-grid"><div class="gecko-frame"><div class="market-chart-shell gecko-chart-shell"><iframe src="${chartEmbed}" title="${esc(token.symbol)} live chart on GeckoTerminal" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="clipboard-write"></iframe></div><p>Interactive GeckoTerminal chart. <a class="text-link" href="${chart}" target="_blank" rel="noopener noreferrer">Open on GeckoTerminal ↗</a></p></div>` +
+    `<section class="activity-terminal"><div class="activity-tabs" role="tablist" aria-label="Token activity"><button id="activity-tab-trades" type="button" role="tab" aria-selected="true" aria-controls="activity-panel-trades" tabindex="0" data-activity-tab="trades">Buy / Sell <span data-trade-count>${canonicalCount}</span></button><button id="activity-tab-holders" type="button" role="tab" aria-selected="false" aria-controls="activity-panel-holders" tabindex="-1" data-activity-tab="holders">Holders <span data-holder-tab-count>—</span></button><button id="activity-tab-transfers" type="button" role="tab" aria-selected="false" aria-controls="activity-panel-transfers" tabindex="-1" data-activity-tab="transfers">Transfers <span data-transfer-count>—</span></button></div><div id="activity-panel-trades" class="activity-pane" role="tabpanel" aria-labelledby="activity-tab-trades" data-activity-pane="trades"><ol data-market-trades>${canonicalRows}</ol></div><div id="activity-panel-holders" class="activity-pane" role="tabpanel" aria-labelledby="activity-tab-holders" data-activity-pane="holders" hidden><ol data-token-holders><li class="market-empty">Waiting for chain-derived holders…</li></ol></div><div id="activity-panel-transfers" class="activity-pane" role="tabpanel" aria-labelledby="activity-tab-transfers" data-activity-pane="transfers" hidden><ol data-token-transfers><li class="market-empty">Waiting for chain-derived transfers…</li></ol></div></section></div>` +
+    `<p class="terminal-disclosure">Market price, FDV, volume and 24h aggregate are external GeckoTerminal observations. Holders and transfers are derived from exact token Transfer logs. <strong>Canonical Ponsr ledger</strong>: Buy/Sell rows are canonical CurveBuy and CurveSell events and are never replaced by provider trades.</p></section>`;
+}
+
+function whatIfBlock(token) {
+  return `<section class="panel what-if-lab reveal" id="what-if" data-what-if-simulator data-token="${esc(token.token.toLowerCase())}">` +
+    `<div class="what-if-head"><div><p class="eyebrow">Read-only wallet laboratory</p><h2>What if you never sold?</h2><p class="lede">Reconstruct your observed Ponsr trade history, then compare today's actual position with a never-sold counterfactual.</p></div><span class="read-only-badge">Read-only · no signing</span></div>` +
+    `<div class="simulator-controls"><label><span>Wallet address</span><input type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="0x…" data-wallet-input></label><button class="btn btn-primary" type="button" data-run-simulator><span>Run analysis</span></button><button class="btn btn-ghost" type="button" data-connect-wallet><span>Select with MetaMask</span></button></div>` +
+    `<p class="simulator-boundary">MetaMask is used only to return the address you explicitly select via <span class="mono">eth_requestAccounts</span>. Ponsr does not request a signature, chain switch, approval, or transaction.</p>` +
+    `<div class="simulator-state" data-simulator-state><strong>Connect or paste a wallet</strong><p>No account data is inferred from an X handle. Analysis starts only after you select or enter an exact address.</p></div>` +
+    `<div class="simulator-results" data-simulator-results hidden><article><span>If you never sold</span><strong data-never-sold>Unavailable</strong><small>All observed buys valued now</small></article><article><span>What you actually have</span><strong data-actual-now>Unavailable</strong><small>Current holdings + realized quote</small></article><article><span>Counterfactual delta</span><strong data-what-if-delta>Unavailable</strong><small>Never-sold minus actual</small></article><article><span>Observed trades</span><strong data-what-if-trades>Unavailable</strong><small>Reconciled history only</small></article></div>` +
+    `<div class="simulator-audit" data-simulator-audit hidden><div class="flow-list-head"><h3>Reconciliation inputs</h3><span class="eyebrow">Derived · auditable</span></div><dl class="facts"><div class="fact"><dt>Total tokens bought</dt><dd data-audit-bought>Unavailable</dd></div><div class="fact"><dt>Current token balance</dt><dd data-audit-balance>Unavailable</dd></div><div class="fact"><dt>Realized quote</dt><dd data-audit-realized>Unavailable</dd></div><div class="fact"><dt>Token price used</dt><dd data-audit-token-price>Unavailable</dd></div><div class="fact"><dt>Quote price used</dt><dd data-audit-quote-price>Unavailable</dd></div><div class="fact"><dt>Valuation observed</dt><dd data-audit-time>Unavailable</dd></div><div class="fact"><dt>Sources</dt><dd>Canonical curve events · Blockscout transfers · Robinhood RPC transaction sender/balance · GeckoTerminal current price</dd></div><div class="fact"><dt>Formula</dt><dd>Never sold = all bought tokens × current price; actual = current holdings × current price + realized quote × current quote price</dd></div></dl><div class="flow-list-head"><h3>Included wallet trades</h3><span class="eyebrow">Exact matched transactions</span></div><ol class="flow-events" data-audit-trades></ol></div>` +
+    `<p class="terminal-disclosure">Historical counterfactual, not a prediction or recommendation. Gas is excluded. Partial, missing, dead, or illiquid data stays labeled and never becomes a zero-value claim.</p></section>`;
+}
+
+function tokenPage(token) {
+  /**
+   * Observed reserves, with the observation attached.
+   *
+   * A figure without a state and a time is a claim about now, and this feed
+   * cannot make one — the reserve was read once, at a moment that has passed.
+   * So the number never appears without when it was read and whether the curve
+   * has graduated.
+   */
+  const rows=reserveRows(token),reserveMap=rows?Object.fromEntries(rows):null;
+  const reserves=reserveMap
+    ? `<div class="reserve-metric-grid"><article><span>Real quote reserve</span><strong>${esc(reserveMap['Real quote reserve'])}</strong><small>Observed native ETH</small></article><article><span>Graduation threshold</span><strong>${esc(reserveMap['Graduation threshold'])}</strong><small>Protocol threshold</small></article></div><div class="curve-state-row"><span>Curve status</span><strong>${esc(reserveMap['Curve status'])}</strong><small>Observed at ${esc(reserveMap['Observed at'])}</small></div><p class="observation-note">A single reading, not a live figure. It was true at the observation above, and it is not extrapolated anywhere on this page.</p>`
+    : `<p class="note"><strong>Curve reserves unavailable</strong>${esc(token.reserves?.reason || 'No verified reserve observation is published for this token.')}</p>`;
+  const hasActivity=Number.isFinite(token.activity?.curveBuys)&&Number.isFinite(token.activity?.curveSells);
+  const activity=hasActivity
+    ? `<div class="observation-grid"><article><span>Verified activity</span><strong>${esc(plural(token.activity.curveBuys,'buy','buys'))} · ${esc(plural(token.activity.curveSells,'sell','sells'))}</strong><small>CurveBuy / CurveSell</small></article><article><span>Indexed coverage</span><strong>Through block ${esc(whole(token.activity.observedThroughBlock))}</strong><small>${token.activity?.sourceState==='complete'?'Complete observation':'Last-known observation'}</small></article></div>`
+    : `<p class="note"><strong>Curve activity not published</strong>This feed publishes no verified buy/sell observation for this token.</p>`;
+
+  const dossierRows=(items,start=1)=>`<dl class="dossier-rows">${items.map(([label,value],index)=>`<div class="dossier-row"><span class="dossier-index">${String(start+index).padStart(2,'0')}</span><div><dt>${esc(label)}</dt><dd>${value}</dd></div></div>`).join('')}</dl>`;
+  const originRows=dossierRows([['Factory',addressCell(token.factory)],['Curve',addressCell(token.curve)],['Fee splitter',addressCell(token.splitter)],['Deployer',addressCell(token.deployer)],['Pair asset',esc(token.pairLabel)+(token.pairToken===ZERO?' · zero address':` · ${esc(shortAddress(token.pairToken))}`)]]);
+  const launchRows=dossierRows([['Launch transaction',`<a class="text-link" href="${EXPLORER}/tx/${esc(token.transactionHash)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(token.transactionHash))}</a>`],['Block',blockCell(token.blockNumber)],['Event time',esc(eventTime(token.blockTimestamp))],['Launch fee',`${esc(token.launchFeeEth)} ETH`]],6);
+  const progress=curveProgress(token);
+  const body =
+    `<main data-token-address="${esc(token.token.toLowerCase())}">` +
+    `<header class="token-identity-strip reveal">${tokenArt(token)}<div class="token-identity-main"><p class="eyebrow">Current V2 · ${esc(token.deploymentId)}</p><h1 class="metal">${esc(token.name)}</h1><p class="proof-symbol">${esc(token.symbol)}</p><p class="token-description" data-token-description>${esc(token.description || 'Token description unavailable.')}</p><p class="deployer">Deployed by <a href="${EXPLORER}/address/${esc(token.deployer)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(token.deployer))}</a></p><div class="identity-actions"><button class="ca-copy" type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span class="mono">${esc(shortAddress(token.token))}</span><span data-copy-label role="status" aria-live="polite">Copy CA</span></button><a class="btn btn-ghost" href="${EXPLORER}/address/${esc(token.token)}" target="_blank" rel="noopener noreferrer"><span>Explorer ↗</span></a><a class="btn btn-ghost" href="${EXPLORER}/tx/${esc(token.transactionHash)}" target="_blank" rel="noopener noreferrer"><span>Launch tx ↗</span></a></div></div><div class="identity-curve"><span>Curve progress</span><strong>${progress.toFixed(2)}%</strong><progress max="100" value="${progress.toFixed(2)}">${progress.toFixed(2)}%</progress><small>${esc(ethFromWei(token.reserves?.realQuoteReserveWei||0))} of ${esc(ethFromWei(token.graduationThreshold,2))} · observed ${esc(eventTime(token.reserves?.observedAt))}</small></div></header>` +
+    statusStrip() +
+    `<section class="section token-detail-flow">` + marketTerminalBlock(token) + curveActivityBlock(token) + whatIfBlock(token) +
+    `<div class="inspect-grid token-dossier"><article class="panel reveal dossier-card provenance-card"><div class="dossier-head"><div><p class="eyebrow">Protocol dossier · provenance</p><h2>Where it came from</h2></div><span class="dossier-chip">Verified chain references</span></div><p class="dossier-intro">Immutable launch identity, contract ancestry, and authoritative creation record.</p><section class="dossier-group"><div class="dossier-group-head"><span>01</span><h3>Origin &amp; contracts</h3></div>${originRows}</section><section class="dossier-group"><div class="dossier-group-head"><span>02</span><h3>Launch record</h3></div>${launchRows}</section><section class="dossier-group verification-group"><div class="dossier-group-head"><span>03</span><h3>Verification scope</h3></div><div class="verification-grid"><article><span>Network</span><strong>Robinhood Chain · 4663</strong></article><article><span>Registry</span><strong>${esc(token.deploymentId)}</strong></article></div><p>Identifiers are abbreviated for scanning; linked references open their exact chain records.</p></section></article>` +
+    `<article class="panel reveal dossier-card mechanics-card"><div class="dossier-head"><div><p class="eyebrow">Protocol dossier · mechanics</p><h2>A bonding curve, not a pool</h2></div><span class="dossier-chip state">Current V2 architecture</span></div><p class="dossier-intro">Current V2 sells into a bonding curve with native ETH as the quote asset. The zero pair address is intentional—not a Uniswap-style pool.</p><section class="mechanics-state"><div><span>Last observed curve state</span><strong>${esc(reserveMap?.['Curve status']||'Unavailable')}</strong></div><p>Native ETH quote · zero pair address by design</p></section><section class="dossier-group"><div class="dossier-group-head"><span>01</span><h3>Curve reserves</h3></div><div data-reserves data-reserve-metrics>${reserves}</div></section><section class="dossier-group"><div class="dossier-group-head"><span>02</span><h3>Observation</h3></div><div data-activity data-activity-observation>${activity}</div></section><section class="dossier-group fee-group"><div class="dossier-group-head"><span>03</span><h3>Creator fees</h3></div><div class="fee-status"><span class="state-badge">Claim path unvalidated</span><p>No end-to-end fee claim has been proven and no claim receipt is published here. Nothing here reports fee income.</p></div></section></article></div></section></main>`;
+
+  return page({
+    title: `${token.name} (${token.symbol}) — Ponsr`,
+    description: `${token.symbol} on Robinhood Chain: factory, bonding curve, fee splitter, deployer, pair asset, launch transaction, block and authoritative event time — as recorded on chain.`,
+    canonical: `https://ponsr.fun/token/${token.token.toLowerCase()}`,
+    socialImage: socialImages.tokens.get(token.token.toLowerCase()),
+    body,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Account — honest signed-out architecture                                    */
+/* -------------------------------------------------------------------------- */
+
+const accountRoutes = [
+  ['Overview', '/account'],
+  ['Launches', '/account/launches'],
+  ['Creator fees', '/account/fees'],
+  ['Wallet', '/account/wallet'],
+  ['What-if lab', '/account/simulator'],
+  ['Security', '/account/security'],
+];
+
+const unavailableAction = (label) => `<button class="btn btn-disabled" type="button" disabled aria-disabled="true" title="Requires verified account connection">${esc(label)}</button>`;
+const unavailableValue = (label, detail) => `<article class="account-stat"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
+
+function accountNav(current) {
+  return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account preview sections">${accountRoutes.map(([label, href],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>Preview</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
+}
+
+function accountSidebar(current) {
+  return `<aside class="account-sidebar"><a class="account-sidebar-brand" href="/account"><img src="/logo-transparent.png" alt="" width="36" height="36"><span><strong>PONSR</strong><small>Command center</small></span></a>${accountNav(current)}<div class="account-sidebar-state"><span class="terminal-source-dot"></span><div><small>Session state</small><strong>Signed out</strong></div></div><a class="sidebar-explore" href="/explore">Explore public launches <i>→</i></a></aside>`;
+}
+
+function accountConnection() {
+  return `<section class="custody-boundary" role="status" data-account-connection><span class="account-lock" aria-hidden="true">◇</span><div><span class="signed-out-label" data-account-session-label>Custody boundary · Phase B unavailable</span><strong data-account-session-title>Private account data is locked</strong><p data-account-session-detail>Account connection unavailable until the authenticated backend reports ready. Numeric X identity must map to the exact existing Ponsr embedded wallet without creating another wallet.</p></div><div class="connection-actions"><button class="btn btn-disabled" type="button" disabled aria-disabled="true" data-account-signin>Sign-in not available</button><button class="btn btn-ghost" type="button" hidden data-account-logout>Sign out</button><a class="btn btn-ghost" href="/explore"><span>Explore public records</span></a></div></section>`;
+}
+
+function accountOverview() {
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">One place for launches, creator trading fees, wallet access, and security—after identity and wallet continuity are verified.</p><div class="account-stats">${unavailableValue('Embedded wallet','Requires verified account binding.')}${unavailableValue('Native balance','No authenticated address is available.')}${unavailableValue('Creator fees','No reconciled account scope is available.')}${unavailableValue('Launches','No verified identity is connected.')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-deferred">Not shipped</span>X identity and existing-wallet access</li><li><span class="status-disabled">Disabled</span>Claims, send, swap, and signing</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
+}
+
+function accountLaunches() {
+  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore"><span>Open public record</span></a></div></section>`;
+}
+
+function accountFees() {
+  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Creator trading fees</p><h2>Receipt-backed accounting</h2></div><span class="state-badge">Account unavailable</span></div><p class="lede">Creator fees are shown only after escrow, splitter, receipt, destination, and account ownership reconcile. They are not dividends or guaranteed earnings.</p><div class="account-stats account-stats-four">${unavailableValue('Accrued','Requires reconciled fee observations.')}${unavailableValue('Claimable','Requires proven escrow availability.')}${unavailableValue('Queued / Processing','Requires an active receipt state.')}${unavailableValue('Paid / Claimed','Requires receipt and custody reconciliation.')}</div><div class="account-actions">${unavailableAction('Claim available fees')}<p>Claim execution is deferred. A completed transaction alone is not enough; custody and accounting must reconcile.</p></div></section>`;
+}
+
+function accountWallet() {
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Embedded wallet</p><h2>Exact wallet continuity</h2><p class="lede">The website must recover access to the exact existing embedded-wallet address associated with the verified account. It must never create a replacement wallet or expose a private key.</p><div class="wallet-address-shell"><span>Wallet address</span><strong>Unavailable until account verification</strong><p>Copy, explorer, and QR controls appear only after the authenticated account endpoint returns the verified address.</p></div><div class="account-actions account-action-row">${unavailableAction('Receive')}${unavailableAction('Send')}${unavailableAction('Swap')}</div></section><aside class="panel account-side"><p class="eyebrow">Linked wallets</p><h2>No linking session</h2><p>External wallets require a domain-bound signed challenge with nonce, chain, expiry, and replay protection.</p>${unavailableAction('Link external wallet')}</aside></div>`;
+}
+
+function accountSimulator() {
+  return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Financial execution remains locked</strong>Receive, send, swap, creator-fee claims, and account-linked X/Privy access remain Phase B features.</p></section>`;
+}
+
+function accountSecurity() {
+  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Security & recovery</p><h2>Authority must be proven, not assumed</h2></div><span class="state-badge">Phase B required</span></div><div class="security-list"><article><strong>Identity binding</strong><p>Stable numeric X user ID, verified server-side and independent of a mutable handle.</p><span>Unavailable</span></article><article><strong>Wallet continuity</strong><p>Exact existing Privy embedded wallet, with duplicate-creation races blocked.</p><span>Unavailable</span></article><article><strong>Session controls</strong><p>Expiration, CSRF defense, logout, replay protection, and recovery evidence.</p><span>Unavailable</span></article><article><strong>Signing authority</strong><p>No website signing, claim, send, swap, or treasury authority is enabled.</p><span>Disabled</span></article></div>${unavailableAction('Review recovery options')}</section>`;
+}
+
+function accountPage(route='/account') {
+  const content = route==='/account/launches' ? accountLaunches() : route==='/account/fees' ? accountFees() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
+  const title = accountRoutes.find(([,href])=>href===route)?.[0] || 'Overview';
+  const routeIntro = {
+    '/account':['Creator operations','One command center for launches, fees, wallet continuity, and account authority.'],
+    '/account/launches':['Launch ownership','Exact creator-to-launch records after verified identity binding.'],
+    '/account/fees':['Receipt-backed fees','Accrued, claimable, queued or processing, and paid or claimed remain distinct accounting groups.'],
+    '/account/wallet':['Wallet continuity','Recover the exact existing embedded wallet—never create a replacement.'],
+    '/account/simulator':['Read-only laboratory','Explore historical wallet counterfactuals without signing authority.'],
+    '/account/security':['Authority & recovery','Identity, sessions, custody, and signing boundaries in one place.'],
+  }[route] || ['Creator operations','Verified private account workspace.'];
+  const body=`<main class="account-shell" data-auth-state="signed-out" data-identity-state="unavailable" data-private-data-state="locked" data-execution-authority="NONE_PREVIEW_ONLY" data-can-sign="false" data-can-send="false" data-can-swap="false" data-can-claim="false"><div class="account-command-shell">${accountSidebar(route)}<section class="account-workspace" data-account-route="${esc(route)}"><header class="account-route-head"><div><p class="eyebrow">${esc(routeIntro[0])}</p><h1 class="metal">${esc(title)}</h1><p class="lede">${esc(routeIntro[1])}</p></div><span class="workspace-mode" data-account-mode><i></i>Phase B · Unavailable</span></header>${accountConnection()}<div class="account-workspace-body">${content}</div></section></div></main>`;
+  return page({title:`${title} — Ponsr account`,description:'The Ponsr account command center architecture, with honest unavailable states until verified X identity and existing-wallet continuity are wired.',canonical:`https://ponsr.fun${route}`,socialImage:socialImages.account,body});
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Progressive inspector for launches discovered after the last static build.
+ * Known snapshot launches retain pre-rendered token-specific HTML and metadata;
+ * Netlify falls through to this shell only when no exact prebuilt page exists.
+ */
+function dynamicTokenPage() {
+  return page({
+    title: 'Inspect a Ponsr launch',
+    description: 'Inspect an exact current V2 Ponsr launch address from the canonical live feed.',
+    canonical: 'https://ponsr.fun/token',
+    noindex: true,
+    body: `<main class="section dynamic-token" data-dynamic-token-page>` +
+      `<div class="section-head"><p class="eyebrow">Current V2 launch</p>` +
+      `<h1 class="metal" data-dynamic-token-title>Reading the record…</h1>` +
+      `<p class="lede" data-dynamic-token-message>The exact address is being checked against the canonical Ponsr feed.</p></div>` +
+      statusStrip() +
+      `<div data-dynamic-token-content></div>` +
+      `<p class="inline-links"><a class="btn btn-ghost" href="/explore"><span>Explore launches</span></a></p>` +
+      `</main>`,
+  });
+}
+
+/**
+ * True not-found, as its own state.
+ *
+ * `/token/<address>` resolves through a Netlify splat to a prebuilt directory,
+ * so an address Ponsr never launched has no page. That is a genuinely different
+ * answer from "the source failed" or "nothing has launched", and the brief asks
+ * for the three to be distinguishable. Netlify serves this for any unmatched
+ * path, so the distinction survives a direct navigation or a refresh.
+ */
+function notFound() {
+  return page({
+    title: 'Not on the record — Ponsr',
+    description: 'This address is not a current V2 launch recorded by Ponsr.',
+    canonical: 'https://ponsr.fun/404',
+    body: `<main class="section">` +
+      `<div class="section-head">` +
+        `<p class="eyebrow">Not on the record</p>` +
+        `<h1 class="metal">Nothing here.</h1>` +
+        `<p class="lede">This page is not a current V2 launch recorded by Ponsr. That is different from a launch we could not read — ` +
+        `if the source were failing, the record page would say so rather than showing you this.</p>` +
+      `</div>` +
+      `<p class="inline-links"><a class="btn btn-primary" href="/explore"><span>Browse the record</span></a>` +
+      `<a class="btn btn-ghost" href="/"><span>Home</span></a></p></main>`,
+  });
+}
+
+/**
+ * Terms.
+ *
+ * The legal body is a hand-written fragment under `website/content/`; only the
+ * chrome is generated. It used to be a standalone file carrying its own copy of
+ * the navigation, and that copy had already drifted — it linked to "Monitor",
+ * a page name nothing else used, and styled itself with class names this
+ * redesign renames. Generating the chrome means the drift cannot come back,
+ * while the wording that actually carries obligations stays under review as a
+ * file someone edits deliberately.
+ */
+async function terms() {
+  const body = await fs.readFile(path.join(site, 'content/terms.body.html'), 'utf8');
+  return page({
+    title: 'Terms & Disclaimer — Ponsr',
+    description: 'Ponsr terms, current V2 fee mechanics, and risk disclaimer.',
+    canonical: 'https://ponsr.fun/terms',
+    body: `<main>` +
+      `<header class="token-hero reveal"><p class="eyebrow">Terms · 28 August 2026</p>` +
+      `<h1 class="metal">Use the record. Understand the risk.</h1></header>` +
+      `<section class="section">${body}</section></main>`,
+  });
+}
+
+await fs.writeFile(path.join(site, 'index.html'), home());
+await fs.writeFile(path.join(site, '404.html'), notFound());
+await fs.writeFile(path.join(site, 'terms.html'), await terms());
+await fs.mkdir(path.join(site, 'explore'), { recursive: true });
+await fs.writeFile(path.join(site, 'explore/index.html'), explore());
+await fs.mkdir(path.join(site, 'token'), { recursive: true });
+await fs.writeFile(path.join(site, 'token/index.html'), dynamicTokenPage());
+for (const [, route] of accountRoutes) {
+  const directory = path.join(site, route.slice(1));
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'index.html'), accountPage(route));
+}
+
+for (const token of launches) {
+  const address = token.token.toLowerCase();
+  const directory = path.join(site, 'token', address);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'index.html'), tokenPage(token));
+}
+
+const routes = ['', 'explore', 'terms', ...accountRoutes.map(([, route]) => route.slice(1)), ...launches.map((token) => `token/${token.token.toLowerCase()}`)];
+const urls = routes.map((route) => `  <url><loc>https://ponsr.fun/${route}</loc></url>`).join('\n');
+await fs.writeFile(
+  path.join(site, 'sitemap.xml'),
+  `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`
+);
+
+console.log(`Built ${routes.length} routes with ${feed.launches.length} canonical token page(s).`);

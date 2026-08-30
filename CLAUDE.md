@@ -62,7 +62,7 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is live at https://ponsr.fun** (78 smoke checks). Netlify, auto-deploying from
+- **Website is live at https://ponsr.fun** (17 smoke checks + 56 website tests). Netlify, auto-deploying from
   `main` — a push publishes, there is no manual step. Three routes in one static file:
   `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
   still reads the old `?view=` / `?token=` forms, so existing links keep working.
@@ -581,7 +581,11 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 - External dependencies (parser, wallet resolver, X client, treasury signer) are always
   injected via interfaces with a `Mock*` implementation for tests. Follow this pattern for any
   new external integration rather than hardcoding a real client into business logic.
-- The website has its own suite: `node website/smoke-test.js` (**78 checks**, no install needed).
+- The website has two suites: `node website/smoke-test.js` (**17 checks**, no install needed)
+  and `npm run test:website` (**56 tests**, the substantive one — data truth, source states,
+  hostile metadata, motion and shell regressions). The smoke suite was 78 checks against the
+  pre-V2 single-file site; the number moved when that file was replaced, and this line did not.
+  Count them before quoting them.
   Several of those checks exist because a specific bug was found and fixed — read the comment
   above a check before changing it.
 - The contract test workaround (`contracts-test/README.md`) exists for a sandbox network

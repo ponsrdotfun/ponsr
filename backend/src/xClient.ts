@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import { AccountSignals, InboundMention } from './types';
 import { config } from './config';
+import { structuredPhotoUrls, trustedPhotoUrl } from './launchMedia';
 
 /**
  * Reading and posting are split across two providers, on purpose.
@@ -233,6 +234,7 @@ export class TwitterApiIoReader implements XReader {
         authorHandle: String(t.author?.userName ?? t.author?.username ?? t.username ?? ''),
         text: String(t.text ?? t.full_text ?? ''),
         createdAt: new Date(t.createdAt ?? t.created_at ?? Date.now()).toISOString(),
+        photoUrl: trustedPhotoUrl(structuredPhotoUrls(t)),
         inReplyToTweetId: t.inReplyToId ?? t.in_reply_to_status_id ?? null,
       }))
       // Filtered here as well as in the query. The reconciler relies on this window to avoid

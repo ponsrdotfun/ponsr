@@ -5,6 +5,8 @@ export interface InboundMention {
   authorHandle: string;
   text: string;
   createdAt: string; // ISO timestamp
+  /** One validated structured X photo entity; never derived from tweet text. */
+  photoUrl?: string | null;
   /** Set by the provider if this tweet is a reply continuing an earlier thread. */
   inReplyToTweetId?: string | null;
 }

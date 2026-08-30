@@ -35,6 +35,7 @@ export interface LaunchRequest {
   launchConfigId?: bigint;
   tokenName: string;
   tokenSymbol: string;
+  logo?: string | null;
   description: string | null;
   /** The deployed FeeSplitter: one address, which the locker pays trading fees to. */
   splitterAddress: string;
@@ -139,7 +140,7 @@ class CurrentV2Target implements LaunchTarget {
       {
         tokenName: req.tokenName,
         tokenSymbol: req.tokenSymbol,
-        logo: '',
+        logo: req.logo ?? '',
         description: req.description ?? '',
         socials: EMPTY_SOCIALS,
         feeWallet: req.splitterAddress,

@@ -741,7 +741,7 @@ describe('launching paired against an approved asset', () => {
             {
               tokenName: req.tokenName,
               tokenSymbol: req.tokenSymbol,
-              logo: '',
+              logo: req.logo ?? '',
               description: req.description ?? '',
               socials: EMPTY_SOCIALS,
               feeWallet: req.splitterAddress,
@@ -761,8 +761,9 @@ describe('launching paired against an approved asset', () => {
     };
   }
 
-  function run(pairWith: string | null, extra: Record<string, unknown> = {}) {
+  function run(pairWith: string | null, extra: Record<string, unknown> = {}, photoUrl: string | null = null) {
     const mention = makeMention();
+    mention.photoUrl = photoUrl;
     const intent = { ...HIGH_CONFIDENCE_MOON, pairWith };
     return handleMention(mention, {
       db,
@@ -797,6 +798,15 @@ describe('launching paired against an approved asset', () => {
      */
     expect(built).toHaveLength(1);
     expect(built[0].pairAsset.symbol).toBe('AAPL');
+  });
+
+  it('binds the validated structured photo URL into the one launch build', async () => {
+    const { built, target } = recordingTarget();
+    const photo='https://pbs.twimg.com/media/AbCd1234.jpg';
+    const outcome=await run(null,{launchTarget:target},photo);
+    expect(outcome.kind).toBe('launched');
+    expect(built).toHaveLength(1);
+    expect(built[0].logo).toBe(photo);
   });
 
   // Silence here would be the worst outcome: the person gets a token priced in

@@ -35,7 +35,7 @@ export interface WalletResolver {
 export class PrivyWalletResolver implements WalletResolver {
   private client: any = null;
 
-  constructor(private db: Db, private privyAppId: string, private privyAppSecret: string) {}
+  constructor(private db: Db, private privyAppId: string, private privyAppSecret: string, client?: any) { this.client=client??null; }
 
   /**
    * Loaded on first use, not at import time.
@@ -55,6 +55,15 @@ export class PrivyWalletResolver implements WalletResolver {
       this.client = new PrivyClient({ appId: this.privyAppId, appSecret: this.privyAppSecret });
     }
     return this.client;
+  }
+
+  /** Account login verifies DB ↔ Privy continuity with a lookup-only provider call.
+   * Mismatch or provider failure is unavailable; this path never calls create(). */
+  async lookupExistingVerified(xUserId: string): Promise<ResolvedWallet | null> {
+    const stored=this.db.getUser(xUserId);if(!stored)return null;
+    const provider=await this.findByExternalId(xUserId);if(!provider)return null;
+    if(provider.id!==stored.providerRef||ethers.getAddress(provider.address)!==ethers.getAddress(stored.walletAddress))return null;
+    return stored;
   }
 
   async resolve(xUserId: string, xHandle: string): Promise<ResolvedWallet> {

@@ -1,6 +1,7 @@
 import { SplitXClient, XReader, XWriter, XApiWriter, TwitterApiIoReader } from '../src/xClient';
 import { composeSuccessReply } from '../src/replyComposer';
 import { AccountSignals, InboundMention } from '../src/types';
+import { structuredPhotoUrls, trustedPhotoUrl } from '../src/launchMedia';
 
 /**
  * Reads and writes go to different providers. These tests guard the two properties that
@@ -74,6 +75,27 @@ describe('providers refuse to run unconfigured', () => {
   it('the writer says which keys are missing', async () => {
     await expect(new XApiWriter('', '', '', '').postReply('t1', 'hi'))
       .rejects.toThrow(/X_API_KEY/);
+  });
+});
+
+describe('launch photo boundary', () => {
+  it('accepts one structured X photo URL and rejects attacker-controlled image references', () => {
+    expect(trustedPhotoUrl(['https://pbs.twimg.com/media/AbCd1234.jpg?format=jpg&name=large']))
+      .toBe('https://pbs.twimg.com/media/AbCd1234.jpg?format=jpg&name=large');
+    for (const urls of [
+      ['https://evil.example/photo.jpg'],
+      ['https://user:pass@pbs.twimg.com/media/a.jpg'],
+      ['https://pbs.twimg.com/media/a.svg'],
+      ['data:image/png;base64,AAAA'],
+      ['https://pbs.twimg.com/media/a.jpg', 'https://pbs.twimg.com/media/b.jpg'],
+    ]) expect(trustedPhotoUrl(urls)).toBeNull();
+  });
+
+  it('reads only explicitly typed structured photo entities, never URLs from tweet text', () => {
+    const photo='https://pbs.twimg.com/media/AbCd1234.jpg';
+    expect(structuredPhotoUrls({text:`launch ${photo}`,media:[{type:'photo',url:photo}]})).toEqual([photo]);
+    expect(structuredPhotoUrls({text:`launch ${photo}`})).toEqual([]);
+    expect(structuredPhotoUrls({extendedEntities:{media:[{type:'video',media_url_https:photo}]}})).toEqual([]);
   });
 });
 

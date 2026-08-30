@@ -1,14 +1,17 @@
-# Netlify equivalent of vercel.json — use whichever host you deploy to, not both.
-# The site is static: no build step, `website/` is published as-is.
-
 [build]
   publish = "website"
-  command = ""
+  command = "npm run build:website"
+  functions = "netlify/functions"
 
-# Pretty routes. The app reads its route from either the path or the query
-# string, so these rewrites are what let /explore and /token/GCAT survive a
-# refresh or a direct visit. Flip PRETTY_URLS to true in website/index.html in
-# the same commit, so the app also *writes* URLs in this shape.
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://ponsr-backend.fly.dev/api/:splat"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/terms"
   to = "/terms.html"
@@ -16,12 +19,12 @@
 
 [[redirects]]
   from = "/explore"
-  to = "/index.html"
+  to = "/explore/index.html"
   status = 200
 
 [[redirects]]
   from = "/token/*"
-  to = "/index.html"
+  to = "/token/index.html"
   status = 200
 
 [[headers]]
@@ -30,15 +33,30 @@
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://pbs.twimg.com; connect-src 'self'; frame-src https://www.geckoterminal.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 
-# The logo art never changes without a filename change; the HTML always should
-# be revalidated so a deploy is visible immediately.
 [[headers]]
-  for = "/*.png"
+  for = "/assets/*"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    Cache-Control = "public, max-age=0, must-revalidate"
 
 [[headers]]
-  for = "/index.html"
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=60, stale-while-revalidate=300"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/explore/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/token/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
