@@ -51,7 +51,23 @@ function mascot() {
 }
 
 const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
-const RPC_BUDGET_MS = 20000;
+/**
+ * EVERY BUDGET HERE MUST FIT INSIDE THE PLATFORM'S.
+ *
+ * A Netlify synchronous function is cut off at 10 s. This endpoint allowed
+ * 20 s of chain reads and then up to 3.5 s of image fetching on top -- 23.5 s,
+ * more than twice what it is given. A slow chain would not have produced our
+ * 503 with `no-store`, it would have produced Netlify's own timeout page, and a
+ * crawler would take that as the card simply not existing. That is exactly the
+ * failure the 503 branch was written to prevent, arriving through the door
+ * nobody was watching.
+ *
+ * 5 500 + 2 500 leaves about 2 s for rendering, and the chain path was measured
+ * answering in 1.5 s -- so the headroom is real, and a 503 we control is better
+ * than an error page we do not.
+ */
+const RPC_BUDGET_MS = 5500;
+const PLATFORM_LIMIT_MS = 10000;
 
 /**
  * How far back a card looks before it falls back to scanning everything.

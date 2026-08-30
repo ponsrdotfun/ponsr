@@ -36,7 +36,7 @@ import { trustedTokenLogo } from './collector.mjs';
 /** Plenty for a 320px card portrait; small enough that nothing large is decoded. */
 const MAX_BYTES = 3_000_000;
 const MAX_PIXELS = 40_000_000;
-const TIMEOUT_MS = 3500;
+export const TIMEOUT_MS = 2500;
 const RENDER_PX = 320;
 
 /**

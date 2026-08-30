@@ -530,3 +530,20 @@ test('the frame is built to the picture, not the picture to the frame', async ()
     assert.ok(b.y + b.h + 11 < 558, 'the frame crosses the bottom hairline');
   }
 });
+
+test('the card cannot outlive the platform that runs it', async () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  const { TIMEOUT_MS } = await import('../../netlify/functions/lib/tokenArt.mjs');
+
+  // A Netlify synchronous function is cut off at 10 s. This endpoint allowed
+  // 20 s of chain reads plus 3.5 s of image fetching -- so a slow chain would
+  // have produced Netlify's timeout page instead of our 503 with no-store, and
+  // a crawler reads that as the card not existing. The 503 branch was written
+  // to prevent exactly that, and it was reachable only through the door nobody
+  // was watching.
+  const rpc = Number(fn.match(/const RPC_BUDGET_MS = (\d+);/)?.[1]);
+  const limit = Number(fn.match(/const PLATFORM_LIMIT_MS = (\d+);/)?.[1]);
+  assert.ok(rpc > 0 && limit > 0, 'the budgets are not stated');
+  // Rendering needs room after both waits are spent.
+  assert.ok(rpc + TIMEOUT_MS + 1500 <= limit, `budgets total ${rpc + TIMEOUT_MS}ms against a ${limit}ms limit`);
+});
