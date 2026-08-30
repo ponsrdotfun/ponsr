@@ -277,7 +277,21 @@ test('account routes are complete signed-out product surfaces with no invented i
     for (const capability of ['sign','send','swap','claim']) assert.match(account, new RegExp(`data-can-${capability}="false"`));
     assert.match(account, /Account connection unavailable/i, `${file} does not disclose the auth boundary`);
     assert.match(account, /disabled[^>]*aria-disabled="true"|aria-disabled="true"[^>]*disabled/i, `${file} enables an unavailable account action`);
-    const accountWithoutVerifiedPublicLaunch = account.replaceAll(PSTONKS, 'VERIFIED_PUBLIC_TOKEN');
+    // The rule is "no INVENTED account data", and an address carried by the
+    // canonical public snapshot is the opposite of invented. Whitelisting one
+    // hardcoded token made this fail the moment a second real launch appeared,
+    // which is a test aging into a false alarm rather than a defect found.
+    let accountWithoutVerifiedPublicLaunch = account;
+    for (const launch of JSON.parse(read('website/data/launches.json')).launches) {
+      // Both forms: the snapshot may carry a checksummed address while the
+      // build writes hrefs in lower case.
+      for (const form of new Set([String(launch.token), String(launch.token).toLowerCase()])) {
+        accountWithoutVerifiedPublicLaunch = accountWithoutVerifiedPublicLaunch.replaceAll(
+          form,
+          'VERIFIED_PUBLIC_TOKEN'
+        );
+      }
+    }
     assert.doesNotMatch(accountWithoutVerifiedPublicLaunch, /@[a-z0-9_]+|0x[a-f0-9]{40}|\$\d|\b\d+(?:\.\d+)?\s*ETH\b/i, `${file} contains invented account data`);
     assert.doesNotMatch(account, /demo account|sample balance|mock transaction|fake/i, `${file} publishes demo-shaped user data`);
   }
