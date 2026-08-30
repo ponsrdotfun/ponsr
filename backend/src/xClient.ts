@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { AccountSignals, InboundMention } from './types';
 import { config } from './config';
 import { structuredPhotoUrls, trustedPhotoUrl } from './launchMedia';
+import { UnionMentionReader, XApiMentionsSource } from './mentionSources';
 
 /**
  * Reading and posting are split across two providers, on purpose.
@@ -337,10 +338,25 @@ export class XApiWriter implements XWriter {
   }
 }
 
-/** Builds the production client: twitterapi.io for reads, X's own API for writes. */
+/**
+ * Builds the production client: twitterapi.io for reads, X's own API for writes.
+ *
+ * READS COME FROM TWO PLACES NOW, and that is a correctness fix rather than a
+ * belt-and-braces flourish. `advanced_search` silently omitted a real launch
+ * request on 2026-08-30 -- a reply inside another user's thread that mentioned
+ * the bot -- while X's own mentions timeline had it. The timeline was already
+ * being polled every six hours by `mentionCrossCheck.ts`, but only to raise an
+ * alarm. It reads into the pipeline now, so neither provider can make the bot
+ * deaf on its own. See `mentionSources.ts`.
+ *
+ * When the bearer token is absent the extra source is inert, so a deployment
+ * without it behaves exactly as before rather than failing every poll.
+ */
 export function createXClient(): XClient {
+  const search = new TwitterApiIoReader(config.TWITTERAPI_IO_KEY ?? '', config.BOT_X_HANDLE);
+  const timeline = new XApiMentionsSource(config.X_BEARER_TOKEN ?? '', config.BOT_X_HANDLE);
   return new SplitXClient(
-    new TwitterApiIoReader(config.TWITTERAPI_IO_KEY ?? '', config.BOT_X_HANDLE),
+    new UnionMentionReader(search, [timeline]),
     new XApiWriter(
       config.X_API_KEY ?? '',
       config.X_API_SECRET ?? '',
