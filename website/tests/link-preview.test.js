@@ -481,3 +481,42 @@ test('the portrait sits inside the frame instead of colliding with it', async ()
   // A card with no art keeps the full-width rule it always had.
   assert.match(tokenCardSvg(base), /<rect x="76" y="437" width="1048"/);
 });
+
+test('how a picture meets the round frame depends on its shape', async () => {
+  const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
+  const sharp = (await import('sharp')).default;
+
+  const photo = async (width, height) =>
+    sharp({ create: { width, height, channels: 3, background: '#e8563f' } }).jpeg().toBuffer();
+  const render = async (buffer) =>
+    tokenArtDataUri('https://pbs.twimg.com/media/AbC123.jpg', {
+      fetchImpl: async () => ({
+        ok: true,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'image/jpeg' : null) },
+        arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+      }),
+    });
+  // The top-left pixel: the picture's own colour when it fills the frame, the
+  // card's ground when it has been fitted whole inside it.
+  const corner = async (dataUri) => {
+    const { data } = await sharp(Buffer.from(dataUri.split(',')[1], 'base64'))
+      .extract({ left: 0, top: 0, width: 1, height: 1 })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return [data[0], data[1], data[2]];
+  };
+
+  // A 16:9 photo is the commonest shape a camera produces, and cropping it is
+  // right -- letterboxing every one of them would waste the frame.
+  const [r169] = await corner(await render(await photo(1600, 900)));
+  assert.ok(r169 > 180, `a 16:9 photo did not fill the frame (red channel ${r169})`);
+
+  // A 3:1 banner is the case that was plainly wrong: cover threw most of it
+  // away and sliced a word in half.
+  const [rBanner, gBanner, bBanner] = await corner(await render(await photo(1500, 500)));
+  assert.ok(rBanner < 60 && gBanner < 60 && bBanner < 60, `a 3:1 banner was cropped instead of fitted`);
+
+  // Tall pictures are treated the same way as wide ones.
+  const [rTall, gTall] = await corner(await render(await photo(500, 1500)));
+  assert.ok(rTall < 60 && gTall < 60, 'a 1:3 picture was cropped instead of fitted');
+});

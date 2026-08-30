@@ -67,8 +67,31 @@ export async function tokenArtDataUri(logo, { fetchImpl = fetch } = {}) {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (!bytes.length || bytes.length > MAX_BYTES) return null;
 
-    const png = await sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false })
-      .resize(RENDER_PX, RENDER_PX, { fit: 'cover', position: 'attention' })
+    /**
+     * How a picture meets a round frame depends on its shape.
+     *
+     * `cover` fills the circle and is right for the ordinary case. Measured by
+     * rendering real images: a 16:9 photo -- the commonest shape a camera
+     * produces -- looks best filling the frame, and letterboxing every one of
+     * them would waste it. But against a 3:1 banner `cover` was plainly wrong:
+     * most of the picture was thrown away and the crop sliced a word in half,
+     * which reads as a broken card rather than a tight one.
+     *
+     * So only an unusually long picture is fitted whole, on the card's own
+     * ground. Something is lost either way; losing the frame's tidiness beats
+     * losing the picture.
+     */
+    const source = sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false });
+    const { width = 0, height = 0 } = await source.metadata();
+    const ratio = width && height ? width / height : 1;
+    const elongated = ratio > 2.0 || ratio < 1 / 2.0;
+
+    const png = await source
+      .resize(RENDER_PX, RENDER_PX, {
+        fit: elongated ? 'contain' : 'cover',
+        position: 'attention',
+        background: '#0A0D11',
+      })
       .png({ compressionLevel: 9 })
       .toBuffer();
 
