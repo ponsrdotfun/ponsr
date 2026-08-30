@@ -28,6 +28,7 @@ import {
   resolveVerifiedLaunch,
 } from './lib/collector.mjs';
 import { tokenCardSvg } from './lib/socialCard.mjs';
+import { tokenArtDataUri } from './lib/tokenArt.mjs';
 import { useVendoredFonts } from './lib/fonts.mjs';
 
 // The Lambda runtime ships no fonts at all. Without this every glyph renders as
@@ -35,6 +36,9 @@ import { useVendoredFonts } from './lib/fonts.mjs';
 const fontsReady = useVendoredFonts();
 
 const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
+
+/** Spread the picture and the proportions it kept, or nothing at all. */
+const artFields = (art) => (art ? { artHref: art.href, artAspect: art.aspect } : {});
 
 let mascotPromise = null;
 /** Read once per container, and never fail the card because the art is missing. */
@@ -47,7 +51,23 @@ function mascot() {
 }
 
 const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
-const RPC_BUDGET_MS = 20000;
+/**
+ * EVERY BUDGET HERE MUST FIT INSIDE THE PLATFORM'S.
+ *
+ * A Netlify synchronous function is cut off at 10 s. This endpoint allowed
+ * 20 s of chain reads and then up to 3.5 s of image fetching on top -- 23.5 s,
+ * more than twice what it is given. A slow chain would not have produced our
+ * 503 with `no-store`, it would have produced Netlify's own timeout page, and a
+ * crawler would take that as the card simply not existing. That is exactly the
+ * failure the 503 branch was written to prevent, arriving through the door
+ * nobody was watching.
+ *
+ * 5 500 + 2 500 leaves about 2 s for rendering, and the chain path was measured
+ * answering in 1.5 s -- so the headroom is real, and a 503 we control is better
+ * than an error page we do not.
+ */
+const RPC_BUDGET_MS = 5500;
+const PLATFORM_LIMIT_MS = 10000;
 
 /**
  * How far back a card looks before it falls back to scanning everything.
@@ -176,6 +196,7 @@ export default async (request) => {
     pairLabel: launch.pairLabel,
     address: launch.token,
     mascotHref: await mascot(),
+    ...artFields(await tokenArtDataUri(launch.logo)),
   });
 
   if (!fontsReady) return new Response('Card fonts unavailable', { status: 503 });

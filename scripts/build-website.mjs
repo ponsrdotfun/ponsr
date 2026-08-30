@@ -32,6 +32,10 @@ import sharp from 'sharp';
 // One design, shared with the on-demand card endpoint so a link's preview cannot
 // change the next time the site happens to redeploy.
 import { socialSvg, tokenCardSvg } from '../netlify/functions/lib/socialCard.mjs';
+import { tokenArtDataUri } from '../netlify/functions/lib/tokenArt.mjs';
+
+/** Spread the picture and the proportions it kept, or nothing at all. */
+const artFields = (art) => (art ? { artHref: art.href, artAspect: art.aspect } : {});
 import { useVendoredFonts } from '../netlify/functions/lib/fonts.mjs';
 import { activityLine, curveFlowSeries, ethFromWei, eventTime, plural, reserveRows, shortAddress, whole } from '../website/assets/format.mjs';
 
@@ -118,6 +122,7 @@ for (const token of feed.launches) {
       pairLabel: token.pairLabel,
       address: token.token,
       mascotHref: socialMascot,
+      ...artFields(await tokenArtDataUri(token.logo)),
     }),
   }));
 }
