@@ -110,10 +110,10 @@ test('the divider is drawn in user space, where a horizontal gradient survives',
   assert.doesNotMatch(source, /stroke="url\(#rule\)"/);
 });
 
-test('the on-demand card refuses an address the canonical feed cannot verify', () => {
+test('the on-demand card refuses an address the chain cannot verify', () => {
   const fn = read('netlify/functions/token-card.mjs');
   // Drawing a card is an assertion that this is a real Ponsr launch.
-  assert.match(fn, /if \(!launch\) return new Response\('Not found', \{ status: 404 \}\)/);
+  assert.match(fn, /if \(!launch\) return new Response\('Not found', \{ status: 404, headers: trace \}\)/);
   assert.match(fn, /ADDRESS\.test\(address\)/);
   assert.match(fn, /content-type': 'image\/png'/);
 });
@@ -281,4 +281,19 @@ test('the card resolves the launch from the chain, not from another function', (
   assert.doesNotMatch(body, /collectTokenMetadata[\s\S]*?\.catch\(/);
   // Every chain read shares one budget, as market-data does.
   assert.match(fn, /RPC_BUDGET_MS/);
+});
+
+test('the card says which path answered, in a fixed vocabulary', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  // Two builds of this endpoint were externally indistinguishable while one of
+  // them was wrong, so diagnosis came down to guessing. Every response now
+  // names its branch.
+  assert.match(fn, /'x-ponsr-card-source'/);
+  for (const via of ["via: 'snapshot'", "via: 'chain'", "'unread:discovery'", "'unread:rpc'"]) {
+    assert.ok(fn.includes(via), `${via} is not published`);
+  }
+  // Never the error's own words: publishing String(err.message) is how this
+  // repository leaked an internal path from /status/core.
+  assert.doesNotMatch(fn, /via: `[^`]*\$\{[^}]*error/);
+  assert.doesNotMatch(fn, /error\?\.message/);
 });

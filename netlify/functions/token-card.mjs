@@ -9,9 +9,9 @@
  * after it launched, which unfurled as "Inspect a Ponsr launch".
  *
  * This renders the same card the build renders, from the same module, for any
- * address the canonical feed can verify. It refuses to draw one for an address
- * the feed does not know, because a card is an assertion that the token is a
- * real Ponsr launch and this endpoint must not make that claim on its own.
+ * address the chain can verify. It refuses to draw one for an address that is
+ * not a current-V2 Ponsr launch, because a card is an assertion that the token
+ * is real and this endpoint must not make that claim on its own.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -63,7 +63,7 @@ const RPC_BUDGET_MS = 12000;
  */
 async function findLaunch(address) {
   const known = snapshot.launches.find((l) => String(l.token).toLowerCase() === address);
-  if (known) return { launch: known, answered: true };
+  if (known) return { launch: known, answered: true, via: 'snapshot' };
 
   const deadline = Date.now() + RPC_BUDGET_MS;
   const rpc = (method, params) => {
@@ -76,7 +76,7 @@ async function findLaunch(address) {
     const head = parseBlockNumber(await rpc('eth_blockNumber', []));
     const launch = await resolveVerifiedLaunch({ rpc, snapshot, token: address, head });
     // Discovery completed and this address is not one of ours. That is an answer.
-    if (!launch) return { launch: null, answered: true };
+    if (!launch) return { launch: null, answered: true, via: 'chain' };
 
     // The launch EVENT names neither the token nor the asset it trades against,
     // so a card drawn from it alone would read "$UNKNOWN / Metadata unavailable
@@ -88,9 +88,15 @@ async function findLaunch(address) {
     return {
       launch: { ...launch, ...metadata, pairLabel: pairSymbol || launch.pairLabel },
       answered: true,
+      via: 'chain',
     };
-  } catch {
-    return { launch: null, answered: false };
+  } catch (error) {
+    // A FIXED VOCABULARY, never the error's own words. Publishing
+    // `String(err.message)` is how this repository leaked an internal path from
+    // /status/core, and an RPC message is one integration bug from carrying a
+    // credential-bearing URL.
+    const via = error?.code === 'DISCOVERY_INCOMPLETE' ? 'unread:discovery' : 'unread:rpc';
+    return { launch: null, answered: false, via };
   }
 }
 
@@ -100,18 +106,28 @@ export default async (request) => {
     .toLowerCase();
   if (!ADDRESS.test(address)) return new Response('Not found', { status: 404 });
 
-  const { launch, answered } = await findLaunch(address);
+  const { launch, answered, via } = await findLaunch(address);
+  /**
+   * Which path answered, on every response.
+   *
+   * Two builds of this endpoint were externally indistinguishable while one of
+   * them was wrong: a 404 looks the same whether the address is not a launch,
+   * the feed hop failed, or an older bundle is still being served. Diagnosis
+   * came down to guessing, which is not a method. This says nothing secret --
+   * no URL, no key -- only which branch produced the answer.
+   */
+  const trace = { 'x-ponsr-card-source': String(via ?? 'unknown') };
   // Unreadable chain: say so, and say it in a way nothing keeps. A 404 here
   // would outlive the outage that caused it.
   if (!answered) {
     return new Response('Card temporarily unavailable', {
       status: 503,
-      headers: { 'cache-control': 'no-store', 'retry-after': '30' },
+      headers: { ...trace, 'cache-control': 'no-store', 'retry-after': '30' },
     });
   }
   // No card for an unverified address. The generic site card is the honest
   // fallback, and the page's own metadata already says what is known.
-  if (!launch) return new Response('Not found', { status: 404 });
+  if (!launch) return new Response('Not found', { status: 404, headers: trace });
 
   const svg = tokenCardSvg({
     symbol: launch.symbol,
@@ -130,6 +146,7 @@ export default async (request) => {
   return new Response(png, {
     status: 200,
     headers: {
+      ...trace,
       'content-type': 'image/png',
       // Crawlers refetch these constantly and the inputs are immutable once a
       // token exists, so a long cache costs nothing and keeps unfurls fast.
