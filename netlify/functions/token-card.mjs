@@ -18,8 +18,11 @@ import path from 'node:path';
 import sharp from 'sharp';
 import snapshot from '../../website/data/launches.json' with { type: 'json' };
 import {
+  DEPLOYMENT,
+  collectLaunches,
   collectPairSymbol,
   collectTokenMetadata,
+  decodeLaunches,
   jsonRpc,
   parseBlockNumber,
   resolveVerifiedLaunch,
@@ -44,7 +47,38 @@ function mascot() {
 }
 
 const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
-const RPC_BUDGET_MS = 12000;
+const RPC_BUDGET_MS = 20000;
+
+/**
+ * How far back a card looks before it falls back to scanning everything.
+ *
+ * THE COMMITTED SNAPSHOT GOES STALE, AND THE SCAN GROWS WITH IT. Measured on
+ * production: the snapshot was two days old, so discovery covered 1 547 782
+ * blocks, the launch feed took 25.5 s, came back `partial`, and a token that
+ * exists simply dropped out of it. The card, resolving the same way, answered
+ * 503 for every request. That distance grows every day the snapshot is not
+ * refreshed, so an unbounded scan is a defect with a date on it.
+ *
+ * This endpoint exists for tokens launched SINCE the last build, which are by
+ * definition recent, so a bounded window answers them in a handful of calls.
+ * The full scan stays as the fallback: it is slow and may not complete, but
+ * when it does not, the answer is 503 and never "no such token".
+ */
+const RECENT_WINDOW_BLOCKS = 250_000;
+
+/** The launch, if it happened inside the recent window. Null means "not here", not "no". */
+async function fromRecentWindow(rpc, address, head) {
+  const fromBlock = Math.max(DEPLOYMENT.startBlock, head - RECENT_WINDOW_BLOCKS);
+  if (fromBlock > head) return null;
+  const observed = await collectLaunches({ rpc, fromBlock, toBlock: head, initialChunk: 25_000 });
+  // A partial window proves nothing: the token may sit in the part that failed.
+  if (observed.state !== 'complete') return null;
+  const match = observed.logs.find(
+    (log) => `0x${String(log.topics?.[1] ?? '').slice(-40)}`.toLowerCase() === address
+  );
+  if (!match) return null;
+  return (await decodeLaunches(rpc, [match], new Date().toISOString()))[0] ?? null;
+}
 
 /**
  * The verified launch, from the snapshot first and the chain second.
@@ -74,9 +108,16 @@ async function findLaunch(address) {
 
   try {
     const head = parseBlockNumber(await rpc('eth_blockNumber', []));
-    const launch = await resolveVerifiedLaunch({ rpc, snapshot, token: address, head });
+    // Cheap window first. Only a scan that COMPLETED without finding it may
+    // conclude anything, so a miss here falls through rather than answering.
+    let via = 'chain:recent';
+    let launch = await fromRecentWindow(rpc, address, head);
+    if (!launch) {
+      via = 'chain:full';
+      launch = await resolveVerifiedLaunch({ rpc, snapshot, token: address, head });
+    }
     // Discovery completed and this address is not one of ours. That is an answer.
-    if (!launch) return { launch: null, answered: true, via: 'chain' };
+    if (!launch) return { launch: null, answered: true, via };
 
     // The launch EVENT names neither the token nor the asset it trades against,
     // so a card drawn from it alone would read "$UNKNOWN / Metadata unavailable
@@ -88,7 +129,7 @@ async function findLaunch(address) {
     return {
       launch: { ...launch, ...metadata, pairLabel: pairSymbol || launch.pairLabel },
       answered: true,
-      via: 'chain',
+      via,
     };
   } catch (error) {
     // A FIXED VOCABULARY, never the error's own words. Publishing

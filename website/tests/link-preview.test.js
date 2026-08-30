@@ -289,11 +289,45 @@ test('the card says which path answered, in a fixed vocabulary', () => {
   // them was wrong, so diagnosis came down to guessing. Every response now
   // names its branch.
   assert.match(fn, /'x-ponsr-card-source'/);
-  for (const via of ["via: 'snapshot'", "via: 'chain'", "'unread:discovery'", "'unread:rpc'"]) {
+  for (const via of ["via: 'snapshot'", "'chain:recent'", "'chain:full'", "'unread:discovery'", "'unread:rpc'"]) {
     assert.ok(fn.includes(via), `${via} is not published`);
   }
   // Never the error's own words: publishing String(err.message) is how this
   // repository leaked an internal path from /status/core.
   assert.doesNotMatch(fn, /via: `[^`]*\$\{[^}]*error/);
   assert.doesNotMatch(fn, /error\?\.message/);
+});
+
+/* --------------------------------------------------------------------------
+ * A SCAN THAT DID NOT COMPLETE CONCLUDES NOTHING.
+ *
+ * Measured on production: the committed snapshot was two days old, so launch
+ * discovery covered 1 547 782 blocks. The feed took 25.5 s, returned `partial`,
+ * and a token that plainly exists dropped out of the list entirely. The card,
+ * resolving the same way, answered 503 to every request.
+ *
+ * The distance grows every day the snapshot is not refreshed, so an unbounded
+ * scan on a request path is a defect with a date on it.
+ * -------------------------------------------------------------------------- */
+test('the card looks in a bounded recent window before scanning everything', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  assert.match(fn, /RECENT_WINDOW_BLOCKS/);
+  assert.match(fn, /head - RECENT_WINDOW_BLOCKS/);
+  // The window is tried FIRST, and the full scan remains as the fallback.
+  const body = fn.slice(fn.indexOf('async function findLaunch'), fn.indexOf('export default'));
+  assert.ok(body.includes('fromRecentWindow'), 'the resolver body was not located');
+  assert.ok(
+    body.indexOf('fromRecentWindow') < body.indexOf('resolveVerifiedLaunch'),
+    'the cheap window must be tried before the full scan'
+  );
+});
+
+test('a window that did not complete never answers "no such token"', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  const window = fn.slice(fn.indexOf('async function fromRecentWindow'), fn.indexOf('export default'));
+  assert.ok(window.includes('collectLaunches'), 'the window body was not located');
+  // A partial range proves nothing: the token may sit in the part that failed.
+  assert.match(window, /if \(observed\.state !== 'complete'\) return null;/);
+  // And a miss in the window must fall through to the full scan, not to a 404.
+  assert.match(fn, /if \(!launch\) \{\s+via = 'chain:full';/);
 });
