@@ -17,6 +17,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import snapshot from '../../website/data/launches.json' with { type: 'json' };
+import {
+  collectPairSymbol,
+  collectTokenMetadata,
+  jsonRpc,
+  parseBlockNumber,
+  resolveVerifiedLaunch,
+} from './lib/collector.mjs';
 import { tokenCardSvg } from './lib/socialCard.mjs';
 import { useVendoredFonts } from './lib/fonts.mjs';
 
@@ -36,28 +43,50 @@ function mascot() {
   return mascotPromise;
 }
 
+const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
+const RPC_BUDGET_MS = 12000;
+
 /**
- * The verified launch, from the snapshot first and the live feed second.
+ * The verified launch, from the snapshot first and the chain second.
  *
- * `answered` separates "the feed says this is not a Ponsr launch" from "the
- * feed could not be reached". Collapsing those was a real defect: a cold start
- * pushed the feed past the deadline and the card answered 404, which a crawler
- * reads as a permanent absence and a CDN is entitled to keep. A card that
- * cannot be verified RIGHT NOW is a retry, not a verdict.
+ * IT READS THE CHAIN DIRECTLY, rather than calling the launch feed over HTTP.
+ * The hop was measured flapping: six consecutive requests for a token that
+ * plainly exists returned 404, and the next six returned 200 — a function
+ * calling another function through the CDN pays a second cold start, and a card
+ * is fetched exactly once by a crawler that will not come back. `market-data`
+ * and `what-if` already resolve a launch this way; this is that same path.
+ *
+ * `answered` separates "the chain says this is not a Ponsr launch" from "the
+ * chain could not be read". Collapsing those was the other half of the defect:
+ * a crawler reads 404 as a permanent absence, and a CDN is entitled to keep it.
+ * A card that cannot be verified RIGHT NOW is a retry, not a verdict.
  */
-async function findLaunch(address, request) {
+async function findLaunch(address) {
   const known = snapshot.launches.find((l) => String(l.token).toLowerCase() === address);
   if (known) return { launch: known, answered: true };
+
+  const deadline = Date.now() + RPC_BUDGET_MS;
+  const rpc = (method, params) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('RPC request budget exhausted');
+    return jsonRpc(RPC_URL, method, params, Math.min(8000, remaining));
+  };
+
   try {
-    const feed = await fetch(new URL('/.netlify/functions/launch-feed', request.url), {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(9000),
-    });
-    if (!feed.ok) return { launch: null, answered: false };
-    const body = await feed.json();
-    if (!Array.isArray(body?.launches)) return { launch: null, answered: false };
+    const head = parseBlockNumber(await rpc('eth_blockNumber', []));
+    const launch = await resolveVerifiedLaunch({ rpc, snapshot, token: address, head });
+    // Discovery completed and this address is not one of ours. That is an answer.
+    if (!launch) return { launch: null, answered: true };
+
+    // The launch EVENT names neither the token nor the asset it trades against,
+    // so a card drawn from it alone would read "$UNKNOWN / Metadata unavailable
+    // / approved token". That is not a preview, it is a shrug — retry instead.
+    const [metadata, pairSymbol] = await Promise.all([
+      collectTokenMetadata({ rpc, token: launch.token, blockNumber: head }),
+      collectPairSymbol({ rpc, pairToken: launch.pairToken, blockNumber: head }),
+    ]);
     return {
-      launch: body.launches.find((l) => String(l.token).toLowerCase() === address) ?? null,
+      launch: { ...launch, ...metadata, pairLabel: pairSymbol || launch.pairLabel },
       answered: true,
     };
   } catch {
@@ -71,8 +100,8 @@ export default async (request) => {
     .toLowerCase();
   if (!ADDRESS.test(address)) return new Response('Not found', { status: 404 });
 
-  const { launch, answered } = await findLaunch(address, request);
-  // Unreachable feed: say so, and say it in a way nothing keeps. A 404 here
+  const { launch, answered } = await findLaunch(address);
+  // Unreadable chain: say so, and say it in a way nothing keeps. A 404 here
   // would outlive the outage that caused it.
   if (!answered) {
     return new Response('Card temporarily unavailable', {

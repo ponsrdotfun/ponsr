@@ -250,17 +250,35 @@ test('the feed labels a launch with the asset it is actually paired with', () =>
   assert.match(feed, /if \(pairSymbol\) withMetadata = \{ \.\.\.withMetadata, pairLabel: pairSymbol \}/);
 });
 
-test('an unreachable feed is a retry, never a permanent absence', () => {
+test('an unverifiable card is a retry, never a permanent absence', () => {
   const fn = read('netlify/functions/token-card.mjs');
-  // Measured on the deploy preview: a cold start pushed the feed past the
-  // deadline and the card answered 404 for a token that plainly exists. A
-  // crawler reads that as "there is no image", and a CDN may keep it.
+  // Measured on the deploy preview: six consecutive requests for a token that
+  // plainly exists returned 404, the next six returned 200. A crawler reads a
+  // 404 as "there is no image", fetches once, and does not come back.
   assert.match(fn, /if \(!answered\)/);
   assert.match(fn, /status: 503/);
   assert.match(fn, /'cache-control': 'no-store'/);
   // The two outcomes must come from different branches, not one collapsed test.
   assert.match(fn, /answered: false/);
   assert.match(fn, /answered: true/);
-  // A malformed body is not an answer either.
-  assert.match(fn, /!Array\.isArray\(body\?\.launches\)/);
+});
+
+test('the card resolves the launch from the chain, not from another function', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  // A function calling a function through the CDN pays a second cold start.
+  // The established path is the one market-data and what-if already take.
+  assert.match(fn, /resolveVerifiedLaunch\(\{ rpc, snapshot, token: address, head \}\)/);
+  assert.doesNotMatch(fn, /fetch\(new URL\('\/\.netlify\/functions/);
+  // The event names neither the token nor its pair, and a card reading
+  // "$UNKNOWN / Metadata unavailable" is worse than asking the crawler back.
+  assert.match(fn, /collectTokenMetadata\(\{ rpc, token: launch\.token/);
+  assert.match(fn, /collectPairSymbol\(\{ rpc, pairToken: launch\.pairToken/);
+  // Both reads sit INSIDE the try: an unreadable name must reach the 503
+  // branch, not be swallowed into a card nobody can read.
+  const body = fn.slice(fn.indexOf('async function findLaunch'), fn.indexOf('export default'));
+  // A doesNotMatch against an empty slice passes while proving nothing.
+  assert.ok(body.includes('collectTokenMetadata'), 'the resolver body was not located');
+  assert.doesNotMatch(body, /collectTokenMetadata[\s\S]*?\.catch\(/);
+  // Every chain read shares one budget, as market-data does.
+  assert.match(fn, /RPC_BUDGET_MS/);
 });
