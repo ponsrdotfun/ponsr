@@ -1,0 +1,93 @@
+# KEEP THE COMMITTED SNAPSHOT FRESH.
+#
+# `website/data/launches.json` is the site's floor: every page, the board and
+# every social card start from it, and the live functions only advance past it.
+# Nothing refreshed it, so the distance to the chain head grew every day until
+# the scan that closes the gap stopped completing.
+#
+# Measured on production 2026-08-30, with the snapshot two days old: discovery
+# covered 1 547 782 blocks, `launch-feed` took 25.5 s, returned `state:
+# partial`, and a token that plainly exists dropped out of the list. Every
+# social card for it answered 503. After the refresh the same feed answered in
+# 0.48 s. A stale snapshot is not untidiness, it is an outage with a delay fuse.
+#
+# WHAT THIS COMMITS, AND WHY IT IS ONLY ONE FILE
+# ---------------------------------------------
+# Netlify's build command is `npm run build:website`, so the token pages and the
+# social cards are regenerated at deploy time from the snapshot. Committing only
+# the snapshot keeps the generated output out of this job entirely -- which also
+# avoids re-encoding every card PNG on a runner whose image library differs from
+# the one that wrote them.
+#
+# A push to `main` publishes. That is the point of scheduling this, and it is
+# why the guards below are not optional: the script refuses to write a partial
+# scan at all, and the snapshot contract suite must pass before anything is
+# pushed.
+name: refresh snapshot
+
+on:
+  schedule:
+    # Every six hours. The threshold below decides whether a run writes
+    # anything, so a quiet day costs nothing and a new launch is picked up
+    # within hours rather than whenever somebody remembers.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      stale_after:
+        description: 'Blocks behind head before a refresh is written (0 = always write)'
+        required: false
+        default: '400000'
+
+permissions:
+  contents: write
+
+concurrency:
+  # Two refreshes racing would push conflicting snapshots.
+  group: refresh-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No install: the script reads the chain through `collector.mjs`, which
+      # has no dependencies, and writes JSON. Nothing here needs sharp.
+      - name: refresh the snapshot
+        run: node scripts/refresh-snapshot.mjs --write --stale-after=${{ github.event.inputs.stale_after || '400000' }}
+
+      - name: is there anything to publish
+        id: changed
+        run: |
+          if git diff --quiet -- website/data/launches.json; then
+            echo "result=no" >> "$GITHUB_OUTPUT"
+            echo "The snapshot is already current. Nothing to publish."
+          else
+            echo "result=yes" >> "$GITHUB_OUTPUT"
+            node -e "
+              const s = require('./website/data/launches.json');
+              console.log('asOfBlock', s.asOfBlock, '| launches', s.launches.length);
+              for (const l of s.launches) console.log(' ', l.symbol, '-', l.pairLabel);
+            "
+          fi
+
+      # The snapshot's own contract, before it is published rather than after.
+      # This suite is dependency-free by design, which is why it can run here.
+      - name: the snapshot still honours its contract
+        if: steps.changed.outputs.result == 'yes'
+        run: node website/smoke-test.js
+
+      - name: publish
+        if: steps.changed.outputs.result == 'yes'
+        run: |
+          git config user.name 'ponsr'
+          git config user.email 'ponsrdotfun@gmail.com'
+          SUMMARY=$(node -e "const s=require('./website/data/launches.json');console.log('asOfBlock '+s.asOfBlock+', '+s.launches.length+' launch(es)')")
+          git add website/data/launches.json
+          git commit -m "chore(website): refresh the launch snapshot" -m "Scheduled refresh. The site's floor tracks the chain; the token pages and social cards are rebuilt from it at deploy time." -m "$SUMMARY"
+          git push

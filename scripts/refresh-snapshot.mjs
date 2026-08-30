@@ -24,8 +24,14 @@
  *    description. Fields the chain can speak for are refreshed from the chain;
  *    the rest are preserved from whatever is already committed.
  *
- * Usage:  node scripts/refresh-snapshot.mjs [--write]
+ * Usage:  node scripts/refresh-snapshot.mjs [--write] [--stale-after=<blocks>]
  * Without `--write` it reports what would change and writes nothing.
+ *
+ * `--stale-after` exists for the scheduled run. Every refresh advances
+ * `asOfBlock`, so writing on every run would publish the site several times a
+ * day to say nothing new. With a threshold the file is written when a launch
+ * actually appeared -- which is when a token needs its page -- or when the gap
+ * has grown far enough to matter, and otherwise the run is a no-op.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -47,6 +53,9 @@ const SNAPSHOT = path.join(root, 'website', 'data', 'launches.json');
 const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
 const GATE_URL = 'https://ponsr-backend.fly.dev/status/core';
 const WRITE = process.argv.includes('--write');
+const STALE_AFTER = Number(
+  (process.argv.find((a) => a.startsWith('--stale-after=')) ?? '=0').split('=')[1]
+);
 
 const log = (...parts) => process.stdout.write(`${parts.join(' ')}\n`);
 const rpc = (method, params) => jsonRpc(RPC_URL, method, params, 20000);
@@ -263,6 +272,14 @@ for (const l of refreshed.launches) log(`  ${l.symbol.padEnd(12)} ${l.pairLabel}
 if (!WRITE) {
   log('');
   log('dry run -- nothing written. Pass --write to update the snapshot.');
+  process.exit(0);
+}
+
+const appeared = refreshed.launches.length !== existing.launches.length;
+const gap = head - Number(existing.asOfBlock || 0);
+if (STALE_AFTER > 0 && !appeared && gap < STALE_AFTER) {
+  log('');
+  log(`no new launch and only ${gap} blocks behind (threshold ${STALE_AFTER}) -- nothing written.`);
   process.exit(0);
 }
 
