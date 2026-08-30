@@ -34,6 +34,7 @@ import { InboundMention } from './types';
 // Type-only: `xClient.ts` imports the classes below, and a value import here
 // would close that loop at runtime.
 import type { XReader } from './xClient';
+import { X_READ_TIMEOUT_MS } from './xDeadlines';
 
 /** Anything that can answer "what mentioned us since then". */
 export interface MentionSource {
@@ -102,6 +103,7 @@ export class XApiMentionsSource implements MentionSource {
     if (cached) return cached;
     try {
       const res = await this.fetchImpl(`https://api.x.com/2/users/${authorId}?user.fields=username`, {
+      signal: AbortSignal.timeout(X_READ_TIMEOUT_MS),
         headers: { Authorization: `Bearer ${this.bearerToken}` },
       });
       const body: any = await res.json();
@@ -120,7 +122,10 @@ export class XApiMentionsSource implements MentionSource {
     if (this.userId) return this.userId;
     const res = await this.fetchImpl(
       `https://api.x.com/2/users/by/username/${encodeURIComponent(this.botHandle)}`,
-      { headers: { Authorization: `Bearer ${this.bearerToken}` } }
+      {
+        headers: { Authorization: `Bearer ${this.bearerToken}` },
+        signal: AbortSignal.timeout(X_READ_TIMEOUT_MS),
+      }
     );
     const body: any = await res.json();
     if (!res.ok || !body?.data?.id) {
@@ -148,6 +153,7 @@ export class XApiMentionsSource implements MentionSource {
 
     const res = await this.fetchImpl(url, {
       headers: { Authorization: `Bearer ${this.bearerToken}` },
+      signal: AbortSignal.timeout(X_READ_TIMEOUT_MS),
     });
     const body: any = await res.json();
     // An empty list and a refusal are different answers, and only one of them
