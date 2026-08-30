@@ -43,6 +43,31 @@ export async function collectTokenMetadata({rpc,token,blockNumber}) {
   return {state:'complete',name:abiString(name,64),symbol:abiString(symbol,32),logo:trustedTokenLogo(abiString(logo,512)),description:abiString(description,280),observedThroughBlock:blockNumber};
 }
 
+/**
+ * The pairing asset's own ticker.
+ *
+ * The launch event carries the pair token's ADDRESS and nothing else, so the
+ * feed could only say "approved token" — the single most consequential fact
+ * about a launch, published as a shrug. It is what every buyer spends, and the
+ * asset's own contract will say what it is called.
+ *
+ * Nothing here is inferred. An unreadable getter, a bytes32 symbol, or anything
+ * outside a plain ticker's shape keeps the generic label: a wrong ticker on a
+ * card is a financial claim, and "approved token" is at least true.
+ */
+const PAIR_SYMBOL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/;
+export async function collectPairSymbol({ rpc, pairToken, blockNumber }) {
+  const address = String(pairToken || '');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/.test(address)) return null;
+  try {
+    const raw = await retry(() => rpc('eth_call', [{ to: address, data: TOKEN_CALLS.symbol }, hex(blockNumber)]));
+    const symbol = abiString(raw, 32).trim();
+    return PAIR_SYMBOL.test(symbol) ? symbol : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function collectCurveState({ rpc, curve, blockNumber, observedAt }) {
   const blockTag=hex(blockNumber),call=(data)=>retry(()=>rpc('eth_call',[{to:curve,data},blockTag]));
   const [reserves,realQuote,trackedQuote,graduated,threshold]=await Promise.all([

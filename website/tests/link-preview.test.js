@@ -188,3 +188,64 @@ test('the card names the vendored faces first, not the host\u2019s', async () =>
   // A bare generic family is what resolved to a serif in the build container.
   assert.doesNotMatch(svg, /font-family="monospace"/);
 });
+
+/* --------------------------------------------------------------------------
+ * THE PAIR ASSET IS NAMED, NOT SHRUGGED AT.
+ *
+ * The launch event carries only the pair token's address, so every non-ETH
+ * launch published `pairLabel: 'approved token'` — and Microduck's card said
+ * "PAIRED WITH approved token" when the answer was NVDA. What a token trades
+ * against is the most consequential fact on the card, and the asset's own
+ * contract will say what it is called.
+ *
+ * The read is deliberately timid: a wrong ticker is a financial claim, while
+ * the generic label is at least true.
+ * -------------------------------------------------------------------------- */
+const symbolCall = (value) => {
+  const bytes = Buffer.from(value, 'utf8');
+  const body = bytes.toString('hex').padEnd(Math.ceil(bytes.length / 32) * 64 || 64, '0');
+  return `0x${(32).toString(16).padStart(64, '0')}${bytes.length.toString(16).padStart(64, '0')}${body}`;
+};
+
+test('the pair asset is read from its own contract', async () => {
+  const { collectPairSymbol } = await import('../../netlify/functions/lib/collector.mjs');
+  const asked = [];
+  const rpc = async (method, params) => {
+    asked.push({ method, to: params[0].to, data: params[0].data });
+    return symbolCall('NVDA');
+  };
+  const symbol = await collectPairSymbol({
+    rpc, pairToken: '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC', blockNumber: 47693658,
+  });
+  assert.equal(symbol, 'NVDA');
+  // Asked the PAIR asset, not the launched token, using symbol()'s selector.
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].to.toLowerCase(), '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec');
+  assert.equal(asked[0].data, '0x95d89b41');
+});
+
+test('an unreadable or implausible pair symbol is never guessed at', async () => {
+  const { collectPairSymbol } = await import('../../netlify/functions/lib/collector.mjs');
+  const at = (rpc) => collectPairSymbol({ rpc, pairToken: '0x' + 'd'.repeat(40), blockNumber: 1 });
+
+  assert.equal(await at(async () => { throw new Error('RPC HTTP 503'); }), null, 'a refusal must not become a label');
+  assert.equal(await at(async () => '0x'), null, 'empty return data must not become a label');
+  // A bytes32 symbol is not an ABI string, and must not be read as one.
+  assert.equal(await at(async () => `0x${Buffer.from('NVDA').toString('hex').padEnd(64, '0')}`), null);
+  // Nothing that could carry markup or a sentence reaches a card.
+  assert.equal(await at(async () => symbolCall('<script>alert(1)</script>')), null);
+  assert.equal(await at(async () => symbolCall('a pretty long marketing name')), null);
+});
+
+test('the native pair is answered without asking the chain', async () => {
+  const { collectPairSymbol } = await import('../../netlify/functions/lib/collector.mjs');
+  const rpc = async () => { throw new Error('the zero address is not a contract'); };
+  assert.equal(await collectPairSymbol({ rpc, pairToken: '0x' + '0'.repeat(40), blockNumber: 1 }), null);
+});
+
+test('the feed labels a launch with the asset it is actually paired with', () => {
+  const feed = read('netlify/functions/launch-feed.mjs');
+  // Read once per distinct asset: many launches share a pair.
+  assert.match(feed, /pairSymbols\.has\(key\)/);
+  assert.match(feed, /if \(pairSymbol\) withMetadata = \{ \.\.\.withMetadata, pairLabel: pairSymbol \}/);
+});
