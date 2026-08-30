@@ -1,5 +1,5 @@
 import snapshot from '../../website/data/launches.json' with { type: 'json' };
-import { DEPLOYMENT, collectCurveActivity, collectCurveState, collectLaunches, collectTokenMetadata, decodeLaunches, fetchPublicGate, jsonRpc, parseBlockNumber } from './lib/collector.mjs';
+import { DEPLOYMENT, collectCurveActivity, collectCurveState, collectLaunches, collectPairSymbol, collectTokenMetadata, decodeLaunches, fetchPublicGate, jsonRpc, parseBlockNumber } from './lib/collector.mjs';
 
 const RPC_URL = process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
 const STATUS_URL = process.env.PONSR_STATUS_URL || 'https://ponsr-backend.fly.dev/status/core';
@@ -112,6 +112,14 @@ export default async (request) => {
   const gate = await fetchPublicGate(STATUS_URL, snapshot.publicGate);
   const sourceState = publicChainState(chainSource.state);
   const launches = mergeLaunches(snapshot.launches, discovered);
+  // One read per distinct asset rather than per launch: the approved set is
+  // small and many launches share a pair.
+  const pairSymbols = new Map();
+  const pairSymbolFor = (pairToken, blockNumber) => {
+    const key = String(pairToken || '').toLowerCase();
+    if (!pairSymbols.has(key)) pairSymbols.set(key, collectPairSymbol({ rpc, pairToken, blockNumber }));
+    return pairSymbols.get(key);
+  };
   const launchesWithActivity = await Promise.all(launches.map(async (launch) => {
     if (!launch.curve || !['complete', 'partial'].includes(chainSource.state)) return launch;
     let withMetadata=launch;
@@ -121,6 +129,8 @@ export default async (request) => {
     } catch {
       withMetadata={...launch,metadata:{...launch.metadata,state:'partial',problem:'Token metadata getters were unavailable; preserving last-known metadata.'}};
     }
+    const pairSymbol = await pairSymbolFor(withMetadata.pairToken, chainSource.throughBlock);
+    if (pairSymbol) withMetadata = { ...withMetadata, pairLabel: pairSymbol };
     const overlapFrom = Math.max(Number(launch.blockNumber || DEPLOYMENT.startBlock), Number(launch.activity?.observedThroughBlock || launch.blockNumber || DEPLOYMENT.startBlock) - 128);
     if (overlapFrom > chainSource.throughBlock) return withMetadata;
     let withActivity=withMetadata;

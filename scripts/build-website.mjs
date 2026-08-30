@@ -29,6 +29,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+// One design, shared with the on-demand card endpoint so a link's preview cannot
+// change the next time the site happens to redeploy.
+import { socialSvg, tokenCardSvg } from '../netlify/functions/lib/socialCard.mjs';
+import { useVendoredFonts } from '../netlify/functions/lib/fonts.mjs';
 import { activityLine, curveFlowSeries, ethFromWei, eventTime, plural, reserveRows, shortAddress, whole } from '../website/assets/format.mjs';
 
 const site = path.join(process.cwd(), 'website');
@@ -41,11 +45,33 @@ const esc = (value) => String(value ?? '')
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
+// Before the first render: fontconfig reads its configuration once. The build
+// container has fonts of its own, but using ours is what makes the build-time
+// card and the on-demand card the same image.
+if (!useVendoredFonts()) console.warn('[build] vendored fonts not found; cards fall back to system faces');
+
 const socialDir = path.join(site, 'social');
 await fs.mkdir(socialDir, { recursive: true });
+/**
+ * PRODUCTION MUST NOT ADVERTISE A PREVIEW DOMAIN.
+ *
+ * This read `DEPLOY_PRIME_URL || URL`, and Netlify sets BOTH on a production
+ * deploy: `URL` is the canonical site (https://ponsr.fun) while
+ * `DEPLOY_PRIME_URL` is that deploy's own subdomain. Preferring the latter meant
+ * every live page advertised `og:image` on `main--ponsr.netlify.app`, so a link
+ * shared from ponsr.fun unfurled with an image hosted somewhere else -- measured
+ * on the production token page before this fix.
+ *
+ * `CONTEXT` is the field that actually answers the question, so it decides:
+ * production uses the canonical URL, and a preview keeps pointing at itself so
+ * its own cards still resolve.
+ */
 const socialOrigin = (() => {
   try {
-    const url = new URL(process.env.DEPLOY_PRIME_URL || process.env.URL || 'https://ponsr.fun');
+    const preferred = process.env.CONTEXT === 'production'
+      ? process.env.URL || process.env.DEPLOY_PRIME_URL
+      : process.env.DEPLOY_PRIME_URL || process.env.URL;
+    const url = new URL(preferred || 'https://ponsr.fun');
     if (url.protocol !== 'https:') throw new Error('social origin must use HTTPS');
     return url.origin;
   } catch {
@@ -62,18 +88,6 @@ try {
   // original mascot asset.
 }
 
-function socialSvg({ eyebrow, title, detail, badge, detailSize = 25 }) {
-  const titleLines = String(title).split('\n').slice(0, 2);
-  const mascot = socialMascot ? `<image href="${socialMascot}" x="825" y="95" width="300" height="300" preserveAspectRatio="xMidYMid meet"/>` : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-    <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#050607"/><stop offset="0.58" stop-color="#0A0D11"/><stop offset="1" stop-color="#10261C"/></linearGradient><radialGradient id="glow"><stop stop-color="#46C88C" stop-opacity=".26"/><stop offset="1" stop-color="#46C88C" stop-opacity="0"/></radialGradient><linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#FDFEFF"/><stop offset=".48" stop-color="#C4CDDA"/><stop offset="1" stop-color="#8D98A7"/></linearGradient></defs>
-    <rect width="1200" height="630" fill="url(#bg)"/><circle cx="965" cy="255" r="330" fill="url(#glow)"/><path d="M70 72H1130M70 558H1130" stroke="#C4CDDA" stroke-opacity=".14"/><circle cx="91" cy="91" r="18" fill="none" stroke="#82E3B3" stroke-width="3"/><circle cx="91" cy="91" r="5" fill="#82E3B3"/><text x="125" y="104" fill="#F1F5FA" font-family="Arial,sans-serif" font-size="28" font-weight="700" letter-spacing="8">PONSR</text>
-    <text x="76" y="190" fill="#82E3B3" font-family="monospace" font-size="20" letter-spacing="4">${esc(String(eyebrow).toUpperCase())}</text>
-    ${titleLines.map((line, index) => `<text x="72" y="${285 + index * 76}" fill="url(#metal)" font-family="Georgia,serif" font-size="68">${esc(line)}</text>`).join('')}
-    <text x="76" y="${titleLines.length > 1 ? 455 : 375}" fill="#C4CDDA" font-family="Arial,sans-serif" font-size="${detailSize}">${esc(detail)}</text>
-    <rect x="76" y="500" width="${Math.max(190, String(badge).length * 15 + 48)}" height="48" rx="24" fill="#46C88C" fill-opacity=".10" stroke="#46C88C" stroke-opacity=".7"/><text x="100" y="531" fill="#82E3B3" font-family="monospace" font-size="17" letter-spacing="2">${esc(String(badge).toUpperCase())}</text>${mascot}
-  </svg>`;
-}
 
 async function socialCard(file, data) {
   const output = path.join(socialDir, file);
@@ -83,7 +97,7 @@ async function socialCard(file, data) {
   if (process.env.NETLIFY === 'true') {
     try { await fs.access(output); return `/social/${file}`; } catch { /* generate a missing test-only card */ }
   }
-  await sharp(Buffer.from(socialSvg(data))).png({ compressionLevel: 9, adaptiveFiltering: false }).toFile(output);
+  await sharp(Buffer.from(data.svg ?? socialSvg({ ...data, mascotHref: socialMascot }))).png({ compressionLevel: 9, adaptiveFiltering: false }).toFile(output);
   return `/social/${file}`;
 }
 
@@ -95,12 +109,16 @@ const socialImages = {
 };
 for (const token of feed.launches) {
   const address = String(token.token).toLowerCase();
+  // The token's own card: symbol first, because that is what a reader
+  // recognises in a feed, with the pair asset and contract as evidence.
   socialImages.tokens.set(address, await socialCard(`token-${address}.png`, {
-    eyebrow: `Current V2 · Robinhood Chain · ${token.symbol}`,
-    title: `${token.name}\n${token.symbol}`,
-    detail: token.token,
-    badge: `Verified · block ${whole(token.blockNumber)}`,
-    detailSize: 18,
+    svg: tokenCardSvg({
+      symbol: token.symbol,
+      name: token.name,
+      pairLabel: token.pairLabel,
+      address: token.token,
+      mascotHref: socialMascot,
+    }),
   }));
 }
 

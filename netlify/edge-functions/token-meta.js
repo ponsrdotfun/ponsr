@@ -1,0 +1,97 @@
+/**
+ * Token pages unfurl as themselves.
+ *
+ * A crawler reads the HTML and never runs the page's JavaScript, so a token
+ * that did not exist when the site was last built unfurled as the catch-all:
+ * "Inspect a Ponsr launch", with the generic site card and no mention of the
+ * token at all. Measured on Microduck's page an hour after it launched. That is
+ * precisely the moment a link gets shared, so it is precisely the moment the
+ * preview has to be right.
+ *
+ * This runs at the edge, takes the page the site would have served anyway, and
+ * replaces only the metadata a crawler reads. The visible page is untouched —
+ * it already renders the token from the live feed once JavaScript runs.
+ *
+ * IT NEVER INVENTS A TOKEN. If the canonical feed cannot verify the address,
+ * the original response passes through unchanged: a preview is an assertion
+ * that this is a real Ponsr launch, and the edge is not the place to decide
+ * that.
+ */
+const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
+
+const esc = (value) =>
+  String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+/** Replace one meta tag's content, matching either attribute order. */
+function setMeta(html, attr, name, content) {
+  const pattern = new RegExp(
+    `(<meta[^>]*${attr}=["']${name}["'][^>]*content=["'])([^"']*)(["'])`,
+    'i'
+  );
+  if (pattern.test(html)) return html.replace(pattern, `$1${esc(content)}$3`);
+  const reversed = new RegExp(
+    `(<meta[^>]*content=["'])([^"']*)(["'][^>]*${attr}=["']${name}["'])`,
+    'i'
+  );
+  return html.replace(reversed, `$1${esc(content)}$3`);
+}
+
+export default async (request, context) => {
+  const url = new URL(request.url);
+  const address = (url.pathname.match(/^\/token\/(0x[a-fA-F0-9]{40})\/?$/i)?.[1] ?? '').toLowerCase();
+
+  const response = await context.next();
+  if (!ADDRESS.test(address)) return response;
+  if (!(response.headers.get('content-type') ?? '').includes('text/html')) return response;
+
+  let launch = null;
+  try {
+    const feed = await fetch(new URL('/.netlify/functions/launch-feed', url), {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (feed.ok) {
+      const body = await feed.json();
+      launch = (body?.launches ?? []).find((l) => String(l.token).toLowerCase() === address) ?? null;
+    }
+  } catch {
+    // Feed unavailable: pass the page through rather than guess at its identity.
+  }
+  if (!launch) return response;
+
+  const canonical = `${url.origin}/token/${address}`;
+  const card = `${url.origin}/social/token/${address}.png`;
+  const title = `${launch.name} ($${launch.symbol}) — launched via Ponsr`;
+  // Only facts the feed carries. No price, no valuation, nothing a reader could
+  // mistake for market data.
+  const description =
+    `${launch.symbol} is a verified current V2 Ponsr launch on Robinhood Chain, ` +
+    `paired with ${launch.pairLabel}. Inspect its factory, bonding curve, block and event time.`;
+
+  let html = await response.text();
+  html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${esc(title)}</title>`);
+  html = setMeta(html, 'name', 'description', description);
+  html = setMeta(html, 'property', 'og:title', title);
+  html = setMeta(html, 'property', 'og:description', description);
+  html = setMeta(html, 'property', 'og:url', canonical);
+  html = setMeta(html, 'property', 'og:image', card);
+  html = setMeta(html, 'name', 'twitter:image', card);
+  // The catch-all ships noindex because a wildcard route should not be indexed
+  // on its own. A verified token is a real page and should be.
+  html = html.replace(/<meta[^>]*name=["']robots["'][^>]*>/i, '');
+  html = html.replace(
+    /(<link[^>]*rel=["']canonical["'][^>]*href=["'])([^"']*)(["'])/i,
+    `$1${canonical}$3`
+  );
+
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  return new Response(html, { status: response.status, headers });
+};
+
+export const config = { path: '/token/*' };

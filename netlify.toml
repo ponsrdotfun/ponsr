@@ -5,6 +5,10 @@
 
 [functions]
   node_bundler = "esbuild"
+  # sharp carries platform-specific native binaries, and the card function needs
+  # the mascot art on disk beside it.
+  external_node_modules = ["sharp"]
+  included_files = ["website/logo-transparent.png", "website/data/launches.json", "assets/fonts/**"]
 
 [[redirects]]
   from = "/api/*"
@@ -20,6 +24,14 @@
 [[redirects]]
   from = "/explore"
   to = "/explore/index.html"
+  status = 200
+
+# The token card endpoint. `/social/token/<address>.png` renders a card for any
+# address the canonical feed can verify, including one launched since the last
+# build -- which is exactly when a link gets shared.
+[[redirects]]
+  from = "/social/token/*"
+  to = "/.netlify/functions/token-card/:splat"
   status = 200
 
 [[redirects]]
