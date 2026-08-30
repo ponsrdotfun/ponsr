@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { AccountSignals, InboundMention } from './types';
 import { config } from './config';
 import { structuredPhotoUrls, trustedPhotoUrl } from './launchMedia';
+import { X_READ_TIMEOUT_MS, X_WRITE_TIMEOUT_MS } from './xDeadlines';
 import { UnionMentionReader, XApiMentionsSource } from './mentionSources';
 
 /**
@@ -139,7 +140,14 @@ export class TwitterApiIoReader implements XReader {
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         this.lastCallAt = Date.now();
 
-        const res = await fetch(this.baseUrl + pathAndQuery, { headers: { 'x-api-key': this.apiKey } });
+        // Bounded per ATTEMPT, not per call: the retry above is what makes a
+        // 429 survivable, and a deadline spanning all four attempts would make
+        // the last one arbitrarily short. An unbounded read is what let a single
+        // hung request freeze the mention sweep with no failure recorded.
+        const res = await fetch(this.baseUrl + pathAndQuery, {
+          headers: { 'x-api-key': this.apiKey },
+          signal: AbortSignal.timeout(X_READ_TIMEOUT_MS),
+        });
         if (res.status === 429 && attempt < 3) {
           // Back off further each time rather than hammering a limit already complaining.
           await new Promise((r) => setTimeout(r, this.minIntervalMs * (attempt + 1)));
@@ -315,6 +323,9 @@ export class XApiWriter implements XWriter {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ text, reply: { in_reply_to_tweet_id: inReplyToTweetId } }),
+      // Longer than a read: this one is billed and a retry costs money, so it is
+      // worth waiting a little longer before giving up on it.
+      signal: AbortSignal.timeout(X_WRITE_TIMEOUT_MS),
     });
 
     if (!res.ok) {

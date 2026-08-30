@@ -276,13 +276,52 @@ export function startReconciliation(
     });
   };
 
+  /**
+   * A SWEEP THAT HANGS MUST NOT LOOK LIKE A SWEEP THAT IS FINE.
+   *
+   * `running` skips a tick while the previous one is still going, which is right
+   * -- stacked runs would all poll the same window. But it turns one hung
+   * request into permanent silence: every later tick returns immediately, so the
+   * sweep records neither a success nor a failure. `/status` then reads
+   * `degraded` ("no successful poll yet") rather than `down`, and the alert is
+   * driven by consecutiveFailures, so nobody is ever told. The bot stops hearing
+   * anybody and every signal we have says it is merely warming up.
+   *
+   * The deadline is shorter than the interval on purpose: a hung sweep must be
+   * reported before the next tick would have run.
+   *
+   * The abandoned attempt is left to finish or fail on its own. It cannot be
+   * cancelled from here, and its result is discarded -- `processed_tweets` is
+   * what makes a mention seen twice harmless, and the watermark only advances on
+   * a completed poll.
+   */
+  const timedOut = Symbol('sweep-deadline');
+  const withDeadline = async <T,>(work: Promise<T>): Promise<T | typeof timedOut> => {
+    let timer: NodeJS.Timeout | undefined;
+    const alarm = new Promise<typeof timedOut>((resolve) => {
+      timer = setTimeout(() => resolve(timedOut), deadlineMs);
+      if (typeof (timer as any).unref === 'function') (timer as any).unref();
+    });
+    try {
+      return await Promise.race([work, alarm]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   const tick = async () => {
     // Skip rather than queue: a sweep that outlasts its interval would otherwise
     // stack up runs that all poll the same window.
     if (running) return;
     running = true;
     try {
-      const r = await reconcileOnce(deps, options);
+      const outcome = await withDeadline(reconcileOnce(deps, options));
+      if (outcome === timedOut) {
+        console.error(`[reconciler] sweep exceeded its ${deadlineMs}ms deadline, watermark held`);
+        await onFailure(`sweep exceeded its ${deadlineMs}ms deadline`);
+        return;
+      }
+      const r = outcome;
       if (r.error) {
         console.error('[reconciler] poll failed, watermark held:', r.error);
         await onFailure(String(r.error));
@@ -300,7 +339,12 @@ export function startReconciliation(
   // Fractional minutes are meaningful here: the interval is the latency users feel, and it
   // is bought from twitterapi.io by the poll. See MENTION_POLL_SECONDS in config.ts for the
   // arithmetic behind whatever value index.ts passes.
-  const timer = setInterval(tick, Math.round(intervalMinutes * 60 * 1000));
+  const intervalMs = Math.round(intervalMinutes * 60 * 1000);
+  // Comfortably inside the interval, and never so small that a healthy sweep on
+  // a slow day is called a failure.
+  const deadlineMs = Math.max(15_000, Math.min(120_000, Math.round(intervalMs * 0.8)));
+
+  const timer = setInterval(tick, intervalMs);
   // Don't hold the process open on this timer alone.
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 
