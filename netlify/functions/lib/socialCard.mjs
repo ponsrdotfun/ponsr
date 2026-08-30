@@ -96,10 +96,36 @@ export function socialSvg({ eyebrow, title, detail, badge, detailSize = 25, masc
  * shortened contract address so the reader can tell two tokens with the same
  * symbol apart — which has already happened here twice in one day.
  */
-export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = '' }) {
-  const mascot = mascotHref
-    ? `<image href="${mascotHref}" x="880" y="330" width="230" height="230" preserveAspectRatio="xMidYMid meet" opacity="0.92"/>`
+export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = '', artHref = '' }) {
+  /**
+   * The token's own picture takes the robot's place when it has one.
+   *
+   * A launch carries the photo attached to the tweet that asked for it, so a
+   * card can show what the token actually is rather than the same robot a
+   * hundred times. It is framed rather than dropped in: a circular mask so any
+   * aspect ratio composes, and an emerald ring so a picture with a dark edge
+   * does not dissolve into the background.
+   *
+   * The robot remains the fallback, and is what a launch with no image gets.
+   */
+  // Only the shape this file's own producer emits. The value is written into an
+  // href attribute, and "the caller always passes something safe" is a property
+  // of today's callers, not of this function.
+  const art = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(String(artHref)) ? String(artHref) : '';
+  // Raised off the baseline: at cy 445 the outer ring crossed the hairline at
+  // y 558, which reads as a mistake rather than a frame.
+  const portrait = art
+    ? `<clipPath id="art"><circle cx="995" cy="428" r="115"/></clipPath>
+       <circle cx="995" cy="428" r="126" fill="#050607" fill-opacity=".55"/>
+       <image href="${art}" x="880" y="313" width="230" height="230" preserveAspectRatio="xMidYMid slice" clip-path="url(#art)"/>
+       <circle cx="995" cy="428" r="115" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-opacity=".85"/>
+       <circle cx="995" cy="428" r="126" fill="none" stroke="#C4CDDA" stroke-opacity=".16"/>`
     : '';
+  const mascot = art
+    ? portrait
+    : mascotHref
+      ? `<image href="${mascotHref}" x="880" y="330" width="230" height="230" preserveAspectRatio="xMidYMid meet" opacity="0.92"/>`
+      : '';
   const ticker = fit(String(symbol || 'TOKEN').toUpperCase(), 12);
   // Stepped by length rather than measured: the renderer gives us no text
   // metrics, and a ticker that overruns the card is worse than one slightly small.
@@ -114,7 +140,7 @@ export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = ''
     <text x="72" y="330" fill="url(#emerald)" font-family="${SANS}" font-weight="700" font-size="${tickerSize}" letter-spacing="-2">$${esc(ticker)}</text>
     <text x="76" y="392" fill="url(#metal)" font-family="${SERIF}" font-size="46">${esc(fit(name || 'Unnamed token', 30))}</text>
 
-    <rect x="76" y="437" width="1048" height="2" fill="url(#rule)"/>
+    <rect x="76" y="437" width="${art ? 769 : 1048}" height="2" fill="url(#rule)"/>
 
     <text x="76" y="486" fill="#8B94A1" font-family="${MONO}" font-size="17" letter-spacing="2">PAIRED WITH</text>
     <text x="76" y="522" fill="#F1F5FA" font-family="${SANS}" font-size="30" font-weight="600">${esc(fit(pairLabel || 'native ETH', 22))}</text>

@@ -331,3 +331,153 @@ test('a window that did not complete never answers "no such token"', () => {
   // And a miss in the window must fall through to the full scan, not to a 404.
   assert.match(fn, /if \(!launch\) \{\s+via = 'chain:full';/);
 });
+
+/* --------------------------------------------------------------------------
+ * THE TOKEN'S OWN PICTURE, AND THE RULES THAT COME WITH FETCHING ONE.
+ *
+ * A launch carries the photo attached to the tweet that asked for it, so a card
+ * can show what the token is rather than the same robot a hundred times. But
+ * this is a server fetching a picture somebody else chose, so the narrowing is
+ * not decoration.
+ * -------------------------------------------------------------------------- */
+const okImage = (bytes, type = 'image/png') => ({
+  ok: true,
+  headers: { get: (k) => (k.toLowerCase() === 'content-type' ? type : null) },
+  arrayBuffer: async () => bytes,
+});
+
+test('only a pbs.twimg.com photo is ever fetched', async () => {
+  const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
+  const asked = [];
+  const fetchImpl = async (url) => {
+    asked.push(String(url));
+    throw new Error('should not have been called');
+  };
+  for (const hostile of [
+    'https://evil.example/media/x.png',
+    'http://pbs.twimg.com/media/x.png',
+    'https://pbs.twimg.com@evil.example/media/x.png',
+    'https://pbs.twimg.com:8080/media/x.png',
+    'https://pbs.twimg.com/media/../../etc/passwd',
+    'https://169.254.169.254/latest/meta-data/',
+    'file:///etc/passwd',
+    null,
+    '',
+  ]) {
+    assert.equal(await tokenArtDataUri(hostile, { fetchImpl }), null, `${hostile} was not refused`);
+  }
+  // The point is not only the null: nothing left the process at all.
+  assert.deepEqual(asked, [], `a request was made to ${asked.join(', ')}`);
+});
+
+test('a redirect is refused rather than followed', async () => {
+  const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
+  let options = null;
+  const fetchImpl = async (_url, opts) => {
+    options = opts;
+    return okImage(new Uint8Array([0]).buffer);
+  };
+  await tokenArtDataUri('https://pbs.twimg.com/media/AbC123.jpg', { fetchImpl });
+  // An allow-list on the URL means nothing if the host may forward the request.
+  assert.equal(options.redirect, 'error');
+  assert.ok(options.signal, 'the request is not bounded in time');
+});
+
+test('anything that is not a picture, or is too big, draws no art', async () => {
+  const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
+  const url = 'https://pbs.twimg.com/media/AbC123.png';
+  const cases = [
+    ['not ok', async () => ({ ok: false, headers: { get: () => 'image/png' }, arrayBuffer: async () => new ArrayBuffer(4) })],
+    ['html served as an image', async () => okImage(new ArrayBuffer(4), 'text/html')],
+    ['declared oversize', async () => ({
+      ok: true,
+      headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'image/png' : '99999999') },
+      arrayBuffer: async () => new ArrayBuffer(4),
+    })],
+    ['empty body', async () => okImage(new ArrayBuffer(0))],
+    ['undecodable bytes', async () => okImage(Buffer.from('this is not an image').buffer)],
+    ['the request throws', async () => { throw new Error('ECONNRESET'); }],
+  ];
+  for (const [label, fetchImpl] of cases) {
+    assert.equal(await tokenArtDataUri(url, { fetchImpl }), null, `${label} produced art`);
+  }
+});
+
+test('the bytes on the card are re-encoded, never passed through', async () => {
+  const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
+  const sharp = (await import('sharp')).default;
+  const jpeg = await sharp({ create: { width: 64, height: 40, channels: 3, background: '#2E9A67' } })
+    .jpeg()
+    .toBuffer();
+  const art = await tokenArtDataUri('https://pbs.twimg.com/media/AbC123.jpg', {
+    fetchImpl: async () => okImage(jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength), 'image/jpeg'),
+  });
+  assert.ok(art, 'a valid photo produced no art');
+  // A JPEG went in; what comes out is a PNG this process wrote, at the card's
+  // own size -- so nothing rides along inside a file claiming to be a picture.
+  assert.match(art, /^data:image\/png;base64,/);
+  const out = await sharp(Buffer.from(art.split(',')[1], 'base64')).metadata();
+  assert.equal(out.width, 320);
+  assert.equal(out.height, 320);
+});
+
+test('the card draws the token portrait, and falls back to the robot', async () => {
+  const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
+  const base = { symbol: 'DUCK', name: 'Duck', pairLabel: 'NVDA', address: '0x' + 'a'.repeat(40) };
+  const artHref = `data:image/png;base64,${'AAAA'}`;
+
+  const withArt = tokenCardSvg({ ...base, mascotHref: 'data:image/png;base64,ROBOT', artHref });
+  assert.match(withArt, /clip-path="url\(#art\)"/, 'the portrait is not masked');
+  assert.ok(withArt.includes(artHref), 'the token art is not drawn');
+  assert.ok(!withArt.includes('ROBOT'), 'the robot is drawn beside the token art');
+
+  const withoutArt = tokenCardSvg({ ...base, mascotHref: 'data:image/png;base64,ROBOT' });
+  assert.ok(withoutArt.includes('ROBOT'), 'a launch with no image lost its robot');
+  assert.doesNotMatch(withoutArt, /clip-path="url\(#art\)"/);
+});
+
+test('an art reference that is not our own encoding is not drawn', async () => {
+  const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
+  const base = { symbol: 'DUCK', name: 'Duck', address: '0x' + 'a'.repeat(40) };
+  for (const hostile of [
+    'https://evil.example/x.png',
+    'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+    'x" onload="alert(1)',
+    'data:image/png;base64,AAA" href="https://evil.example/x.png',
+    'javascript:alert(1)',
+  ]) {
+    const svg = tokenCardSvg({ ...base, artHref: hostile });
+    assert.doesNotMatch(svg, /clip-path="url\(#art\)"/, `${hostile} was drawn`);
+    assert.ok(!svg.includes('evil.example'), `${hostile} reached the card`);
+    assert.ok(!svg.includes('onload'), `${hostile} reached the card`);
+  }
+});
+
+test('both renderers ask for the token art', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  const build = read('scripts/build-website.mjs');
+  assert.match(fn, /artHref: await tokenArtDataUri\(launch\.logo\)/);
+  assert.match(build, /artHref: await tokenArtDataUri\(token\.logo\)/);
+  // One author for the fetching rules, as for the drawing.
+  assert.match(fn, /from '\.\/lib\/tokenArt\.mjs'/);
+  assert.match(build, /from '\.\.\/netlify\/functions\/lib\/tokenArt\.mjs'/);
+});
+
+test('the portrait sits inside the frame instead of colliding with it', async () => {
+  const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
+  const base = { symbol: 'DUCK', name: 'Duck', pairLabel: 'NVDA', address: '0x' + 'a'.repeat(40) };
+  const artHref = 'data:image/png;base64,AAAA';
+
+  // Both found by rendering a card and looking at it, which is the only way
+  // either could have been found.
+  const withArt = tokenCardSvg({ ...base, artHref });
+  // 1. The divider ran the full width and cut straight through the portrait.
+  assert.match(withArt, /<rect x="76" y="437" width="769"/);
+  // 2. At cy 445 the outer ring crossed the hairline at y 558. r is 126, so the
+  //    centre must leave that clear.
+  const cy = Number(withArt.match(/<clipPath id="art"><circle cx="995" cy="(\d+)"/)?.[1]);
+  assert.ok(cy + 126 < 558, `the portrait ring reaches y ${cy + 126}, past the hairline at 558`);
+
+  // A card with no art keeps the full-width rule it always had.
+  assert.match(tokenCardSvg(base), /<rect x="76" y="437" width="1048"/);
+});

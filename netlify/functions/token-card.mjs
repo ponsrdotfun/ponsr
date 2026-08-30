@@ -28,6 +28,7 @@ import {
   resolveVerifiedLaunch,
 } from './lib/collector.mjs';
 import { tokenCardSvg } from './lib/socialCard.mjs';
+import { tokenArtDataUri } from './lib/tokenArt.mjs';
 import { useVendoredFonts } from './lib/fonts.mjs';
 
 // The Lambda runtime ships no fonts at all. Without this every glyph renders as
@@ -176,6 +177,7 @@ export default async (request) => {
     pairLabel: launch.pairLabel,
     address: launch.token,
     mascotHref: await mascot(),
+    artHref: await tokenArtDataUri(launch.logo),
   });
 
   if (!fontsReady) return new Response('Card fonts unavailable', { status: 503 });
