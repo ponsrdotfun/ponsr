@@ -226,6 +226,8 @@ export function startReconciliation(
   notifier?: Notifier
 ): ReconcilerHandle {
   let running = false;
+  // The run holding the lock has already blown its deadline and has not returned.
+  let abandoned = false;
   // The sweep failing is invisible from outside: the process stays up, /health keeps
   // answering 200, and mentions simply stop being seen. Running out of twitterapi.io credit
   // produces exactly this, and so does a rotated key. Without an alert the first symptom is
@@ -312,13 +314,60 @@ export function startReconciliation(
   const tick = async () => {
     // Skip rather than queue: a sweep that outlasts its interval would otherwise
     // stack up runs that all poll the same window.
-    if (running) return;
+    if (running) {
+      /**
+       * A skipped tick is not news -- UNLESS the run holding the lock has
+       * already blown its deadline and is still not back.
+       *
+       * Holding the lock for an abandoned attempt keeps two sweeps from ever
+       * running at once, but on its own it recorded exactly ONE failure and
+       * then never ticked again. The alert fires on three consecutive
+       * failures, so a permanently stuck sweep would have gone quiet at one --
+       * the same silence this whole fix exists to remove, wearing a better
+       * status code.
+       *
+       * So every tick that finds the lock still held by an abandoned attempt
+       * counts as another failure, and the alert escalates on schedule.
+       */
+      if (abandoned) {
+        console.error('[reconciler] sweep still stuck past its deadline, watermark held');
+        await onFailure(`sweep still stuck past its ${deadlineMs}ms deadline`);
+      }
+      return;
+    }
     running = true;
+
+    // Held separately from the await below, because on a timeout we stop
+    // WAITING for this without letting anything else start.
+    const work = reconcileOnce(deps, options);
+    let timedOutThisTick = false;
+    abandoned = false;
     try {
-      const outcome = await withDeadline(reconcileOnce(deps, options));
+      const outcome = await withDeadline(work);
       if (outcome === timedOut) {
+        timedOutThisTick = true;
         console.error(`[reconciler] sweep exceeded its ${deadlineMs}ms deadline, watermark held`);
         await onFailure(`sweep exceeded its ${deadlineMs}ms deadline`);
+        /**
+         * Reported, but NOT replaced.
+         *
+         * Clearing `running` here would let the next tick start beside an
+         * attempt that is still alive -- two sweeps polling the same window,
+         * and, once the public gate is open, two admissions racing for one
+         * mention. The abandoned attempt cannot be cancelled from here, so the
+         * lock stays with it until it settles on its own.
+         *
+         * Nothing is hidden by that: the failure is already recorded, so the
+         * status reads `down` and the alert fires. The difference from before
+         * this fix is the whole point -- a stuck sweep still blocks, but now
+         * somebody is told.
+         */
+        abandoned = true;
+        const release = () => {
+          running = false;
+          abandoned = false;
+        };
+        void work.then(release, release);
         return;
       }
       const r = outcome;
@@ -332,7 +381,8 @@ export function startReconciliation(
       console.error('[reconciler] sweep threw:', err?.message ?? err);
       await onFailure(String(err?.message ?? err));
     } finally {
-      running = false;
+      // The timeout branch returns above and hands the lock to the attempt.
+      if (!timedOutThisTick) running = false;
     }
   };
 

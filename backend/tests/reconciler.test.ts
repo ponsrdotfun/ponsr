@@ -551,3 +551,150 @@ describe('X calls are bounded', () => {
     }
   });
 });
+
+/**
+ * An abandoned sweep must not take the process down with it.
+ *
+ * The watchdog stops waiting; it cannot cancel the attempt. If that attempt
+ * later REJECTS with nobody listening, Node raises unhandledRejection -- and a
+ * bot that dies hours after a hung request, for reasons that no longer appear
+ * anywhere, is worse than the silence this fix replaced.
+ */
+describe('an abandoned sweep is not an unhandled rejection', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('survives the abandoned attempt rejecting after the deadline', async () => {
+    jest.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    let rejectLate: ((err: Error) => void) | undefined;
+    const deps: any = {
+      db: { getState: () => undefined, setState: () => undefined },
+      xClient: {
+        getRecentMentions: () =>
+          new Promise((_resolve, reject) => {
+            rejectLate = reject;
+          }),
+      },
+    };
+    const handle = startReconciliation(deps, 1, DEFAULT_RECONCILER_OPTIONS);
+
+    // Tick, hang, and be abandoned at the 48s deadline.
+    await jest.advanceTimersByTimeAsync(60_000 + 48_000);
+    expect(handle.health().consecutiveFailures).toBe(1);
+
+    // Only now does the abandoned attempt fail, with nobody waiting on it.
+    rejectLate?.(new Error('socket closed long after we stopped listening'));
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(1_000);
+
+    expect(unhandled).toEqual([]);
+    handle.stop();
+    process.off('unhandledRejection', onUnhandled);
+  });
+});
+
+/**
+ * A stuck sweep must block, AND must keep saying so.
+ *
+ * The watchdog stops waiting but cannot cancel the attempt, so releasing the
+ * lock at the deadline would let the next tick run beside an attempt that is
+ * still alive: two sweeps polling the same window, and -- once the public gate
+ * is open -- two admissions racing for one mention.
+ *
+ * Holding the lock fixes that and reintroduces the original disease if nothing
+ * else changes: the stuck run records ONE failure and never ticks again, while
+ * the alert fires on three. Reported as `down` instead of `degraded` is better
+ * and still nobody is told.
+ */
+describe('a stuck sweep blocks without going quiet', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('never runs two sweeps at once, even after abandoning one', async () => {
+    jest.useFakeTimers();
+    let concurrent = 0;
+    let peak = 0;
+    const deps: any = {
+      db: { getState: () => undefined, setState: () => undefined },
+      xClient: {
+        getRecentMentions: () => {
+          concurrent += 1;
+          peak = Math.max(peak, concurrent);
+          return new Promise(() => undefined);
+        },
+      },
+    };
+    const handle = startReconciliation(deps, 1, DEFAULT_RECONCILER_OPTIONS);
+
+    // Five intervals after the first attempt was abandoned at 48s.
+    for (let i = 0; i < 6; i += 1) await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(peak).toBe(1);
+    handle.stop();
+  });
+
+  it('keeps counting failures while the lock is held, so the alert still fires', async () => {
+    jest.useFakeTimers();
+    const notifier = new MockNotifier();
+    const deps: any = {
+      db: { getState: () => undefined, setState: () => undefined },
+      xClient: { getRecentMentions: () => new Promise(() => undefined) },
+    };
+    const handle = startReconciliation(deps, 1, DEFAULT_RECONCILER_OPTIONS, notifier);
+
+    // 60s tick, abandoned at 108s, then a skipped-but-stuck tick every 60s.
+    await jest.advanceTimersByTimeAsync(108_000);
+    expect(handle.health().consecutiveFailures).toBe(1);
+    expect(notifier.kinds()).not.toContain('MENTION_SWEEP_FAILING');
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(handle.health().consecutiveFailures).toBeGreaterThanOrEqual(3);
+    expect(notifier.kinds()).toContain('MENTION_SWEEP_FAILING');
+    handle.stop();
+  });
+
+  it('releases the lock and recovers once the abandoned attempt finally settles', async () => {
+    jest.useFakeTimers();
+    let settle: ((v: any) => void) | undefined;
+    let calls = 0;
+    const deps: any = {
+      db: { getState: () => undefined, setState: () => undefined },
+      xClient: {
+        getRecentMentions: () => {
+          calls += 1;
+          if (calls === 1) return new Promise((resolve) => { settle = resolve; });
+          return Promise.resolve([]);
+        },
+      },
+    };
+    const handle = startReconciliation(deps, 1, DEFAULT_RECONCILER_OPTIONS);
+
+    await jest.advanceTimersByTimeAsync(108_000);
+    expect(handle.health().consecutiveFailures).toBe(1);
+
+    // The stuck request finally comes back. The lock must be released.
+    settle?.([]);
+    await jest.advanceTimersByTimeAsync(1_000);
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(handle.health().lastSuccessAt).not.toBeNull();
+    expect(handle.health().consecutiveFailures).toBe(0);
+    handle.stop();
+  });
+});
