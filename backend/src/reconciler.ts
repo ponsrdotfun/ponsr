@@ -17,6 +17,8 @@ import { Notifier } from './monitor';
  * than a second launch. That guarantee is what makes overlapping polls free.
  */
 
+import { PartialMentionCoverageError } from './mentionSources';
+
 const WATERMARK_KEY = 'reconciler:watermark';
 
 export interface ReconcilerOptions {
@@ -49,6 +51,8 @@ export interface ReconcileResult {
   /** Left unchanged when the poll itself failed, so the next run retries the
    *  same window instead of stepping over mentions that were never seen. */
   watermarkAdvanced: boolean;
+  /** Set when a secondary mention source failed: the window was only partly read. */
+  partialCoverage?: string[];
   error?: string;
 }
 
@@ -82,13 +86,35 @@ export async function reconcileOnce(
   since = isoMinus(new Date(since), options.overlapSeconds * 1000);
 
   let mentions;
+  /**
+   * PARTIAL COVERAGE IS PROCESSED, BUT NEVER CONFIRMED.
+   *
+   * Mentions now come from more than one source (see `mentionSources.ts`). When
+   * one of the secondaries fails, the reader throws a `PartialMentionCoverageError`
+   * carrying whatever DID arrive. Both halves of that matter:
+   *
+   *   - the mentions are still processed, so one flaky provider cannot stop
+   *     launches the other source genuinely saw;
+   *   - the watermark is NOT advanced, so the window is read again next sweep
+   *     and whatever the failed source alone would have supplied is not lost.
+   *
+   * `processed_tweets` makes the re-read free: anything already handled is
+   * refused on the second pass.
+   */
+  let coverageComplete = true;
   try {
     mentions = await deps.xClient.getRecentMentions(since);
   } catch (err: any) {
-    // A failed poll must not advance the watermark: doing so would skip the
-    // very window we failed to read.
-    result.error = err?.message ?? String(err);
-    return result;
+    if (err instanceof PartialMentionCoverageError) {
+      mentions = err.mentions;
+      coverageComplete = false;
+      result.partialCoverage = err.failures;
+    } else {
+      // A failed poll must not advance the watermark: doing so would skip the
+      // very window we failed to read.
+      result.error = err?.message ?? String(err);
+      return result;
+    }
   }
 
   result.polled = mentions.length;
@@ -123,8 +149,15 @@ export async function reconcileOnce(
     }
   }
 
-  deps.db.setState(WATERMARK_KEY, now.toISOString());
-  result.watermarkAdvanced = true;
+  if (coverageComplete) {
+    deps.db.setState(WATERMARK_KEY, now.toISOString());
+    result.watermarkAdvanced = true;
+  } else {
+    console.warn(
+      '[reconciler] partial mention coverage, watermark held:',
+      (result.partialCoverage ?? []).join('; ')
+    );
+  }
 
   if (result.recovered > 0) {
     console.warn(
