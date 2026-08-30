@@ -36,20 +36,32 @@ function mascot() {
   return mascotPromise;
 }
 
-/** The verified launch, from the snapshot first and the live feed second. */
+/**
+ * The verified launch, from the snapshot first and the live feed second.
+ *
+ * `answered` separates "the feed says this is not a Ponsr launch" from "the
+ * feed could not be reached". Collapsing those was a real defect: a cold start
+ * pushed the feed past the deadline and the card answered 404, which a crawler
+ * reads as a permanent absence and a CDN is entitled to keep. A card that
+ * cannot be verified RIGHT NOW is a retry, not a verdict.
+ */
 async function findLaunch(address, request) {
   const known = snapshot.launches.find((l) => String(l.token).toLowerCase() === address);
-  if (known) return known;
+  if (known) return { launch: known, answered: true };
   try {
     const feed = await fetch(new URL('/.netlify/functions/launch-feed', request.url), {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(9000),
     });
-    if (!feed.ok) return null;
+    if (!feed.ok) return { launch: null, answered: false };
     const body = await feed.json();
-    return (body?.launches ?? []).find((l) => String(l.token).toLowerCase() === address) ?? null;
+    if (!Array.isArray(body?.launches)) return { launch: null, answered: false };
+    return {
+      launch: body.launches.find((l) => String(l.token).toLowerCase() === address) ?? null,
+      answered: true,
+    };
   } catch {
-    return null;
+    return { launch: null, answered: false };
   }
 }
 
@@ -59,7 +71,15 @@ export default async (request) => {
     .toLowerCase();
   if (!ADDRESS.test(address)) return new Response('Not found', { status: 404 });
 
-  const launch = await findLaunch(address, request);
+  const { launch, answered } = await findLaunch(address, request);
+  // Unreachable feed: say so, and say it in a way nothing keeps. A 404 here
+  // would outlive the outage that caused it.
+  if (!answered) {
+    return new Response('Card temporarily unavailable', {
+      status: 503,
+      headers: { 'cache-control': 'no-store', 'retry-after': '30' },
+    });
+  }
   // No card for an unverified address. The generic site card is the honest
   // fallback, and the page's own metadata already says what is known.
   if (!launch) return new Response('Not found', { status: 404 });

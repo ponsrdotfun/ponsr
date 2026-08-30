@@ -249,3 +249,18 @@ test('the feed labels a launch with the asset it is actually paired with', () =>
   assert.match(feed, /pairSymbols\.has\(key\)/);
   assert.match(feed, /if \(pairSymbol\) withMetadata = \{ \.\.\.withMetadata, pairLabel: pairSymbol \}/);
 });
+
+test('an unreachable feed is a retry, never a permanent absence', () => {
+  const fn = read('netlify/functions/token-card.mjs');
+  // Measured on the deploy preview: a cold start pushed the feed past the
+  // deadline and the card answered 404 for a token that plainly exists. A
+  // crawler reads that as "there is no image", and a CDN may keep it.
+  assert.match(fn, /if \(!answered\)/);
+  assert.match(fn, /status: 503/);
+  assert.match(fn, /'cache-control': 'no-store'/);
+  // The two outcomes must come from different branches, not one collapsed test.
+  assert.match(fn, /answered: false/);
+  assert.match(fn, /answered: true/);
+  // A malformed body is not an answer either.
+  assert.match(fn, /!Array\.isArray\(body\?\.launches\)/);
+});
