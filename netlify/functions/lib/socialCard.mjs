@@ -96,7 +96,7 @@ export function socialSvg({ eyebrow, title, detail, badge, detailSize = 25, masc
  * shortened contract address so the reader can tell two tokens with the same
  * symbol apart — which has already happened here twice in one day.
  */
-export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = '', artHref = '' }) {
+export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = '', artHref = '', artAspect = 1 }) {
   /**
    * The token's own picture takes the robot's place when it has one.
    *
@@ -114,12 +114,28 @@ export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = ''
   const art = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(String(artHref)) ? String(artHref) : '';
   // Raised off the baseline: at cy 445 the outer ring crossed the hairline at
   // y 558, which reads as a mistake rather than a frame.
+  /**
+   * The frame takes the picture's proportions, not the other way round.
+   *
+   * A fixed square box meant a wide picture arrived padded with dark bars and a
+   * square one lost its corners to a round mask. Sizing the frame to the
+   * picture instead means it is placed, never reshaped.
+   */
+  // 230, not 252: at 252 a square frame reached y 565, past the hairline at 558.
+  const BOX = 230;
+  const ratio = Number.isFinite(artAspect) && artAspect > 0 ? artAspect : 1;
+  const w = Math.round(ratio >= 1 ? BOX : BOX * ratio);
+  const h = Math.round(ratio >= 1 ? BOX / ratio : BOX);
+  const x = Math.round(995 - w / 2);
+  const y = Math.round(428 - h / 2);
+  const radius = Math.round(Math.min(w, h) * 0.15);
+
   const portrait = art
-    ? `<clipPath id="art"><rect x="880" y="313" width="230" height="230" rx="34"/></clipPath>
-       <rect x="869" y="302" width="252" height="252" rx="42" fill="#050607" fill-opacity=".55"/>
-       <image href="${art}" x="880" y="313" width="230" height="230" preserveAspectRatio="xMidYMid meet" clip-path="url(#art)"/>
-       <rect x="880" y="313" width="230" height="230" rx="34" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-opacity=".85"/>
-       <rect x="869" y="302" width="252" height="252" rx="42" fill="none" stroke="#C4CDDA" stroke-opacity=".16"/>`
+    ? `<clipPath id="art"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${radius}"/></clipPath>
+       <rect x="${x - 11}" y="${y - 11}" width="${w + 22}" height="${h + 22}" rx="${radius + 8}" fill="#050607" fill-opacity=".55"/>
+       <image href="${art}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="none" clip-path="url(#art)"/>
+       <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${radius}" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-opacity=".85"/>
+       <rect x="${x - 11}" y="${y - 11}" width="${w + 22}" height="${h + 22}" rx="${radius + 8}" fill="none" stroke="#C4CDDA" stroke-opacity=".16"/>`
     : '';
   const mascot = art
     ? portrait

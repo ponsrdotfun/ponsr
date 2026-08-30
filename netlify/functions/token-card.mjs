@@ -37,6 +37,9 @@ const fontsReady = useVendoredFonts();
 
 const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
 
+/** Spread the picture and the proportions it kept, or nothing at all. */
+const artFields = (art) => (art ? { artHref: art.href, artAspect: art.aspect } : {});
+
 let mascotPromise = null;
 /** Read once per container, and never fail the card because the art is missing. */
 function mascot() {
@@ -177,7 +180,7 @@ export default async (request) => {
     pairLabel: launch.pairLabel,
     address: launch.token,
     mascotHref: await mascot(),
-    artHref: await tokenArtDataUri(launch.logo),
+    ...artFields(await tokenArtDataUri(launch.logo)),
   });
 
   if (!fontsReady) return new Response('Card fonts unavailable', { status: 503 });

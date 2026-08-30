@@ -40,7 +40,7 @@ const TIMEOUT_MS = 3500;
 const RENDER_PX = 320;
 
 /**
- * A data URI for the token's picture, or null.
+ * The token's picture as a data URI, with the proportions it kept, or null.
  *
  * A data URI rather than a URL because the rasteriser does not fetch remote
  * hrefs at all -- an `<image href="https://...">` renders as nothing, which is
@@ -68,31 +68,34 @@ export async function tokenArtDataUri(logo, { fetchImpl = fetch } = {}) {
     if (!bytes.length || bytes.length > MAX_BYTES) return null;
 
     /**
-     * NEVER CROP THE PICTURE SOMEBODY CHOSE.
+     * THE PICTURE IS NOT ALTERED. IT IS PLACED IN A FRAME.
      *
-     * `cover` filled the frame and threw away whatever did not fit -- against a
-     * 3:1 banner it discarded most of the image and cut through the middle of a
-     * word. It looked tidy, and tidiness is not ours to buy with somebody
-     * else's picture: the image on the card is the one the launcher attached,
-     * whole, or it is not their image any more.
+     * Three things were quietly changing it, and each looked reasonable on its
+     * own. `cover` filled the frame and threw away whatever did not fit. The
+     * circular mask cut the corners off every square picture -- and a meme-coin
+     * PFP is square, with its horns and ears in exactly those corners. Then
+     * `contain` fixed the cropping by PADDING the picture with dark bars until
+     * it was square, which is not cropping but is still handing back something
+     * the launcher did not make.
      *
-     * So it is always fitted entire, on the card's own ground, and the frame
-     * that receives it is a rounded rectangle rather than a circle -- a circular
-     * mask would cut the corners off every square picture, which is the same
-     * loss wearing a nicer shape.
+     * `inside` only scales. No crop, no padding, no letterbox, no distortion --
+     * the same picture, smaller. The frame is then built to the picture's own
+     * proportions rather than the picture being reshaped to the frame's, which
+     * is the whole of the rule: put it in the object, do not make it fit.
      *
-     * What is still not byte-identical, and cannot be: the bytes are re-encoded
-     * by this process and scaled to the card's size. That is the safety rule
-     * above, not a design choice -- nothing may ride onto the page inside a file
-     * that merely claims to be a picture. Every pixel of the image survives; the
-     * container does not.
+     * What remains, and cannot be removed: the bytes are re-encoded here and
+     * scaled to the card's size. That is the safety rule above -- nothing may
+     * ride onto the page inside a file that merely claims to be a picture. No
+     * pixel is added, removed or moved; only the container changes.
      */
-    const png = await sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false })
-      .resize(RENDER_PX, RENDER_PX, { fit: 'contain', background: '#0A0D11' })
+    const resized = await sharp(bytes, { limitInputPixels: MAX_PIXELS, animated: false })
+      .resize(RENDER_PX, RENDER_PX, { fit: 'inside' })
       .png({ compressionLevel: 9 })
-      .toBuffer();
+      .toBuffer({ resolveWithObject: true });
+    const png = resized.data;
+    const aspect = resized.info.height ? resized.info.width / resized.info.height : 1;
 
-    return `data:image/png;base64,${png.toString('base64')}`;
+    return { href: `data:image/png;base64,${png.toString('base64')}`, aspect };
   } catch {
     return null;
   }

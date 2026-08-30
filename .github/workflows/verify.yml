@@ -97,6 +97,18 @@ jobs:
       - name: website smoke tests
         run: node website/smoke-test.js
 
+      # 5b. The substantive website suite, which CI was NOT running.
+      #
+      # `smoke-test.js` requires exactly one file, `tests/website-v2.test.js`.
+      # Everything else under `website/tests/` -- the shell suite and the link
+      # preview suite -- had never run in CI, so a commit could be red locally
+      # and green here. It happened: a commit landed with the card renderer
+      # changed and its own tests failing, and this workflow reported success.
+      #
+      # A test that CI does not run is a comment.
+      - name: website tests
+        run: npm run test:website
+
       # 6. Artifact reproducibility, twice.
       #
       # Twice on purpose. A single run cannot distinguish a deterministic compile from

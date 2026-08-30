@@ -415,10 +415,11 @@ test('the bytes on the card are re-encoded, never passed through', async () => {
   assert.ok(art, 'a valid photo produced no art');
   // A JPEG went in; what comes out is a PNG this process wrote, at the card's
   // own size -- so nothing rides along inside a file claiming to be a picture.
-  assert.match(art, /^data:image\/png;base64,/);
-  const out = await sharp(Buffer.from(art.split(',')[1], 'base64')).metadata();
+  assert.match(art.href, /^data:image\/png;base64,/);
+  const out = await sharp(Buffer.from(art.href.split(',')[1], 'base64')).metadata();
+  // 64x40 scaled to fit, and NOT squared off: the proportions are the source's.
   assert.equal(out.width, 320);
-  assert.equal(out.height, 320);
+  assert.equal(out.height, 200);
 });
 
 test('the card draws the token portrait, and falls back to the robot', async () => {
@@ -456,67 +457,76 @@ test('an art reference that is not our own encoding is not drawn', async () => {
 test('both renderers ask for the token art', () => {
   const fn = read('netlify/functions/token-card.mjs');
   const build = read('scripts/build-website.mjs');
-  assert.match(fn, /artHref: await tokenArtDataUri\(launch\.logo\)/);
-  assert.match(build, /artHref: await tokenArtDataUri\(token\.logo\)/);
+  assert.match(fn, /artFields\(await tokenArtDataUri\(launch\.logo\)\)/);
+  assert.match(build, /artFields\(await tokenArtDataUri\(token\.logo\)\)/);
   // One author for the fetching rules, as for the drawing.
   assert.match(fn, /from '\.\/lib\/tokenArt\.mjs'/);
   assert.match(build, /from '\.\.\/netlify\/functions\/lib\/tokenArt\.mjs'/);
 });
 
-test('the portrait sits inside the frame instead of colliding with it', async () => {
+test('the frame does not cut the corners off a square picture', async () => {
   const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
-  const base = { symbol: 'DUCK', name: 'Duck', pairLabel: 'NVDA', address: '0x' + 'a'.repeat(40) };
-  const artHref = 'data:image/png;base64,AAAA';
-
-  // Both found by rendering a card and looking at it, which is the only way
-  // either could have been found.
-  const withArt = tokenCardSvg({ ...base, artHref });
-  // 1. The divider ran the full width and cut straight through the portrait.
-  assert.match(withArt, /<rect x="76" y="437" width="769"/);
-  // 2. At cy 445 the outer ring crossed the hairline at y 558. r is 126, so the
-  //    centre must leave that clear.
-  const cy = Number(withArt.match(/<clipPath id="art"><circle cx="995" cy="(\d+)"/)?.[1]);
-  assert.ok(cy + 126 < 558, `the portrait ring reaches y ${cy + 126}, past the hairline at 558`);
-
+  const svg = tokenCardSvg({ symbol: 'D', name: 'D', address: '0x' + 'a'.repeat(40), artHref: 'data:image/png;base64,AAAA', artAspect: 1 });
+  // A circular mask removes the corners of every square picture -- and a
+  // meme-coin PFP is square, with its horns and ears in exactly those corners.
+  assert.doesNotMatch(svg, /<clipPath id="art"><circle/);
+  assert.match(svg, /<clipPath id="art"><rect/);
+  // `slice` scales up until the box is full and crops the overflow.
+  assert.doesNotMatch(svg, /preserveAspectRatio="xMidYMid slice"/);
+  // The divider ran the full width and cut straight through the portrait.
+  assert.match(svg, /<rect x="76" y="437" width="769"/);
   // A card with no art keeps the full-width rule it always had.
-  assert.match(tokenCardSvg(base), /<rect x="76" y="437" width="1048"/);
+  assert.match(tokenCardSvg({ symbol: 'D', name: 'D', address: '0x' + 'a'.repeat(40) }), /<rect x="76" y="437" width="1048"/);
 });
 
-test('how a picture meets the round frame depends on its shape', async () => {
+test('the picture comes back the same picture, only smaller', async () => {
   const { tokenArtDataUri } = await import('../../netlify/functions/lib/tokenArt.mjs');
   const sharp = (await import('sharp')).default;
 
-  const photo = async (width, height) =>
-    sharp({ create: { width, height, channels: 3, background: '#e8563f' } }).jpeg().toBuffer();
-  const render = async (buffer) =>
-    tokenArtDataUri('https://pbs.twimg.com/media/AbC123.jpg', {
-      fetchImpl: async () => ({
-        ok: true,
-        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'image/jpeg' : null) },
-        arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
-      }),
-    });
-  // The top-left pixel: the picture's own colour when it fills the frame, the
-  // card's ground when it has been fitted whole inside it.
-  const corner = async (dataUri) => {
-    const { data } = await sharp(Buffer.from(dataUri.split(',')[1], 'base64'))
-      .extract({ left: 0, top: 0, width: 1, height: 1 })
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    return [data[0], data[1], data[2]];
+  const serve = (buffer) => async () => ({
+    ok: true,
+    headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'image/png' : null) },
+    arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  });
+
+  for (const [width, height] of [[800, 800], [1600, 900], [1500, 500], [500, 1500], [1024, 768]]) {
+    const src = await sharp({ create: { width, height, channels: 3, background: '#e8563f' } }).png().toBuffer();
+    const art = await tokenArtDataUri('https://pbs.twimg.com/media/A.png', { fetchImpl: serve(src) });
+    assert.ok(art, `${width}x${height} produced no art`);
+    const out = await sharp(Buffer.from(art.href.split(',')[1], 'base64')).metadata();
+
+    // No bars: a wide picture stays wide, a tall one stays tall.
+    assert.ok(out.width === 320 || out.height === 320, `${width}x${height} was not scaled to the card`);
+    assert.ok(out.width <= 320 && out.height <= 320, `${width}x${height} overran the frame`);
+    // No stretching: the shape it arrived with is the shape it leaves with.
+    const drift = Math.abs(out.width / out.height - width / height);
+    assert.ok(drift < 0.02, `${width}x${height} was distorted (aspect drifted by ${drift.toFixed(3)})`);
+    // And the reported aspect is the one the card must build its frame from.
+    assert.ok(Math.abs(art.aspect - out.width / out.height) < 0.001, 'the reported aspect is not the picture\u2019s');
+  }
+});
+
+test('the frame is built to the picture, not the picture to the frame', async () => {
+  const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
+  const base = { symbol: 'D', name: 'D', address: '0x' + 'a'.repeat(40), artHref: 'data:image/png;base64,AAAA' };
+  const box = (svg) => {
+    const m = svg.match(/<clipPath id="art"><rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/);
+    return m ? { x: +m[1], y: +m[2], w: +m[3], h: +m[4] } : null;
   };
 
-  // A 16:9 photo is the commonest shape a camera produces, and cropping it is
-  // right -- letterboxing every one of them would waste the frame.
-  const [r169] = await corner(await render(await photo(1600, 900)));
-  assert.ok(r169 > 180, `a 16:9 photo did not fill the frame (red channel ${r169})`);
+  const square = box(tokenCardSvg({ ...base, artAspect: 1 }));
+  assert.equal(square.w, square.h, 'a square picture did not get a square frame');
 
-  // A 3:1 banner is the case that was plainly wrong: cover threw most of it
-  // away and sliced a word in half.
-  const [rBanner, gBanner, bBanner] = await corner(await render(await photo(1500, 500)));
-  assert.ok(rBanner < 60 && gBanner < 60 && bBanner < 60, `a 3:1 banner was cropped instead of fitted`);
+  const wide = box(tokenCardSvg({ ...base, artAspect: 16 / 9 }));
+  assert.ok(Math.abs(wide.w / wide.h - 16 / 9) < 0.05, 'a 16:9 picture did not get a 16:9 frame');
 
-  // Tall pictures are treated the same way as wide ones.
-  const [rTall, gTall] = await corner(await render(await photo(500, 1500)));
-  assert.ok(rTall < 60 && gTall < 60, 'a 1:3 picture was cropped instead of fitted');
+  const tall = box(tokenCardSvg({ ...base, artAspect: 9 / 16 }));
+  assert.ok(Math.abs(tall.w / tall.h - 9 / 16) < 0.05, 'a 9:16 picture did not get a 9:16 frame');
+
+  // Every frame stays centred on the same point, so the card does not shift.
+  for (const b of [square, wide, tall]) {
+    assert.ok(Math.abs(b.x + b.w / 2 - 995) <= 1, 'the frame drifted horizontally');
+    assert.ok(Math.abs(b.y + b.h / 2 - 428) <= 1, 'the frame drifted vertically');
+    assert.ok(b.y + b.h + 11 < 558, 'the frame crosses the bottom hairline');
+  }
 });
