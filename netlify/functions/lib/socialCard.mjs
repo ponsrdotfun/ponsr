@@ -24,11 +24,15 @@
  *
  * A bare `monospace` family silently resolved to a SERIF in the build
  * container, so the contract line came out in a different design language from
- * the row beside it. Naming real families first fixes it, and Arial is the last
- * resort because it is the one face every renderer here actually has.
+ * the row beside it. Worse, the Lambda runtime has NO fonts at all and drew
+ * every character as a tofu box. The faces are vendored now (see `fonts.mjs`)
+ * and named first; the system stacks remain only as a last resort.
  */
-const MONO = 'DejaVu Sans Mono,Liberation Mono,Menlo,Consolas,Courier New,monospace';
-const SANS = 'DejaVu Sans,Liberation Sans,Arial,Helvetica,sans-serif';
+import { FONT_MONO, FONT_SANS, FONT_SERIF } from './fonts.mjs';
+
+const MONO = `${FONT_MONO},DejaVu Sans Mono,Menlo,Consolas,monospace`;
+const SANS = `${FONT_SANS},DejaVu Sans,Arial,Helvetica,sans-serif`;
+const SERIF = `${FONT_SERIF},Georgia,Times New Roman,serif`;
 
 const esc = (value) => String(value ?? '')
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -77,7 +81,7 @@ export function socialSvg({ eyebrow, title, detail, badge, detailSize = 25, masc
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">${DEFS}
     ${CHROME(mascot)}
     <text x="76" y="190" fill="#82E3B3" font-family="${MONO}" font-size="20" letter-spacing="4">${esc(String(eyebrow).toUpperCase())}</text>
-    ${titleLines.map((line, index) => `<text x="72" y="${285 + index * 76}" fill="url(#metal)" font-family="Georgia,serif" font-size="68">${esc(line)}</text>`).join('')}
+    ${titleLines.map((line, index) => `<text x="72" y="${285 + index * 76}" fill="url(#metal)" font-family="${SERIF}" font-size="68">${esc(line)}</text>`).join('')}
     <text x="76" y="${titleLines.length > 1 ? 455 : 375}" fill="#C4CDDA" font-family="${SANS}" font-size="${detailSize}">${esc(detail)}</text>
     <rect x="76" y="500" width="${Math.max(190, String(badge).length * 15 + 48)}" height="48" rx="24" fill="#46C88C" fill-opacity=".10" stroke="#46C88C" stroke-opacity=".7"/>
     <text x="100" y="531" fill="#82E3B3" font-family="${MONO}" font-size="17" letter-spacing="2">${esc(String(badge).toUpperCase())}</text>
@@ -108,7 +112,7 @@ export function tokenCardSvg({ symbol, name, pairLabel, address, mascotHref = ''
     <text x="76" y="196" fill="#82E3B3" font-family="${MONO}" font-size="20" letter-spacing="4">LAUNCHED VIA PONSR</text>
 
     <text x="72" y="330" fill="url(#emerald)" font-family="${SANS}" font-weight="700" font-size="${tickerSize}" letter-spacing="-2">$${esc(ticker)}</text>
-    <text x="76" y="392" fill="url(#metal)" font-family="Georgia,serif" font-size="46">${esc(fit(name || 'Unnamed token', 30))}</text>
+    <text x="76" y="392" fill="url(#metal)" font-family="${SERIF}" font-size="46">${esc(fit(name || 'Unnamed token', 30))}</text>
 
     <rect x="76" y="437" width="1048" height="2" fill="url(#rule)"/>
 

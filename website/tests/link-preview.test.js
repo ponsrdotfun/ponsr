@@ -144,3 +144,47 @@ test('the card endpoint is routed and its native dependency is declared', () => 
   assert.ok(pkg.dependencies.sharp, 'sharp must be a runtime dependency');
   assert.ok(!pkg.devDependencies?.sharp, 'sharp must not also be a dev dependency');
 });
+
+/* --------------------------------------------------------------------------
+ * THE RENDERER MUST CARRY ITS OWN FONTS.
+ *
+ * The first deployed card drew every character as a tofu box. Netlify's build
+ * container ships fonts; its Lambda runtime ships none, so identical code
+ * produced a correct card in one place and an unreadable one in the other. It
+ * was invisible in the source and invisible in the tests — only fetching the
+ * deployed image and looking at it found it.
+ * -------------------------------------------------------------------------- */
+test('the card faces are vendored, with their licences beside them', () => {
+  const dir = path.join(root, 'assets/fonts');
+  const files = fs.readdirSync(dir);
+  for (const face of ['JetBrainsMono-Regular.ttf', 'Lora-Regular.ttf', 'InstrumentSans-Bold.ttf']) {
+    assert.ok(files.includes(face), `${face} is not vendored`);
+  }
+  // Shipping a face means shipping its licence.
+  for (const licence of ['JetBrainsMono-OFL.txt', 'Lora-OFL.txt', 'InstrumentSans-OFL.txt']) {
+    assert.ok(files.includes(licence), `${licence} is missing`);
+    assert.match(read(`assets/fonts/${licence}`), /SIL OPEN FONT LICENSE/i);
+  }
+});
+
+test('both renderers point fontconfig at those faces before drawing', () => {
+  const build = read('scripts/build-website.mjs');
+  const fn = read('netlify/functions/token-card.mjs');
+  const fonts = read('netlify/functions/lib/fonts.mjs');
+  assert.match(build, /useVendoredFonts\(\)/);
+  assert.match(fn, /useVendoredFonts\(\)/);
+  // fontconfig reads its configuration once, when the rasteriser initialises.
+  assert.match(fonts, /FONTCONFIG_FILE/);
+  // A card nobody can read is worse than no card: the endpoint must refuse.
+  assert.match(fn, /if \(!fontsReady\) return new Response\('Card fonts unavailable', \{ status: 503 \}\)/);
+});
+
+test('the card names the vendored faces first, not the host\u2019s', async () => {
+  const { tokenCardSvg } = await import('../../netlify/functions/lib/socialCard.mjs');
+  const svg = tokenCardSvg({ symbol: 'X', name: 'Y', pairLabel: 'native ETH', address: '0x' + '1'.repeat(40) });
+  assert.match(svg, /JetBrains Mono/);
+  assert.match(svg, /Lora/);
+  assert.match(svg, /Instrument Sans/);
+  // A bare generic family is what resolved to a serif in the build container.
+  assert.doesNotMatch(svg, /font-family="monospace"/);
+});

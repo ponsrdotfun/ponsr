@@ -32,6 +32,7 @@ import sharp from 'sharp';
 // One design, shared with the on-demand card endpoint so a link's preview cannot
 // change the next time the site happens to redeploy.
 import { socialSvg, tokenCardSvg } from '../netlify/functions/lib/socialCard.mjs';
+import { useVendoredFonts } from '../netlify/functions/lib/fonts.mjs';
 import { activityLine, curveFlowSeries, ethFromWei, eventTime, plural, reserveRows, shortAddress, whole } from '../website/assets/format.mjs';
 
 const site = path.join(process.cwd(), 'website');
@@ -43,6 +44,11 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 const esc = (value) => String(value ?? '')
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+
+// Before the first render: fontconfig reads its configuration once. The build
+// container has fonts of its own, but using ours is what makes the build-time
+// card and the on-demand card the same image.
+if (!useVendoredFonts()) console.warn('[build] vendored fonts not found; cards fall back to system faces');
 
 const socialDir = path.join(site, 'social');
 await fs.mkdir(socialDir, { recursive: true });

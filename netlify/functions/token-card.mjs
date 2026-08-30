@@ -18,6 +18,11 @@ import path from 'node:path';
 import sharp from 'sharp';
 import snapshot from '../../website/data/launches.json' with { type: 'json' };
 import { tokenCardSvg } from './lib/socialCard.mjs';
+import { useVendoredFonts } from './lib/fonts.mjs';
+
+// The Lambda runtime ships no fonts at all. Without this every glyph renders as
+// a tofu box, which is exactly what the first deployed card did.
+const fontsReady = useVendoredFonts();
 
 const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
 
@@ -66,6 +71,8 @@ export default async (request) => {
     address: launch.token,
     mascotHref: await mascot(),
   });
+
+  if (!fontsReady) return new Response('Card fonts unavailable', { status: 503 });
 
   const png = await sharp(Buffer.from(svg))
     .png({ compressionLevel: 9, adaptiveFiltering: false })

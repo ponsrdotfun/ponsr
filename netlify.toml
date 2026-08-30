@@ -8,7 +8,7 @@
   # sharp carries platform-specific native binaries, and the card function needs
   # the mascot art on disk beside it.
   external_node_modules = ["sharp"]
-  included_files = ["website/logo-transparent.png", "website/data/launches.json"]
+  included_files = ["website/logo-transparent.png", "website/data/launches.json", "assets/fonts/**"]
 
 [[redirects]]
   from = "/api/*"
