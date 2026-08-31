@@ -43,6 +43,7 @@ export type ClaimOutcome =
   | { state: 'not-yours' }
   | { state: 'no-splitter' }
   | { state: 'nothing-to-claim' }
+  | { state: 'in-flight' }
   | { state: 'wallet-mismatch' }
   | { state: 'policy-refused'; detail: string }
   | { state: 'unavailable'; detail: string };
@@ -68,6 +69,27 @@ function isPolicyRefusal(error: unknown): boolean {
 }
 
 export class AccountClaimService {
+  /**
+   * The claims already on their way, keyed by what they claim.
+   *
+   * Measured before this existed: six concurrent calls sent six transactions.
+   * Only the first can succeed -- the escrow balance is gone once it lands, so
+   * the rest revert with NothingToClaim and burn the treasury's gas to learn
+   * something the first already knew. The balance read cannot see them, because
+   * none of them has landed yet.
+   *
+   * The button disables itself after a send, and that is worth having, but it is
+   * client-side: two tabs, a double click during the round trip, or a direct
+   * POST all walk straight past it. A guard against spending must live where the
+   * spending is decided.
+   *
+   * In memory on purpose. It exists only for the seconds a transaction is in
+   * flight, and a restart during those seconds leaves a balance that is either
+   * already claimed -- in which case the next attempt is refused for free by the
+   * balance read -- or never was.
+   */
+  private inFlight = new Set<string>();
+
   constructor(private deps: ClaimDeps) {}
 
   /** The splitter this launch pays through, or null. Read from provenance, which
@@ -157,6 +179,10 @@ export class AccountClaimService {
     // what one free read already answered.
     if (balance === 0n) return { state: 'nothing-to-claim' };
 
+    const key = `${splitter}:${ethers.getAddress(erc20)}`.toLowerCase();
+    if (this.inFlight.has(key)) return { state: 'in-flight' };
+    this.inFlight.add(key);
+
     try {
       const sent = await this.deps.signer.sendTransaction({
         to: splitter,
@@ -172,6 +198,11 @@ export class AccountClaimService {
         };
       }
       return { state: 'unavailable', detail: 'send_failed' };
+    } finally {
+      // Released whatever happened. A send that failed left no claim on chain,
+      // so refusing the retry would strand the fees behind a guard meant only
+      // to stop a duplicate.
+      this.inFlight.delete(key);
     }
   }
 }

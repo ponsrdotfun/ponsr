@@ -126,6 +126,51 @@ describe('AccountClaimService', () => {
     expect(result.state).toBe('sent');
   });
 
+  it('sends one transaction for concurrent claims of the same asset', async () => {
+    /**
+     * Measured before the guard existed: six concurrent calls sent SIX
+     * transactions. Only the first can succeed -- once it lands the escrow
+     * balance is gone, so the rest revert with NothingToClaim and burn the
+     * treasury's gas. The balance read cannot see them because none of them
+     * has landed yet, and the button's own disabling is client-side.
+     */
+    const { deps: d, sent } = deps({
+      signer: {
+        sendTransaction: async (tx: any) => {
+          sent2.push(tx);
+          await new Promise((r) => setTimeout(r, 25));
+          return { hash: '0x' + 'a'.repeat(64), wait: async () => ({} as any) };
+        },
+      },
+    });
+    const sent2: any[] = [];
+    const service = new AccountClaimService(d);
+    const results = await Promise.all(Array.from({ length: 6 }, () => service.claim(ok)));
+
+    expect(sent2).toHaveLength(1);
+    expect(results.filter((r) => r.state === 'sent')).toHaveLength(1);
+    expect(results.filter((r) => r.state === 'in-flight')).toHaveLength(5);
+    void sent;
+  });
+
+  it('releases the guard so a failed send can be retried', async () => {
+    // A send that failed left no claim on chain. Refusing the retry would
+    // strand the fees behind a guard meant only to stop a duplicate.
+    let calls = 0;
+    const { deps: d } = deps({
+      signer: {
+        sendTransaction: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error('network unreachable');
+          return { hash: '0x' + 'b'.repeat(64), wait: async () => ({} as any) };
+        },
+      },
+    });
+    const service = new AccountClaimService(d);
+    expect((await service.claim(ok)).state).toBe('unavailable');
+    expect((await service.claim(ok)).state).toBe('sent');
+  });
+
   it('refuses a launch with no recorded splitter', async () => {
     const { deps: d, sent } = deps({
       db: {
