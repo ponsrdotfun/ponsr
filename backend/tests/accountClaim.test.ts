@@ -3,7 +3,7 @@
  *
  * `claimAndSplit` pays the creator whoever calls it, so a wrong claim cannot
  * steal. What it CAN do is spend the treasury's gas on a stranger, repeatedly,
- * for anyone who guesses a launch id -- so ownership is read from the session
+ * for anyone who guesses a token address -- so ownership is read from the session
  * and never from the request, and the splitter's own `creator()` is re-read
  * from chain before a single wei of gas is committed.
  */
@@ -15,6 +15,8 @@ const ESCROW = '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e';
 const WALLET = '0xcdce6c82D995d3223D4e956A3C28D36BaD875dc0';
 const STRANGER = '0x1111111111111111111111111111111111111111';
 const ERC20 = '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC';
+/** Microduck, whose splitter is the one above. */
+const TOKEN = '0xC9158abF265aa26766154269f9B3D417f7771d0A';
 
 const encodedAddress = (a: string) => `0x${a.toLowerCase().replace('0x', '').padStart(64, '0')}`;
 const encodedUint = (n: bigint) => `0x${n.toString(16).padStart(64, '0')}`;
@@ -23,7 +25,10 @@ function deps(overrides: any = {}) {
   const sent: any[] = [];
   const base = {
     db: {
-      listLaunchesForUser: (id: string) => (id === 'user_1' ? [{ id: 'launch_1' }] : []),
+      // The column names mirror db.ts's own aliases. A mock that invented a
+      // different shape would only report this test's expectations back.
+      listLaunchesForUser: (id: string) =>
+        id === 'user_1' ? [{ id: 'launch_1', tokenAddress: TOKEN }] : [],
       getLaunchProvenance: () => ({ splitter: SPLITTER, feeEscrow: ESCROW }),
     },
     provider: {
@@ -43,7 +48,7 @@ function deps(overrides: any = {}) {
   return { deps: base as any, sent };
 }
 
-const ok = { xUserId: 'user_1', wallet: WALLET, launchId: 'launch_1', erc20: ERC20 };
+const ok = { xUserId: 'user_1', wallet: WALLET, token: TOKEN, erc20: ERC20 };
 
 describe('AccountClaimService', () => {
   it('sends the claim for a launch the signed-in identity owns', async () => {
@@ -60,7 +65,7 @@ describe('AccountClaimService', () => {
 
   it('refuses a launch the signed-in identity does not own, without spending gas', async () => {
     const { deps: d, sent } = deps();
-    const result = await new AccountClaimService(d).claim({ ...ok, launchId: 'launch_someone_else' });
+    const result = await new AccountClaimService(d).claim({ ...ok, token: '0x' + 'b'.repeat(40) });
     expect(result.state).toBe('not-yours');
     expect(sent).toHaveLength(0);
   });
@@ -68,7 +73,7 @@ describe('AccountClaimService', () => {
   it('takes the identity from the session, never from the request', async () => {
     const { deps: d, sent } = deps();
     // No session identity at all: a launch id alone must never be enough.
-    const result = await new AccountClaimService(d).claim({ launchId: 'launch_1', erc20: ERC20 });
+    const result = await new AccountClaimService(d).claim({ token: TOKEN, erc20: ERC20 });
     expect(result.state).toBe('unauthenticated');
     expect(sent).toHaveLength(0);
   });
@@ -100,7 +105,7 @@ describe('AccountClaimService', () => {
     const result: any = await new AccountClaimService(d).claim(ok);
     // Until a policy permits calls to splitter addresses, every claim is denied.
     // Saying so is what sends an operator to the policy rather than to this file.
-    expect(result.state).toBe('signer-refused');
+    expect(result.state).toBe('policy-refused');
     expect(result.detail).toMatch(/policy/i);
   });
 
@@ -112,10 +117,19 @@ describe('AccountClaimService', () => {
     expect(result.state).toBe('unavailable');
   });
 
+  it('matches the token whatever case it arrives in', async () => {
+    // Chain reads come back lowercase and the database stores what the launch
+    // wrote. A comparison that respected case would refuse a real owner their
+    // own launch, and refuse it as "not yours".
+    const { deps: d } = deps();
+    const result = await new AccountClaimService(d).claim({ ...ok, token: TOKEN.toLowerCase() });
+    expect(result.state).toBe('sent');
+  });
+
   it('refuses a launch with no recorded splitter', async () => {
     const { deps: d, sent } = deps({
       db: {
-        listLaunchesForUser: () => [{ id: 'launch_1' }],
+        listLaunchesForUser: () => [{ id: 'launch_1', tokenAddress: TOKEN }],
         getLaunchProvenance: () => ({ splitter: null, feeEscrow: ESCROW }),
       },
     });

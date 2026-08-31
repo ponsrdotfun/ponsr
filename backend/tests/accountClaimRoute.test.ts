@@ -17,6 +17,7 @@ import { accountRouter } from '../src/accountRoutes';
 const WALLET = '0xcdce6c82D995d3223D4e956A3C28D36BaD875dc0';
 const ORIGIN = 'https://ponsr.fun';
 const ERC20 = '0x' + 'd'.repeat(40);
+const TOKEN = '0x' + 'c'.repeat(40);
 
 describe('POST /api/account/claim', () => {
   let server: any, base: string, claimCalls: any[];
@@ -54,7 +55,7 @@ describe('POST /api/account/claim', () => {
     fetch(`${base}/api/account/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
-      body: JSON.stringify({ launchId: 'launch_1', erc20: ERC20 }),
+      body: JSON.stringify({ token: TOKEN, erc20: ERC20 }),
     });
 
   const signedIn = { cookie: '__Host-ponsr_session=good; __Host-ponsr_csrf=tok', 'x-csrf-token': 'tok' };
@@ -88,7 +89,7 @@ describe('POST /api/account/claim', () => {
     const res = await fetch(`${base}/api/account/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'https://evil.example', ...signedIn },
-      body: JSON.stringify({ launchId: 'launch_1', erc20: ERC20 }),
+      body: JSON.stringify({ token: TOKEN, erc20: ERC20 }),
     });
     expect(res.status).toBe(403);
     expect(claimCalls).toHaveLength(0);
@@ -97,7 +98,7 @@ describe('POST /api/account/claim', () => {
   it('reports a signer refusal as 503, not 500', async () => {
     // The operator can change a policy; this request was not at fault, and the
     // status code is what tells a monitor which of those two it is looking at.
-    await boot({ claim: () => ({ state: 'signer-refused', detail: 'policy' }) });
+    await boot({ claim: () => ({ state: 'policy-refused', detail: 'policy' }) });
     const res = await post(signedIn);
     expect(res.status).toBe(503);
   });

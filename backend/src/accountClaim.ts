@@ -44,7 +44,7 @@ export type ClaimOutcome =
   | { state: 'no-splitter' }
   | { state: 'nothing-to-claim' }
   | { state: 'wallet-mismatch' }
-  | { state: 'signer-refused'; detail: string }
+  | { state: 'policy-refused'; detail: string }
   | { state: 'unavailable'; detail: string };
 
 export interface ClaimDeps {
@@ -111,16 +111,31 @@ export class AccountClaimService {
   async claim(input: {
     xUserId?: string;
     wallet?: string;
-    launchId?: string;
+    token?: string;
     erc20?: string;
   }): Promise<ClaimOutcome> {
-    const { xUserId, wallet, launchId, erc20 } = input;
+    const { xUserId, wallet, token, erc20 } = input;
     if (!xUserId || !wallet) return { state: 'unauthenticated' };
-    if (!launchId || !erc20 || !ADDRESS.test(erc20)) return { state: 'unavailable', detail: 'invalid_request' };
+    if (!token || !ADDRESS.test(token) || !erc20 || !ADDRESS.test(erc20)) {
+      return { state: 'unavailable', detail: 'invalid_request' };
+    }
 
-    // Ownership from the database, never from the request.
-    const owns = this.deps.db.listLaunchesForUser(xUserId).some((l: any) => String(l.id) === launchId);
-    if (!owns) return { state: 'not-yours' };
+    /**
+     * The caller names a TOKEN, because a token address is the only identifier
+     * a reader has: it is on chain, it is on the page, and it is in the public
+     * escrow record. The database row id is internal and the website has no way
+     * to learn it -- a route that demanded one would refuse every real click as
+     * "not yours", which is the most misleading answer available.
+     *
+     * Ownership is still resolved HERE, from the launches belonging to the
+     * signed-in numeric X id. The request supplies a subject, never a claim.
+     */
+    const wanted = token.toLowerCase();
+    const owned = this.deps.db
+      .listLaunchesForUser(xUserId)
+      .find((l: any) => String(l.tokenAddress ?? '').toLowerCase() === wanted);
+    if (!owned) return { state: 'not-yours' };
+    const launchId = String(owned.id);
 
     const splitter = this.splitterFor(launchId);
     if (!splitter) return { state: 'no-splitter' };
@@ -152,8 +167,8 @@ export class AccountClaimService {
     } catch (error) {
       if (isPolicyRefusal(error)) {
         return {
-          state: 'signer-refused',
-          detail: 'The signer policy does not permit calls to splitter addresses.',
+          state: 'policy-refused',
+          detail: 'The signing policy does not permit calls to splitter addresses.',
         };
       }
       return { state: 'unavailable', detail: 'send_failed' };

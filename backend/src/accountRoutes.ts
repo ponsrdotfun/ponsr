@@ -21,7 +21,7 @@ export function accountRouter(service:AccountAuthService,claims?:AccountClaimSer
    * and an attacker who cannot steal can still make Ponsr pay to do nothing.
    *
    * The identity comes from the SESSION. Nothing about who the caller is may be
-   * read from the body; `launchId` and `erc20` are the only inputs trusted, and
+   * read from the body; `token` and `erc20` are the only inputs read, and
    * both are checked against the caller's own launches before anything is sent.
    */
   r.post('/account/claim',async(req,res)=>{
@@ -34,10 +34,10 @@ export function accountRouter(service:AccountAuthService,claims?:AccountClaimSer
     if(!csrf||csrf!==decodeURIComponent(cookieValue(req.get('cookie'),csrfCookie)||''))return res.status(403).json({state:'unavailable',detail:'csrf_rejected'});
     const limit=claimLimit.check();
     if(!limit.allowed){res.set('Retry-After',String(limit.resetInSeconds));return res.status(429).json({state:'unavailable',detail:'rate_limited'});}
-    const outcome:any=await claims.claim({xUserId:session.identity.xUserId,wallet:session.wallet.address,launchId:String(req.body?.launchId||''),erc20:String(req.body?.erc20||'')});
+    const outcome:any=await claims.claim({xUserId:session.identity.xUserId,wallet:session.wallet.address,token:String(req.body?.token||''),erc20:String(req.body?.erc20||'')});
     // A signer refusal is 503 rather than 500: it is a configuration the
     // operator can change, not a fault in this request.
-    const status=outcome.state==='sent'?200:outcome.state==='unauthenticated'?401:outcome.state==='not-yours'?403:outcome.state==='signer-refused'?503:409;
+    const status=outcome.state==='sent'?200:outcome.state==='unauthenticated'?401:outcome.state==='not-yours'?403:outcome.state==='policy-refused'?503:409;
     return res.status(status).json(outcome);
   });
   r.post('/auth/logout',(req,res)=>{try{const ok=service.logout(req.get('origin'),cookieValue(req.get('cookie'),sessionCookie),req.get('x-csrf-token'));res.setHeader('Set-Cookie',[expireCookie(sessionCookie),expireCookie(csrfCookie)]);return res.status(ok?200:401).json({state:ok?'unauthenticated':'error'});}catch{return res.status(403).json({state:'error',problem:'request_rejected'});}});
