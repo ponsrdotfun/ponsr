@@ -95,7 +95,7 @@ test('the page asks with a CSRF token and never invents an outcome it was not gi
   // Every outcome the service can return is named here. An unnamed one falls to
   // "temporarily unavailable" -- honest, but it must not be where a policy
   // refusal lands, because that sends somebody hunting a bug that is a setting.
-  for (const state of ['sent', 'policy-refused', 'nothing-to-claim', 'not-yours', 'wallet-mismatch', 'unauthenticated']) {
+  for (const state of ['sent', 'policy-refused', 'nothing-to-claim', 'in-flight', 'not-yours', 'wallet-mismatch', 'unauthenticated']) {
     assert.ok(control.includes(`'${state}'`) || control.includes(`${state}:`), `${state} must be reported in its own words`);
   }
   // A successful send must not re-arm the button: a second click spends gas to

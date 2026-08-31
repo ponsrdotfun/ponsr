@@ -616,6 +616,7 @@ function claimControl(launch, asset) {
       sent: 'Sent. The split pays your wallet directly.',
       'policy-refused': 'The signing policy does not permit this yet. Nothing was sent and nothing was spent.',
       'nothing-to-claim': 'Nothing has accrued for this asset yet.',
+      'in-flight': 'A collection for this asset is already on its way.',
       'not-yours': 'This launch does not pay the signed-in wallet.',
       'wallet-mismatch': 'The splitter on chain pays a different address than this session.',
       unauthenticated: 'The session ended. Sign in again.',
