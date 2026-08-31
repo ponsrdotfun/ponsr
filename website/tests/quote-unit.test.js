@@ -109,3 +109,47 @@ test('the token panel frames the picture instead of cropping it', () => {
   const img = css.match(/\.dynamic-token-panel \.token-art\.has-image img \{[^}]*\}/)?.[0] ?? '';
   assert.match(img, /object-fit: *contain/, 'the picture is still cropped to the frame');
 });
+
+/**
+ * EVERY LAUNCH NAMES ITS FEE SPLITTER.
+ *
+ * The launch event does not carry the splitter, so the feed published
+ * `splitter: null` for every launch except the one committed by hand, and the
+ * token page showed an empty "Fee splitter" row.
+ *
+ * Nothing was ever lost by that -- the splitter exists and is correctly wired
+ * on chain, and the backend records it in `launch_provenance`. It was the SITE
+ * that could not see it. Verified independently for NOBI's: creator() is the
+ * launcher's wallet, treasury() is Ponsr's, and escrow() is the current V2
+ * deployment's own escrow.
+ */
+test('the feed names a splitter for every launch', () => {
+  const feed = JSON.parse(read('website/data/launches.json'));
+  for (const launch of feed.launches) {
+    assert.match(
+      String(launch.splitter ?? ''),
+      /^0x[a-fA-F0-9]{40}$/,
+      `${launch.symbol} has no fee splitter`
+    );
+  }
+});
+
+test('the splitter is decoded only from THIS deployment\u2019s calldata', async () => {
+  const { DEPLOYMENT } = await import('../../netlify/functions/lib/collector.mjs');
+  const script = read('scripts/refresh-snapshot.mjs');
+
+  // The layout belongs to the deployment, not to the script: a superseded
+  // factory takes a different tuple, and the same word offset there is a
+  // different field -- which yields a plausible address that is not a splitter.
+  assert.equal(DEPLOYMENT.launchSelector, '0xf35abbcf');
+  assert.equal(DEPLOYMENT.feeWalletWord, 8);
+  assert.match(script, /startsWith\(DEPLOYMENT\.launchSelector\)/);
+  assert.match(script, /DEPLOYMENT\.feeWalletWord/);
+
+  // A word holding twenty non-zero bytes is not a splitter.
+  assert.match(script, /eth_getCode/);
+  assert.match(script, /is not a contract; leaving the splitter unrecorded/);
+
+  // And a committed splitter is never overwritten, nor quietly contradicted.
+  assert.match(script, /committed splitter \$\{prior\.splitter\} is not what the calldata reports/);
+});
