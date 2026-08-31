@@ -1396,3 +1396,31 @@ a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-of
   .nav-links { gap:.15rem; padding:.22rem; }
   .nav-links a { padding:.38rem .7rem; font-size:.78rem; }
 }
+
+/* --------------------------------------------------------------------------
+   THE FIRST THING A VISITOR SEES SHOULD MOVE TOO
+
+   `.reveal-immediate` set `transition:none` for anything already in view at
+   load. The reasoning was sound -- content that is already visible must not
+   appear to arrive from a scroll -- but the effect was that the one part of
+   every page a visitor sees FIRST was the one part with its motion switched
+   off. Everything below the fold animated; the hero simply existed.
+
+   It is staged on load instead: a short, ordered entrance that settles. Motion
+   that introduces a page, not motion that decorates it.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion:no-preference) {
+  .ready .reveal.reveal-immediate {
+    transition:none;
+    animation:revealEnter .78s var(--ease) both;
+  }
+  .ready .reveal.reveal-step-2 { animation-delay:.07s; }
+  .ready .reveal.reveal-step-3 { animation-delay:.14s; }
+  .ready .reveal.reveal-step-4 { animation-delay:.2s; }
+  .ready .reveal.reveal-step-5 { animation-delay:.25s; }
+  .ready .reveal.reveal-step-6 { animation-delay:.29s; }
+  @keyframes revealEnter {
+    from { opacity:0; transform:translate3d(0,16px,0) scale(.994); filter:blur(3px); }
+    to { opacity:1; transform:none; filter:none; }
+  }
+}

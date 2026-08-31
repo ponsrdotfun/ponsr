@@ -175,8 +175,18 @@ test('premium environment has layered cursor-reactive depth and bounded reduced 
   assert.match(app, /data-cursor-glow/);
   assert.match(app, /pointer:\s*fine/);
   assert.match(app, /\.animate\(/);
-  assert.match(app, /rect\.top<innerHeight&&rect\.bottom>0[^\n]+reveal-immediate/);
-  assert.match(css, /\.ready \.reveal\.reveal-immediate\s*\{[^}]*transition:\s*none/);
+  // Content already in view at load must not appear to arrive from a scroll, so
+  // it is still marked `reveal-immediate` and still has the scroll transition
+  // switched off. This assertion was pinned to the minified one-line form of
+  // that check, which is formatting rather than behaviour.
+  assert.match(app, /rect\.top < innerHeight && rect\.bottom > 0/);
+  assert.match(app, /'shown', 'reveal-immediate'/);
+  assert.match(css, /\.ready \.reveal\.reveal-immediate \{[\s\S]{0,120}?transition:none/);
+  // But not switched off ENTIRELY: that left the one part of every page a
+  // visitor sees first as the only part that never moved. It is staged on load
+  // instead, and the stagger is capped so the last element is not late.
+  assert.match(css, /animation:revealEnter/);
+  assert.match(css, /\.ready \.reveal\.reveal-step-6 \{ animation-delay:\.29s; \}/);
   assert.doesNotMatch(app, /\.style\.|setAttribute\(['"]style/);
   assert.match(css, /\.ambient\s*\{[^}]*position:\s*fixed[^}]*height:\s*auto/s);
   assert.match(css, /animation-timeline:\s*scroll\(root block\)/);

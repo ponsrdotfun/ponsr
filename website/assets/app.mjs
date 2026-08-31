@@ -396,10 +396,26 @@ function revealOnScroll() {
       observer.unobserve(entry.target);
     }
   }, { rootMargin: '0px 0px 12% 0px', threshold: 0.04 });
+  let immediate = 0;
   for (const node of targets) {
     const rect=node.getBoundingClientRect();
-    if(rect.top<innerHeight&&rect.bottom>0)node.classList.add('shown','reveal-immediate');
-    else observer.observe(node);
+    if (rect.top < innerHeight && rect.bottom > 0) {
+      /**
+       * Above the fold at load: staged, not skipped.
+       *
+       * This used to add `reveal-immediate`, which sets `transition:none` --
+       * so the one part of every page a visitor sees first was the one part
+       * with its motion deliberately switched off. Everything simply existed,
+       * and only content below the fold ever moved.
+       *
+       * A step class rather than an inline delay, because this site's CSP
+       * forbids inline styles and a test enforces it. Capped at six: a stagger
+       * that keeps growing makes the last element feel late rather than
+       * considered.
+       */
+      immediate += 1;
+      node.classList.add('shown', 'reveal-immediate', `reveal-step-${Math.min(immediate, 6)}`);
+    } else observer.observe(node);
   }
   // Content must not remain invisible when a browser restores scroll position,
   // suppresses intersection callbacks, or captures a full page without scrolling.
