@@ -1292,3 +1292,27 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
 /* Unknown is neither reassuring nor alarming: it is dim, because a gate nobody
    could read must not be mistaken for one that is shut. */
 .verifiable-gate[data-gate='unknown'] strong { color:var(--dim); }
+
+/* --------------------------------------------------------------------------
+   A CARD IS NOT A TEXT LINK
+
+   The what-if directory renders each launch as `<a class="token-card">`, and the
+   anchor's own underline is drawn across everything inside it: the name, the
+   symbol, "OPEN LAB →", and the provenance footnote all arrived underlined.
+   Each child computes `text-decoration: none` individually, which is why this
+   survived — the line belongs to the anchor, not to them.
+
+   Removing it takes the affordance away, so it is replaced with one that suits
+   a card: the border lifts and the whole surface moves a little.
+   -------------------------------------------------------------------------- */
+a.token-card { text-decoration:none; }
+@media (hover:hover) and (pointer:fine) {
+  a.token-card { transition:border-color .22s var(--ease),transform .22s var(--ease),background .22s var(--ease); }
+  a.token-card:hover { border-color:rgba(70,200,140,.32); transform:translateY(-2px); }
+  a.token-card:hover .go { color:var(--emerald-bright); }
+}
+a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:3px; }
+
+/* The provenance line is identical on every card in the directory, so it is
+   context rather than content. At 13.44px it was competing with the symbol. */
+.simulator-directory .token-card .footer-note { font-size:.72rem; color:var(--dim); line-height:1.45; }

@@ -176,3 +176,24 @@ test('a gate that could not be read is never drawn as closed', () => {
   // And it must not inherit the closed colour by omission.
   assert.match(css, /\.verifiable-gate\[data-gate='unknown'\] strong \{ color:var\(--dim\); \}/);
 });
+
+/**
+ * A CARD IS NOT A TEXT LINK.
+ *
+ * The what-if directory renders each launch as `<a class="token-card">`, and the
+ * anchor's own underline is drawn across everything inside it — the name, the
+ * symbol, "OPEN LAB →" and the provenance footnote all arrived underlined.
+ *
+ * Every child computes `text-decoration: none` individually, which is exactly
+ * why this survived: inspecting any one of them says the underline is not there,
+ * because the line belongs to the anchor rather than to its contents.
+ */
+test('a card link does not underline its own contents', () => {
+  const css = read('website/assets/site.css');
+  assert.match(css, /a\.token-card \{ text-decoration:none; \}/);
+
+  // Removing an affordance without replacing it is a different defect, so the
+  // hover and focus states have to exist too.
+  assert.match(css, /a\.token-card:hover \{[^}]*border-color/);
+  assert.match(css, /a\.token-card:focus-visible \{[^}]*outline/);
+});
