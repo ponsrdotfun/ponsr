@@ -62,7 +62,7 @@ survives in historical notes.
   anti-abuse mitigations in `validator.ts` — those are required scope, not optional hardening.
 - **What-if simulator is gated behind an explicit connect-wallet step** (decided 2026-07-25),
   not auto-resolved from the X handle. Reasoning in Part 3 §9.
-- **Website is live at https://ponsr.fun** (17 smoke checks + 56 website tests). Netlify, auto-deploying from
+- **Website is live at https://ponsr.fun** (29 smoke checks + 131 website tests). Netlify, auto-deploying from
   `main` — a push publishes, there is no manual step. Three routes in one static file:
   `/` landing, `/explore` board, `/token/SYMBOL` detail. `PRETTY_URLS` is `true`; the router
   still reads the old `?view=` / `?token=` forms, so existing links keep working.
@@ -213,10 +213,13 @@ The freeze is a default, not a prohibition. What it means concretely:
 - No backend feature work, refactor or dependency change without a reason that names a defect
   or a brief. "While I'm in here" is exactly what it exists to stop.
 - The public gate stays **false**. Opening it is an owner decision with its own authorisation,
-  not a step in some other task.
-- **Every remaining chain action that moves value needs its own fresh authorisation.** The
-  one-canary authorisation of 2026-08-28 is consumed. The obvious next one — trading against
-  the curve and running `collect:v2` to prove the 95/5 split end to end — is a financial action
+  not a step in some other task. It has been opened and closed twice since, each time for a
+  single owner-authorised launch and closed again immediately afterwards — that is the shape
+  such a decision takes, not a precedent for leaving it open.
+- **Every remaining chain action that moves value needs its own fresh authorisation.** Three
+  have been granted and all three are consumed: the canary of 2026-08-28, and the Microduck
+  and NOBI launches of 2026-08-30 and 2026-08-31. The obvious next one — trading against the
+  curve and running `collect:v2` to prove the 95/5 split end to end — is a financial action
   and is NOT covered by anything already granted.
 - Security and correctness fixes are always in scope. A freeze on features is not a freeze on
   defects.
@@ -296,24 +299,31 @@ Still blocked on the owner:
    to be sequenced with the canary plan — is history now, and is kept only in
    `PONSR-DEPLOY-PAUSED-REPORT.txt`.
 
-### Production, as actually deployed (2026-08-25)
+### Production, as actually deployed (2026-08-31)
 
-`ponsr-backend` on Fly runs **commit `dd9fcbe`, release v35**, image
-`sha256:bca351d294d589dddef8847dfc334409a57057d40c7ea3a76dbc79b09c56ae84`. One machine
+`ponsr-backend` on Fly runs **release v47**, image
+`sha256:3489ae266369ddb03b69055048a8b748df9ffda84e11001bdcd888481190374d` (deployed as v46;
+v47 is that image with `PUBLIC_LAUNCH_ENABLED` set back to false). One machine
 (`867634bee0e048`, `iad`), volume `vol_r1j1nwjzdx6p7q3r` attached. Rollback target is the
-exact previous digest, `sha256:2676be6325aea318abf7e4888320ebed9cf9f2c7a8c55b8c40a76f0bed1452a3`
-(v34, source `e92b23b`) — name the digest, never "the previous release".
+exact previous digest, `sha256:e1474a314a58ce9208ba4adee782fe4c6449df2ee905761e348e10e4e62ef13d`
+(v45) — name the digest, never "the previous release".
 
-Live `/status` serves the typed `spend` envelope: `rolling-24h`, chain 4663,
-`pons-v2-current-7ed`, factory `0x7eD598…EC7e`, treasury pinned to the hot wallet,
-`publicLaunchEnabled: false`, `capWei` 0.01 ETH. Overall `degraded` is CORRECT —
-`public-launches` is the only non-ok check and it must stay paused.
+Live `/status/core` reads `ok: true`, `problems: []`, `publicLaunchEnabled: false`. On the
+full `/status`, overall `degraded` is CORRECT — `public-launches` is the only non-ok check
+and it must stay paused. **`mention-sweep` reads `degraded` for the first 300 s after any
+restart**, because `setInterval` fires one interval AFTER boot and a sweep that has never run
+has proven nothing about itself. That is not a fault, and it was misread as one twice in a
+single session; wait one interval before diagnosing it.
 
-Five settings are now established deliberately rather than inherited:
-`TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`, `REPLY_INCLUDE_LINK=false`,
-and the two ceilings `TREASURY_MAX_FEE_WEI` and `TREASURY_GAS_RESERVE_WEI`, both 0.002 ETH.
+Five settings are established deliberately rather than inherited:
+`TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`, **`REPLY_INCLUDE_LINK=true`**
+(changed 2026-08-31 — replies now carry a link to the token's page, at $0.200 per post against
+$0.015 without one), and the two ceilings `TREASURY_MAX_FEE_WEI` and
+`TREASURY_GAS_RESERVE_WEI`, both 0.002 ETH.
 Fly secret VALUES cannot be read, so their old values are not merely unknown but unknowable;
-what is recorded is what they ARE.
+what is recorded is what they ARE. **A clean boot is not evidence of a setting's value**:
+`parseAcknowledgement` accepts `false` as cleanly as `true`, so the only proof that
+`REPLY_INCLUDE_LINK` is on is a reply that carries a link — which the NOBI launch produced.
 
 **`TREASURY_GAS_RESERVE_WEI` is ONE COMBINED budget for the complete two-transaction canary
 run — splitter creation plus token launch — not a per-transaction allowance.** It was passed
@@ -433,10 +443,10 @@ missing authoritative figure plus a quiet calendar day published `daily-cap: ok`
 concurrent request could leave one response carrying `observedThrough=A` in the envelope
 while telling a human that B was serving.
 
-**Production runs v36 (`dd5a72e`) since 2026-08-26**, and the readiness fix works there:
-`/status` went from **HTTP 503 at 12.772 s** to **200 at 0.757 s**, with the readiness read
-at **74 ms**. The public gate stays false and `public-launches` is the only intended
-degraded check.
+**That fix reached production as v36 (`dd5a72e`) on 2026-08-26** and works there: `/status`
+went from **HTTP 503 at 12.772 s** to **200 at 0.757 s**, with the readiness read at
+**74 ms**. Production has moved on since — see "Production, as actually deployed" for what
+is running now.
 
 **What remained was a TAIL, and attributing it needed measurement rather than instinct.**
 Sampled 25 times against v36, three responses took 3 s or more; on two of those the non-ok
@@ -545,6 +555,74 @@ WETH, never ETH**, and the token half usually goes to zero; and `MAX_PROTOCOL_FE
 Whatever ratio is chosen, the only figures that may appear in user-facing copy are **66.5%
 and 3.5%** — they are what the contracts actually transfer, and anyone can check on-chain.
 
+### Website, launches and distribution (2026-08-31)
+
+The freeze's "next focus is website, data and distribution" produced this. Read it before
+assuming anything about what the site shows or what has launched.
+
+**THREE LAUNCHES EXIST, NOT ONE.** The canary is no longer the only record.
+
+```
+PSTONKS    0x7803f37e0Db73105c47D5A5F3D054a0ae47E2199   native ETH   splitter 0xF78DC016…f088a
+MICRODUCK  0xc9158abf265aa26766154269f9b3d417f7771d0a   NVDA         splitter 0x18d1d206…899D5
+NOBI       0x34392120b40DD6d2db9ffE8A0E79d33e454b575e   SPCX         splitter 0xa45a3615…fa955
+```
+
+Microduck and NOBI were launched by the owner from a personal X account, each under a
+one-launch authorisation with the public gate opened and closed around it. **Both
+authorisations are consumed.** NOBI is the first launch made WITH AN IMAGE, and it proved
+the whole path: the photo attached to the tweet travels as `logo` in the calldata, reads
+back from the token's own getter, and reaches the site. Its splitter was verified
+independently — `creator()` is the launcher's wallet, `treasury()` is Ponsr's, `escrow()` is
+this deployment's own escrow.
+
+**A shared token link now unfurls as the token.** Token pages carry per-token metadata and a
+rendered card; the card is drawn from one module used by both the build and an on-demand
+endpoint, so a link's preview cannot change because the site happened to redeploy. Several
+lessons in that work generalise:
+
+- **The renderer must carry its own fonts.** Netlify's build container ships a font set; its
+  Lambda runtime ships none, so identical code drew a correct card in one place and tofu
+  boxes in the other. Only fetching the deployed image and looking at it found that.
+- **A cached feed's miss is not an answer.** The launch feed is `max-age=60,
+  stale-while-revalidate=300` and was measured at `Age: 170`, so the newest launch was
+  invisible for exactly as long as it mattered. NOBI's own tweet unfurled as the generic
+  card because X crawled it in that window, and X keeps what it crawls.
+- **The picture is placed, not altered.** Three separate things were quietly changing it —
+  a cover crop, a circular mask that removed the corners of every square PFP, and a
+  `contain` fit that PADDED it with bars. What ships now only scales it.
+
+**A curve amount is denominated in the asset the launch is paired with.** `ethFromWei` baked
+`" ETH"` into its own return value, so Microduck's page stated a sell as
+`-0.320168264216621238 ETH` when not one wei of ETH was involved. The arithmetic was never
+wrong — NVDA carries 18 decimals like ETH — which is exactly why it survived: every number
+looked plausible and only the label lied.
+
+**The committed snapshot is the site's floor, and it goes stale on its own.** At two days
+old, discovery covered 1 547 782 blocks, `launch-feed` took **25.5 s**, returned
+`state: partial`, and a token that plainly exists dropped out of the list. After a refresh
+the same feed answered in **0.48 s**. `scripts/refresh-snapshot.mjs` refreshes it and a
+scheduled workflow runs every six hours; the script refuses to write a partial scan at all,
+and merges rather than overwrites, because the snapshot carries facts no getter reproduces.
+
+**The mention sweep is bounded now.** Every call to X was unbounded, and the sweep skips a
+tick while the previous one runs — so one hung request would have skipped every later tick,
+recorded neither success nor failure, and left `/status` reading `degraded` rather than
+`down` while the alert never fired. A stuck sweep still blocks, but every blocked tick now
+counts as a failure so the alert escalates.
+
+**Not proven, and worth stating.** The fee-collection path is still untested: no swap, trade
+or claim has been made, so 95/5 rests on the splitters' own constants and escrow bindings.
+And NOBI's tweet keeps the generic unfurl X cached before the fix; that fix will show itself
+on the next launch, not retroactively.
+
+**GitHub Actions minutes were exhausted on 2026-08-31**, which is why several fixes sat as
+open PRs rather than merged work. The cause was arithmetic, not volume: `verify.yml` fired on
+both `push` and `pull_request`, running the whole matrix twice over the same commit, and its
+second job runs on `windows-latest`, billed at twice the Linux rate, on every push including
+website-only changes it cannot test. Both are fixed; `push` is limited to `main` and the
+Windows job lives in its own workflow so it can carry a `paths` filter.
+
 ### Buildable right now, with no accounts needed — nothing left
 
 Every Part 5 / Part 7 requirement that was pure code is now built (see below), and the
@@ -581,13 +659,18 @@ Part 5 lists seven required Phase 1 mitigations. **All seven are now implemented
 - External dependencies (parser, wallet resolver, X client, treasury signer) are always
   injected via interfaces with a `Mock*` implementation for tests. Follow this pattern for any
   new external integration rather than hardcoding a real client into business logic.
-- The website has two suites: `node website/smoke-test.js` (**17 checks**, no install needed)
-  and `npm run test:website` (**56 tests**, the substantive one — data truth, source states,
+- The website has two suites: `node website/smoke-test.js` (**29 checks**, no install needed)
+  and `npm run test:website` (**131 tests**, the substantive one — data truth, source states,
   hostile metadata, motion and shell regressions). The smoke suite was 78 checks against the
   pre-V2 single-file site; the number moved when that file was replaced, and this line did not.
   Count them before quoting them.
   Several of those checks exist because a specific bug was found and fixed — read the comment
   above a check before changing it.
+
+  **CI runs BOTH suites now.** It ran only the smoke suite until 2026-08-31, because
+  `smoke-test.js` requires exactly one file — so the shell and link-preview suites had never
+  run in CI at all, and a commit landed with the card renderer changed and its own tests
+  failing while the workflow reported success. A test CI does not run is a comment.
 - The contract test workaround (`contracts-test/README.md`) exists for a sandbox network
   restriction. With normal network access, `npx hardhat compile && npx hardhat test` works too.
 
