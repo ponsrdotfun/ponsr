@@ -317,3 +317,61 @@ test('hero parallax sits on an element with no animation of its own', () => {
   const block = css.slice(css.indexOf('@supports (animation-timeline: scroll())'));
   assert.match(block.slice(0, 200), /@media \(prefers-reduced-motion: no-preference\)/);
 });
+
+/**
+ * THE WHITE FLASH HAD A CAUSE, AND IT WAS NOT THE TRANSITION.
+ *
+ * Measured: `body` was rgb(5,6,7) but `html` was transparent, so the browser
+ * painted its own canvas — white — for the moment before the page's background
+ * existed. Every navigation flashed, and no transition could have covered it,
+ * because the flash happens before any of that runs.
+ *
+ * `color-scheme: dark` is the part that does the work: the canvas is dark from
+ * the first frame, and scrollbars stop being light furniture on a dark page.
+ */
+test('the browser paints dark before the page does', () => {
+  const css = read('website/assets/site.css');
+  assert.match(css, /:root \{ color-scheme: dark; \}/);
+  assert.match(css, /^html \{ background: var\(--ink\); \}/m);
+  // Mobile browser chrome takes its colour from the meta tag, not the stylesheet.
+  assert.match(read('scripts/build-website.mjs'), /<meta name="theme-color" content="#050607">/);
+});
+
+test('a page transition is declared, bounded, and reducible', () => {
+  const css = read('website/assets/site.css');
+  assert.match(css, /@view-transition \{ navigation: auto; \}/);
+
+  // Short on purpose: a transition long enough to admire is one that makes the
+  // site feel slow the second time it is seen.
+  const out = css.match(/::view-transition-old\(root\) \{ animation:pageFadeOut ([\d.]+)s/)?.[1];
+  const inn = css.match(/::view-transition-new\(root\) \{ animation:pageFadeIn ([\d.]+)s/)?.[1];
+  assert.ok(out && inn, 'the transition has no stated duration');
+  assert.ok(Number(out) <= 0.3 && Number(inn) <= 0.35, `transition runs ${out}s/${inn}s, long enough to feel slow`);
+
+  // A reader who asked for less motion still gets the navigation, without the
+  // movement — suppressed, not left to blink.
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]{0,220}?animation:none/);
+});
+
+test('a view-transition name is unique on every page that has one', () => {
+  const css = read('website/assets/site.css');
+  assert.match(css, /\.nav \{ view-transition-name: ponsr-nav; \}/);
+
+  // Two elements sharing a name make the whole transition fail, so the selector
+  // must match exactly one element per page.
+  const pages = pages_().filter((file) => !file.includes('/social/'));
+  for (const file of pages) {
+    const html = read(file);
+    const count = (html.match(/class="nav"/g) ?? []).length;
+    assert.ok(count <= 1, `${file} has ${count} elements named ponsr-nav`);
+  }
+});
+
+function pages_() {
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const file = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(file) : file.endsWith('.html') ? [path.relative(root, file).split(path.sep).join('/')] : [];
+    });
+  return walk(path.join(root, 'website'));
+}

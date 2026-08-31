@@ -1460,3 +1460,50 @@ a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-of
     }
   }
 }
+
+/* --------------------------------------------------------------------------
+   THE WHITE FLASH HAD A CAUSE, AND IT WAS NOT THE TRANSITION
+
+   Measured: `body` is rgb(5,6,7) but `html` was transparent, so the browser
+   painted its own canvas — white — for the moment before the page's own
+   background existed. Every navigation flashed, and no amount of transition
+   would have covered it, because the flash happens before any of this runs.
+
+   `color-scheme: dark` is the part that does the work: the browser paints its
+   canvas dark from the very first frame, and the scrollbars and form controls
+   stop being light furniture on a dark page. The explicit background is the
+   belt to that braces.
+   -------------------------------------------------------------------------- */
+:root { color-scheme: dark; }
+html { background: var(--ink); }
+
+/* --------------------------------------------------------------------------
+   NAVIGATION THAT DISSOLVES INSTEAD OF BLINKING
+
+   A cross-document view transition: pure CSS, no script, and nothing to
+   coordinate. A browser without it simply navigates the way it does now, which
+   is why there is no fallback to maintain.
+
+   Kept short on purpose. A page transition long enough to admire is a page
+   transition that makes the site feel slow the second time you see it.
+   -------------------------------------------------------------------------- */
+@view-transition { navigation: auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) { animation:pageFadeOut .18s var(--ease) both; }
+  ::view-transition-new(root) { animation:pageFadeIn .26s var(--ease) both; }
+  @keyframes pageFadeOut { from { opacity:1; } to { opacity:0; } }
+  @keyframes pageFadeIn { from { opacity:0; transform:translate3d(0,6px,0); } to { opacity:1; transform:none; } }
+}
+/* A reader who asked for less motion still gets the navigation, without the
+   movement: the transition is suppressed rather than the page being left to
+   blink. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation:none; }
+}
+
+/* The header is the one thing on every page that should not appear to be
+   rebuilt on arrival, so it is carried across the transition rather than
+   cross-faded with the rest. */
+.nav { view-transition-name: ponsr-nav; }
