@@ -464,6 +464,7 @@ async function boot() {
   paintTokenPage(feed);
   paintDynamicTokenPage(feed, state);
   paintAccountSimulator(feed,state);
+  paintAccountPublicLaunches(feed);
 }
 
 boot();
@@ -544,4 +545,40 @@ async function wireCreatorFees() {
     // zero -- a figure a reader could act on must not be invented by a failure.
     if (host) host.replaceChildren(element('p', 'note-inline', 'The escrow record is temporarily unavailable. No balance is shown rather than a wrong one.'));
   }
+}
+
+/**
+ * The public launch record, on the account route that has no sign-in yet.
+ *
+ * Not a filtered view and it does not pretend to be: someone who launched a
+ * token can confirm it is recorded, with the same block and event time anyone
+ * else would read, before an account exists to claim it with.
+ */
+function paintAccountPublicLaunches(feed) {
+  const host = document.querySelector('[data-public-launch-rows]');
+  if (!host) return;
+  const launches = Array.isArray(feed?.launches) ? feed.launches.slice() : [];
+  if (!launches.length) {
+    host.replaceChildren(element('p', 'note-inline', 'The launch feed is unavailable, so no record is shown rather than an empty one.'));
+    return;
+  }
+  // Newest first: the record a reader came to check is usually the last one made.
+  launches.sort((a, b) => Number(b.blockNumber || 0) - Number(a.blockNumber || 0));
+
+  host.replaceChildren(
+    ...launches.map((launch) => {
+      const row = element('a', 'public-launch-row');
+      row.href = `/token/${String(launch.token).toLowerCase()}`;
+      const id = element('div', 'public-launch-id');
+      id.append(element('strong', '', launch.symbol || 'UNKNOWN'), element('small', '', launch.name || ''));
+      const pair = element('div', 'public-launch-cell');
+      pair.append(element('span', '', 'Paired with'), element('strong', '', launch.pairLabel || '—'));
+      const block = element('div', 'public-launch-cell');
+      block.append(element('span', '', 'Block'), element('strong', '', whole(launch.blockNumber)));
+      const when = element('div', 'public-launch-cell');
+      when.append(element('span', '', 'Event time'), element('strong', '', eventTime(launch.blockTimestamp)));
+      row.append(id, pair, block, when, element('i', 'public-launch-go', '→'));
+      return row;
+    })
+  );
 }

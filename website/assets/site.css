@@ -1190,3 +1190,33 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .account-workspace-body > .panel:nth-child(n+3) { animation-delay:.13s; }
   @keyframes accountPanelIn { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:none; } }
 }
+
+/* --------------------------------------------------------------------------
+   THE PUBLIC LAUNCH RECORD ON THE ACCOUNT ROUTE
+
+   A row per launch, columns aligned so a reader compares down rather than
+   across — the same reason the escrow figures are tabular. Whole rows are the
+   link, because a link that is only the symbol makes the rest of the row look
+   inert when it is the part being read.
+   -------------------------------------------------------------------------- */
+.public-launch-rows { display:grid; gap:.5rem; }
+.public-launch-row { display:grid; grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr)) auto; align-items:center; gap:1rem; padding:.72rem .9rem; border:1px solid var(--line-soft); border-radius:14px; background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.72)); text-decoration:none; transition:border-color .2s var(--ease),transform .2s var(--ease),background .2s var(--ease); }
+@media (hover:hover) and (pointer:fine) {
+  .public-launch-row:hover { border-color:rgba(70,200,140,.34); transform:translateX(2px); background:linear-gradient(158deg,rgba(22,34,30,.72),rgba(8,12,15,.8)); }
+}
+.public-launch-row:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }
+.public-launch-id strong { display:block; font-family:var(--font-mono); font-size:.9rem; color:var(--ivory); letter-spacing:.04em; }
+.public-launch-id small { display:block; color:var(--dim); font-size:.74rem; }
+.public-launch-cell { display:grid; gap:.12rem; min-width:0; }
+.public-launch-cell span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.public-launch-cell strong { font-family:var(--font-mono); font-size:.8rem; color:var(--steel); font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.public-launch-go { color:var(--emerald-bright); font-style:normal; }
+.public-launches .note-inline { color:var(--dim); font-size:.82rem; margin:0; }
+
+/* Columns collapse before they crush: four cells at 1fr each stop being
+   readable well before the viewport does. */
+@media (max-width:760px) {
+  .public-launch-row { grid-template-columns:minmax(0,1fr) auto; row-gap:.5rem; }
+  .public-launch-cell { grid-column:1 / -1; grid-template-columns:auto 1fr; display:grid; align-items:baseline; gap:.5rem; }
+  .public-launch-cell strong { text-align:right; }
+}

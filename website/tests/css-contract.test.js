@@ -64,3 +64,39 @@ test('a read-only badge does not wear the unavailable colour', () => {
   // appearance of one with none.
   assert.match(css, /\.state-badge\.status-readonly \{[^}]*color:var\(--emerald-bright\)/);
 });
+
+/**
+ * THE ACCOUNT LAUNCHES ROUTE HAD NOTHING ON IT ABOUT LAUNCHES.
+ *
+ * It is honest and empty: it will list launches bound to a signed-in identity,
+ * and there is no sign-in yet. But launches are the one subject where the record
+ * is completely public, so the page said nothing about the thing it is named
+ * after.
+ *
+ * The panel added is NOT a filtered view and must not imply it is. Someone who
+ * launched a token can confirm it is recorded, with the same block and event
+ * time anyone else reads, before an account exists to claim it with.
+ */
+test('the launches route carries the public record, and says that is what it is', () => {
+  const build = read('scripts/build-website.mjs');
+  const app = read('website/assets/app.mjs');
+
+  assert.match(build, /Public record &middot; no account required/);
+  assert.match(build, /route==='\/account\/launches' \? accountLaunches\(\) \+ accountPublicLaunches\(\)/);
+  // It must not claim to be scoped to anybody.
+  assert.match(build, /The complete current-V2 record, unfiltered/);
+
+  // Newest first: the record a reader came to check is usually the last one made.
+  assert.match(app, /launches\.sort\(\(a, b\) => Number\(b\.blockNumber \|\| 0\) - Number\(a\.blockNumber \|\| 0\)\)/);
+  // An unavailable feed shows nothing rather than an empty record.
+  assert.match(app, /no record is shown rather than an empty one/);
+});
+
+test('the wallet route is deliberately left alone', () => {
+  const build = read('scripts/build-website.mjs');
+  // There is no public record of somebody's embedded wallet, and putting
+  // Ponsr's treasury address under a heading that says "your wallet" would be
+  // worse than an empty page. Filling it would mean inventing a subject.
+  assert.doesNotMatch(build, /function accountWallet\(\)[\s\S]{0,600}?public-launch-rows/);
+  assert.doesNotMatch(build, /function accountWallet\(\)[\s\S]{0,600}?data-account-fee-escrow/);
+});

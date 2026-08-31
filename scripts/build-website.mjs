@@ -487,6 +487,21 @@ function accountOverview() {
   return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">One place for launches, creator trading fees, wallet access, and security—after identity and wallet continuity are verified.</p><div class="account-stats">${unavailableValue('Embedded wallet','Requires verified account binding.')}${unavailableValue('Native balance','No authenticated address is available.')}${unavailableValue('Creator fees','No reconciled account scope is available.')}${unavailableValue('Launches','No verified identity is connected.')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-deferred">Not shipped</span>X identity and existing-wallet access</li><li><span class="status-disabled">Disabled</span>Claims, send, swap, and signing</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
 }
 
+/**
+ * Every launch, as the public record already holds it.
+ *
+ * The route above is honest and empty: it will list launches bound to a signed-in
+ * identity, and there is no sign-in yet. That left a page with nothing on it about
+ * launches, which is the one subject where the record is completely public.
+ *
+ * This is not a filtered view and does not pretend to be. Someone who launched a
+ * token can confirm it is recorded, with the same block and event time anyone else
+ * would read, before an account exists to claim it with.
+ */
+function accountPublicLaunches() {
+  return `<section class="panel account-module public-launches" data-account-public-launches><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>Every verified launch</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">The complete current-V2 record, unfiltered. Signing in will narrow this to the launches bound to your identity; it will not reveal anything that is not already here.</p><div class="public-launch-rows" data-public-launch-rows><p class="note-inline">Reading the launch feed&hellip;</p></div></section>`;
+}
+
 function accountLaunches() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore"><span>Open public record</span></a></div></section>`;
 }
@@ -521,7 +536,7 @@ function accountSecurity() {
 }
 
 function accountPage(route='/account') {
-  const content = route==='/account/launches' ? accountLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
+  const content = route==='/account/launches' ? accountLaunches() + accountPublicLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
   const title = accountRoutes.find(([,href])=>href===route)?.[0] || 'Overview';
   const routeIntro = {
     '/account':['Creator operations','One command center for launches, fees, wallet continuity, and account authority.'],
