@@ -39,6 +39,7 @@ const MATRIX: Array<{
 }> = [
   { file: 'turnkey-read-policies.ts', mutates: false, signs: false, writesCredentials: false },
   { file: 'turnkey-verify-policy.ts', mutates: false, signs: true, writesCredentials: false },
+  { file: 'turnkey-verify-claim.ts', mutates: false, signs: true, writesCredentials: false },
   { file: 'turnkey-probe-creation.ts', mutates: false, signs: true, writesCredentials: false },
   { file: 'turnkey-policy-probe.ts', mutates: true, signs: true, writesCredentials: false },
   { file: 'turnkey-allow-v2-factory.ts', mutates: true, signs: false, writesCredentials: false },
