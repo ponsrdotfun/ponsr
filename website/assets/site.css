@@ -1507,3 +1507,64 @@ html { background: var(--ink); }
    rebuilt on arrival, so it is carried across the transition rather than
    cross-faded with the rest. */
 .nav { view-transition-name: ponsr-nav; }
+
+/* --------------------------------------------------------------------------
+   PRESS HAS TO FEEL LIKE PRESS
+
+   Audited: the whole stylesheet held exactly ONE `:active` rule, on `.btn`.
+   Cards, nav segments, copy buttons and sort tabs had none — they changed
+   colour on hover and then did nothing at all when actually pressed, which is
+   the moment a reader is asking the interface to confirm it heard them.
+
+   And nothing set `-webkit-tap-highlight-color`, so on a phone every tap drew
+   the OS's own grey box over the design. That single default undoes more
+   perceived quality than any animation adds.
+
+   TIMING IS THE WHOLE TRICK. The press is fast and the release settles: 90ms
+   down, 260ms back. Symmetric timing reads as a slideshow; asymmetric timing
+   reads as something with weight. The existing button used its 250ms hover
+   transition for both, so even the one press state that existed felt soft.
+   -------------------------------------------------------------------------- */
+.btn,
+.nav-links a,
+a.token-card,
+.launchpad-card,
+.ca-copy,
+.public-launch-row,
+[data-launch-sort] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn,
+  .nav-links a,
+  .ca-copy,
+  [data-launch-sort] {
+    transition-duration: .26s;
+  }
+  .btn:active,
+  .nav-links a:active,
+  .ca-copy:active,
+  [data-launch-sort]:active {
+    transition-duration: .09s;
+  }
+
+  /* Smaller controls move less: the same 3% on a nav segment and on a hero
+     button do not read as the same gesture. */
+  .btn:active { transform:scale(.972); }
+  .nav-links a:active { transform:scale(.985); }
+  .ca-copy:active,
+  [data-launch-sort]:active { transform:scale(.98); }
+
+  /* A card is pressed through the anchor that covers it, not through the
+     article, so the state has to be read from the child. */
+  a.token-card:active,
+  .public-launch-row:active { transform:translateY(0) scale(.992); transition-duration:.09s; }
+  .launchpad-card:has(.launchpad-card-link:active) { transform:translateY(-1px) scale(.994); transition-duration:.09s; }
+}
+
+/* Keyboard users never see :active, so the focus ring is what tells them the
+   control is theirs. Two of these families had none. */
+.ca-copy:focus-visible,
+[data-launch-sort]:focus-visible,
+.public-launch-row:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }

@@ -375,3 +375,46 @@ function pages_() {
     });
   return walk(path.join(root, 'website'));
 }
+
+/**
+ * PRESS HAS TO FEEL LIKE PRESS.
+ *
+ * Audited: the whole stylesheet held exactly ONE `:active` rule, on `.btn`.
+ * Cards, nav segments, copy buttons and sort tabs had none — they changed
+ * colour on hover and then did nothing at all when actually pressed, which is
+ * the moment a reader is asking the interface to confirm it heard them.
+ *
+ * And nothing set `-webkit-tap-highlight-color`, so on a phone every tap drew
+ * the OS's own grey box over the design. That single default undoes more
+ * perceived quality than any animation adds.
+ */
+test('every interactive family answers a press', () => {
+  const css = read('website/assets/site.css');
+  for (const selector of ['.nav-links a:active', '.ca-copy:active', 'a.token-card:active', '.public-launch-row:active']) {
+    assert.ok(css.includes(selector), `${selector} has no press state`);
+  }
+  // A card is pressed through the anchor that covers it, not through the
+  // article, so the state has to be read from the child.
+  assert.match(css, /\.launchpad-card:has\(\.launchpad-card-link:active\)/);
+  assert.match(css, /-webkit-tap-highlight-color: *transparent/);
+});
+
+test('the press is faster than the release', () => {
+  const css = read('website/assets/site.css');
+  // Symmetric timing reads as a slideshow; asymmetric reads as weight. The one
+  // press state that already existed used the 250ms hover transition for both,
+  // so even it felt soft.
+  const rest = css.match(/\.btn,\s*\n\s*\.nav-links a,\s*\n\s*\.ca-copy,\s*\n\s*\[data-launch-sort\] \{\s*transition-duration: *\.(\d+)s/)?.[1];
+  const press = css.match(/\.btn:active,[\s\S]{0,140}?transition-duration: *\.(\d+)s/)?.[1];
+  assert.ok(rest && press, 'the press and release timings are not both stated');
+  assert.ok(Number(press) < Number(rest), `press ${press} is not faster than release ${rest}`);
+});
+
+test('keyboard users get a ring where mouse users get a press', () => {
+  const css = read('website/assets/site.css');
+  // :active never fires for a keyboard user, so the focus ring is the only
+  // thing telling them the control is theirs. Two of these families had none.
+  for (const selector of ['.ca-copy:focus-visible', '[data-launch-sort]:focus-visible', '.public-launch-row:focus-visible']) {
+    assert.ok(css.includes(selector), `${selector} has no focus ring`);
+  }
+});
