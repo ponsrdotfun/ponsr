@@ -25,6 +25,7 @@
  * to write the comment differently rather than to loosen the pattern.
  */
 import { reduceSourceState, publicGateMessage } from './data-state.mjs';
+import { claimableBy } from './claim.mjs';
 import { byEventTimeDesc, normaliseLaunch } from './feed-model.mjs';
 import { element, setText } from './render.mjs';
 // The build renders these same facts. Sharing the formatters is what stops the
@@ -504,7 +505,7 @@ boot();
  * "nothing accrued" and "we could not ask" are different answers, and one of
  * them tells a creator there is no money waiting.
  */
-function paintCreatorFees(payload) {
+function paintCreatorFees(payload, session) {
   const host = document.querySelector('[data-fee-escrow-rows]');
   if (!host) return;
   const launches = Array.isArray(payload?.launches) ? payload.launches : [];
@@ -532,6 +533,7 @@ function paintCreatorFees(payload) {
       return row;
     }
 
+
     const grid = element('div', 'fee-escrow-assets');
     for (const asset of assets) {
       const cell = element('article', `fee-asset ${asset.state === 'observed' ? '' : 'unavailable'}`.trim());
@@ -544,6 +546,7 @@ function paintCreatorFees(payload) {
       } else {
         cell.append(element('strong', '', 'Unavailable'), element('small', '', asset.problem || 'The escrow balance could not be read.'));
       }
+      if (claimableBy(launch, asset, session)) cell.append(claimControl(launch, asset));
       grid.append(cell);
     }
     row.append(grid);
@@ -551,6 +554,68 @@ function paintCreatorFees(payload) {
   });
 
   host.replaceChildren(...rows);
+}
+
+/**
+ * One claim button, and the honest reporting of what happens next.
+ *
+ * Every outcome the server can return is named. A policy refusal in particular
+ * is NOT dressed as a generic failure: until a policy permits calls to splitter
+ * addresses every claim is refused, and telling the reader that plainly is the
+ * difference between "this is not switched on yet" and "this is broken".
+ */
+function claimControl(launch, asset) {
+  const wrap = element('div', 'fee-claim');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-ghost fee-claim-button';
+  button.textContent = 'Collect';
+  const note = element('small', 'fee-claim-note', '');
+  wrap.append(button, note);
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    setText(note, 'Sending…');
+    let outcome = { state: 'unavailable' };
+    try {
+      const response = await fetch('/api/account/claim', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'content-type': 'application/json',
+          'X-CSRF-Token': decodeURIComponent(accountCookie('__Host-ponsr_csrf')),
+        },
+        body: JSON.stringify({ launchId: launch.launchId ?? launch.token, erc20: asset.erc20 }),
+      });
+      outcome = await response.json();
+    } catch {
+      outcome = { state: 'unavailable', detail: 'network' };
+    }
+
+    const said = {
+      sent: 'Sent. The split pays your wallet directly.',
+      'policy-refused': 'The signing policy does not permit this yet. Nothing was sent and nothing was spent.',
+      'nothing-to-claim': 'Nothing has accrued for this asset yet.',
+      'not-yours': 'This launch does not pay the signed-in wallet.',
+      'wallet-mismatch': 'The splitter on chain pays a different address than this session.',
+      unauthenticated: 'The session ended. Sign in again.',
+    }[outcome.state] ?? 'Temporarily unavailable. Nothing was sent.';
+
+    setText(note, said);
+    wrap.dataset.claim = outcome.state;
+    if (outcome.state === 'sent' && /^0x[a-fA-F0-9]{64}$/.test(String(outcome.hash || ''))) {
+      const link = element('a', 'text-link', 'tx ↗');
+      link.href = `https://robinhoodchain.blockscout.com/tx/${outcome.hash}`;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      wrap.append(link);
+    }
+    // Re-enabling a control whose transaction is already on its way invites a
+    // second one that spends gas to be refused.
+    if (outcome.state !== 'sent') button.disabled = false;
+  });
+
+  return wrap;
 }
 
 async function wireCreatorFees() {
@@ -563,7 +628,11 @@ async function wireCreatorFees() {
       signal: AbortSignal.timeout(9000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    paintCreatorFees(await response.json());
+    // The session is read alongside, so a control is offered only where it
+    // applies. An unreadable session simply means no controls, never a wrong one.
+    let session = { state: 'unauthenticated' };
+    try { session = (await readAccountJson('/api/account/session')).body; } catch { /* no controls */ }
+    paintCreatorFees(await response.json(), session);
   } catch {
     // The panel says why rather than emptying itself, and never falls back to
     // zero -- a figure a reader could act on must not be invented by a failure.

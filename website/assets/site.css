@@ -1115,6 +1115,17 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
 .fee-asset.unavailable strong { color:var(--dim); font-size:.86rem; }
 .fee-asset.unavailable small { color:var(--dim); }
 
+/* The claim control sits inside the asset cell it applies to, so there is never
+   a question of WHICH balance a button would collect. It stays quiet until
+   hovered: the number is the subject of the cell, not the button. */
+.fee-claim { display:grid; gap:.3rem; margin-top:.45rem; }
+.fee-claim .btn { width:max-content; padding:.32rem .7rem; font-size:.68rem; letter-spacing:.08em; }
+.fee-claim-note { color:var(--dim); font-size:.68rem; line-height:1.45; font-family:var(--font-mono); }
+.fee-claim[data-claim='sent'] .fee-claim-note { color:var(--emerald-bright); }
+.fee-claim[data-claim='policy-refused'] .fee-claim-note { color:var(--amber); }
+.fee-claim .text-link { font-size:.68rem; }
+.fee-claim .btn[disabled] { opacity:.45; cursor:default; }
+
 .fee-escrow .note-inline { color:var(--dim); font-size:.82rem; margin:0; }
 
 /* Entry only: rows fade up once as the panel arrives, then hold still. */
