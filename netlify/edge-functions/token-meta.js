@@ -49,19 +49,53 @@ export default async (request, context) => {
   if (!ADDRESS.test(address)) return response;
   if (!(response.headers.get('content-type') ?? '').includes('text/html')) return response;
 
-  let launch = null;
-  try {
-    const feed = await fetch(new URL('/.netlify/functions/launch-feed', url), {
+  /**
+   * A MISS IN A CACHED FEED IS NOT AN ANSWER.
+   *
+   * The feed is served `max-age=60, stale-while-revalidate=300`, so the CDN can
+   * hand back a copy several minutes old -- measured at `Age: 170` on an
+   * ordinary request. Consulting only that copy meant the newest launch was
+   * invisible for exactly as long as it mattered most.
+   *
+   * That is not hypothetical. NOBI launched, the bot replied within seconds, X
+   * fetched the preview immediately, the cached feed did not know the token yet,
+   * and the tweet unfurled as the generic "Inspect a Ponsr launch" -- which X
+   * then keeps. The page served the right metadata minutes later, to nobody.
+   *
+   * So a miss is retried once against a fresh feed. The cached copy still
+   * answers for every launch that is not brand new, which is nearly all of
+   * them; only a miss pays for the second read. An address that is not a Ponsr
+   * launch pays it too, and then passes through untouched as before -- the cost
+   * of being right about the one case this endpoint exists for.
+   */
+  const lookup = async (fresh) => {
+    const target = new URL('/.netlify/functions/launch-feed', url);
+    if (fresh) target.searchParams.set('fresh', Date.now().toString(36));
+    // A distinct URL is a distinct cache key -- that alone bypasses the CDN.
+    // The fetch no-store option is deliberately NOT used: this runs on Deno at
+    // the edge, where an unsupported option throws rather than being ignored.
+    const feed = await fetch(target, {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(fresh ? 5000 : 3000),
     });
-    if (feed.ok) {
-      const body = await feed.json();
-      launch = (body?.launches ?? []).find((l) => String(l.token).toLowerCase() === address) ?? null;
+    if (!feed.ok) return null;
+    const body = await feed.json();
+    if (!Array.isArray(body?.launches)) return null;
+    return body.launches.find((l) => String(l.token).toLowerCase() === address) ?? null;
+  };
+
+  // Each read is guarded separately: a cached read that TIMES OUT must not also
+  // cancel the fresh one, which is the read that knows about a new launch.
+  const safely = async (fresh) => {
+    try {
+      return await lookup(fresh);
+    } catch {
+      return null;
     }
-  } catch {
-    // Feed unavailable: pass the page through rather than guess at its identity.
-  }
+  };
+
+  let launch = await safely(false);
+  if (!launch) launch = await safely(true);
   if (!launch) return response;
 
   const canonical = `${url.origin}/token/${address}`;

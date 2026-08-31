@@ -547,3 +547,42 @@ test('the card cannot outlive the platform that runs it', async () => {
   // Rendering needs room after both waits are spent.
   assert.ok(rpc + TIMEOUT_MS + 1500 <= limit, `budgets total ${rpc + TIMEOUT_MS}ms against a ${limit}ms limit`);
 });
+
+/* --------------------------------------------------------------------------
+ * A MISS IN A CACHED FEED IS NOT AN ANSWER.
+ *
+ * Measured on a real launch. NOBI went live, the bot replied within seconds, X
+ * fetched the preview immediately, and the tweet unfurled as the generic
+ * "Inspect a Ponsr launch" -- which X then keeps. The page served the correct
+ * metadata minutes later, to nobody.
+ *
+ * The feed is `max-age=60, stale-while-revalidate=300`, and an ordinary request
+ * measured `Age: 170`. So the newest launch was invisible for exactly as long
+ * as it mattered most, and this endpoint exists for precisely that moment.
+ * -------------------------------------------------------------------------- */
+test('a token missing from the cached feed is looked up again, fresh', () => {
+  const edge = read('netlify/edge-functions/token-meta.js');
+
+  // A distinct URL is what actually bypasses the CDN.
+  assert.match(edge, /target\.searchParams\.set\('fresh'/);
+  assert.match(edge, /await safely\(false\)/);
+  assert.match(edge, /if \(!launch\) launch = await safely\(true\)/);
+
+  // Order matters: the cached read must be tried first, or every page view
+  // pays for an uncached feed.
+  assert.ok(
+    edge.indexOf('await safely(false)') < edge.indexOf('await safely(true)'),
+    'the fresh read is attempted before the cached one'
+  );
+
+  // Each read guarded separately: a cached read that times out must not also
+  // cancel the fresh one, which is the read that knows about a new launch.
+  assert.match(edge, /const safely = async \(fresh\) => \{\s*try \{/);
+
+  // `cache: 'no-store'` is not relied on -- this runs on Deno, where an
+  // unsupported fetch option throws rather than being ignored.
+  assert.doesNotMatch(edge, /cache: *'no-store'/);
+
+  // And an unverified address still passes through untouched.
+  assert.match(edge, /if \(!launch\) return response;/);
+});
