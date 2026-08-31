@@ -89,6 +89,20 @@ log(`snapshot as of  ${existing.asOfBlock}  (${head - existing.asOfBlock} blocks
  * It still refuses rather than returning a short list.
  */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A few patient attempts for one call. `collector.mjs` keeps its own private. */
+async function attempt(call, attempts = 4) {
+  let last;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      last = error;
+      if (i + 1 < attempts) await sleep(400 * 2 ** i);
+    }
+  }
+  throw last;
+}
 const hex = (n) => `0x${n.toString(16)}`;
 const addressTopic = (a) => `0x${a.slice(2).toLowerCase().padStart(64, '0')}`;
 
@@ -163,6 +177,40 @@ for (const launch of decoded) {
   }
   const pairSymbol = await collectPairSymbol({ rpc, pairToken: launch.pairToken, blockNumber: head });
 
+  /**
+   * The fee this launch actually paid, taken from the launch transaction.
+   *
+   * The obvious route -- `launchFee()` at the launch block -- is impossible
+   * here, and the endpoint says so plainly: `metadata is not found`. This RPC
+   * keeps no historical state, so a call at any past block fails. Measured for
+   * both launches before this was written.
+   *
+   * Today's `launchFee()` would answer, and would be the wrong answer: the fee
+   * is owner-settable on pons's side, so what it says now is not what a launch
+   * weeks ago paid. Recording it would be inventing a figure that looks read.
+   *
+   * The transaction's own value needs no historical state and is what actually
+   * moved. Ponsr sends EXACTLY the fee -- the factory treats any excess as an
+   * initial buy, which is why the launcher never overpays -- so for a launch in
+   * this feed, all of which are Ponsr's, the value is the fee.
+   */
+  let launchFeeEth = null;
+  try {
+    const tx = await attempt(() => rpc('eth_getTransactionByHash', [launch.transactionHash]));
+    const wei = BigInt(tx?.value ?? '0x0');
+    const whole = wei / 10n ** 18n;
+    const frac = (wei % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '');
+    launchFeeEth = `${whole}${frac ? `.${frac}` : ''}`;
+  } catch {
+    // Says WHY, because the first version of this catch reported a
+    // ReferenceError in this file as though the network had failed: `retry` is
+    // not exported from collector.mjs, so every read threw, both launches kept
+    // whatever was already committed, and the one that had a fee looked
+    // correct. A catch-all that blames the network for a bug in its own caller
+    // is worse than no catch at all.
+    log(`    launch transaction unreadable (${String(error?.message ?? error).slice(0, 80)}); leaving the fee unrecorded`);
+  }
+
   let curve = null;
   try {
     curve = await collectCurveState({ rpc, curve: launch.curve, blockNumber: head, observedAt });
@@ -229,7 +277,7 @@ for (const launch of decoded) {
     logo: metadata ? metadata.logo : prior.logo ?? null,
     description: metadata ? metadata.description : prior.description ?? '',
     splitter: prior.splitter ?? launch.splitter ?? null,
-    launchFeeEth: prior.launchFeeEth ?? null,
+    launchFeeEth: prior.launchFeeEth ?? launchFeeEth,
     name: metadata?.name ?? prior.name ?? launch.name,
     symbol: metadata?.symbol ?? prior.symbol ?? launch.symbol,
     pairLabel: pairSymbol || prior.pairLabel || launch.pairLabel,
