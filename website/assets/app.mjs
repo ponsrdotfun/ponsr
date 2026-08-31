@@ -465,6 +465,7 @@ async function boot() {
   paintDynamicTokenPage(feed, state);
   paintAccountSimulator(feed,state);
   paintAccountPublicLaunches(feed);
+  paintPublicGate(feed);
 }
 
 boot();
@@ -580,5 +581,39 @@ function paintAccountPublicLaunches(feed) {
       row.append(id, pair, block, when, element('i', 'public-launch-go', '→'));
       return row;
     })
+  );
+}
+
+/**
+ * Whether anyone can currently trigger a launch by mentioning the bot.
+ *
+ * The most consequential security fact a visitor can check, and the one that
+ * changes. Painted from the feed's own `publicGate`, which carries where it was
+ * read from and whether that read was fresh.
+ *
+ * A gate whose state could not be read is NOT drawn as closed. "Closed" is
+ * reassuring and would be a guess; an unread gate says it is unread.
+ */
+function paintPublicGate(feed) {
+  const host = document.querySelector('[data-public-gate]');
+  if (!host) return;
+  const gate = feed?.publicGate;
+  const value = host.querySelector('strong');
+  const note = host.querySelector('small');
+  if (!value || !note) return;
+
+  if (!gate || typeof gate.enabled !== 'boolean') {
+    host.dataset.gate = 'unknown';
+    setText(value, 'Unknown');
+    setText(note, 'The gate state could not be read, so none is shown rather than a reassuring guess.');
+    return;
+  }
+  host.dataset.gate = gate.enabled ? 'open' : 'closed';
+  setText(value, gate.enabled ? 'Open' : 'Closed');
+  setText(
+    note,
+    gate.enabled
+      ? `Anyone mentioning the bot can trigger a launch, paid from the treasury. Checked ${eventTime(gate.checkedAt)}.`
+      : `Mentions stop before parsing, wallet creation, signing or broadcast. Checked ${eventTime(gate.checkedAt)}.`
   );
 }

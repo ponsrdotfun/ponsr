@@ -143,3 +143,36 @@ test('the board gives a card room before it gives it a column', () => {
   assert.match(css, /\.ready \.launchpad-card:nth-child\(n\+6\) \{ animation-delay:\.24s; \}/);
   assert.match(css, /@media \(prefers-reduced-motion:no-preference\)/);
 });
+
+/**
+ * THE SECURITY PAGE SHOWS SOMETHING A STRANGER CAN CHECK.
+ *
+ * It carried four "Unavailable" rows and nothing verifiable, on the subject
+ * where verifying is the whole point. Those four genuinely wait for a sign-in —
+ * identity binding, wallet continuity, session controls, signing authority.
+ * These do not: which factory the bot launches through, which escrow credits
+ * fees, which address deploys, and whether the public gate is open.
+ */
+test('the security route publishes boundaries as addresses, not assurances', () => {
+  const build = read('scripts/build-website.mjs');
+  assert.match(build, /route==='\/account\/security' \? accountSecurity\(\) \+ accountVerifiableNow\(\)/);
+  // Named constants, not inlined: a wrong one would be a confident link to the
+  // wrong contract.
+  assert.match(build, /const ESCROW_ADDRESS = '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e'/);
+  assert.match(build, /const DEPLOYER_ADDRESS = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa'/);
+  // Each is a link to the explorer, or the invitation to check is empty.
+  assert.match(build, /href="\$\{EXPLORER\}\/\$\{kind\}\/\$\{esc\(value\)\}"/);
+});
+
+test('a gate that could not be read is never drawn as closed', () => {
+  const app = read('website/assets/app.mjs');
+  // "Closed" is the reassuring answer, so it is the one a guess must never
+  // produce. An unread gate says it is unread.
+  assert.match(app, /if \(!gate \|\| typeof gate\.enabled !== 'boolean'\)/);
+  assert.match(app, /host\.dataset\.gate = 'unknown'/);
+  assert.match(app, /none is shown rather than a reassuring guess/);
+
+  const css = read('website/assets/site.css');
+  // And it must not inherit the closed colour by omission.
+  assert.match(css, /\.verifiable-gate\[data-gate='unknown'\] strong \{ color:var\(--dim\); \}/);
+});

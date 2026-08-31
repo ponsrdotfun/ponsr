@@ -43,6 +43,10 @@ const site = path.join(process.cwd(), 'website');
 const feed = JSON.parse(await fs.readFile(path.join(site, 'data/launches.json'), 'utf8'));
 
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
+// Named here rather than inlined: both are deployment identity, and a wrong one
+// would be a confident link to the wrong contract.
+const ESCROW_ADDRESS = '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e';
+const DEPLOYER_ADDRESS = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 const esc = (value) => String(value ?? '')
@@ -531,12 +535,36 @@ function accountSimulator() {
   return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Financial execution remains locked</strong>Receive, send, swap, creator-fee claims, and account-linked X/Privy access remain Phase B features.</p></section>`;
 }
 
+/**
+ * The security facts that need no account at all.
+ *
+ * The panel above is about ACCOUNT security -- identity binding, wallet
+ * continuity, session controls -- and every one of those genuinely waits for a
+ * sign-in. That left a security page with four "Unavailable" rows and nothing a
+ * visitor could check, on the subject where checking is the whole point.
+ *
+ * These are the boundaries a stranger can verify without trusting a word of it:
+ * which factory Ponsr launches through, which escrow credits creator fees, which
+ * address deploys, and whether the public gate is open. Every one is an on-chain
+ * fact with an explorer link beside it.
+ */
+function accountVerifiableNow() {
+  const fact = (label, value, kind, note) =>
+    `<article class="verifiable-fact"><span>${esc(label)}</span><strong>${kind ? `<a class="text-link" href="${EXPLORER}/${kind}/${esc(value)}" target="_blank" rel="noopener noreferrer">${esc(value)}</a>` : esc(value)}</strong><small>${esc(note)}</small></article>`;
+  return `<section class="panel account-module verifiable-now"><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>What anyone can verify</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">The boundaries this bot operates inside, as addresses rather than assurances. Follow any of them to the explorer and check.</p><div class="verifiable-facts">` +
+    fact('Chain', 'Robinhood Chain · 4663', null, 'Every launch, fee and balance named on this site is on this chain.') +
+    fact('Launch factory', feed.deployment.factory, 'address', 'The only contract Ponsr launches through. A launch from any other factory is not ours.') +
+    fact('Fee escrow', ESCROW_ADDRESS, 'address', 'Where creator fees are credited before a splitter claims them.') +
+    fact('Deployer', DEPLOYER_ADDRESS, 'address', 'The on-chain deployer of every Ponsr launch. The creator receives their share through a per-launch splitter, not from this address.') +
+    `</div><div class="verifiable-gate" data-public-gate><span>Public launching</span><strong>Reading&hellip;</strong><small>Whether anyone can currently trigger a launch by mentioning the bot.</small></div></section>`;
+}
+
 function accountSecurity() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Security & recovery</p><h2>Authority must be proven, not assumed</h2></div><span class="state-badge">Phase B required</span></div><div class="security-list"><article><strong>Identity binding</strong><p>Stable numeric X user ID, verified server-side and independent of a mutable handle.</p><span>Unavailable</span></article><article><strong>Wallet continuity</strong><p>Exact existing Privy embedded wallet, with duplicate-creation races blocked.</p><span>Unavailable</span></article><article><strong>Session controls</strong><p>Expiration, CSRF defense, logout, replay protection, and recovery evidence.</p><span>Unavailable</span></article><article><strong>Signing authority</strong><p>No website signing, claim, send, swap, or treasury authority is enabled.</p><span>Disabled</span></article></div>${unavailableAction('Review recovery options')}</section>`;
 }
 
 function accountPage(route='/account') {
-  const content = route==='/account/launches' ? accountLaunches() + accountPublicLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
+  const content = route==='/account/launches' ? accountLaunches() + accountPublicLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() + accountVerifiableNow() : accountOverview();
   const title = accountRoutes.find(([,href])=>href===route)?.[0] || 'Overview';
   const routeIntro = {
     '/account':['Creator operations','One command center for launches, fees, wallet continuity, and account authority.'],

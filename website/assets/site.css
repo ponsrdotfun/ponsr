@@ -1262,3 +1262,33 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .ready .launchpad-card:nth-child(5) { animation-delay:.2s; }
   .ready .launchpad-card:nth-child(n+6) { animation-delay:.24s; }
 }
+
+/* --------------------------------------------------------------------------
+   FACTS A STRANGER CAN CHECK
+
+   The security page carried four "Unavailable" rows and nothing a visitor could
+   verify, on the subject where verifying is the whole point. Those four
+   genuinely wait for a sign-in; these do not.
+
+   Addresses are the content, so they are set in mono at a size meant to be read
+   and compared against an explorer, not decorated.
+   -------------------------------------------------------------------------- */
+.verifiable-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; }
+.verifiable-fact { display:grid; gap:.22rem; padding:.7rem .8rem; border:1px solid var(--line-soft); border-radius:13px; background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.74)); min-width:0; }
+.verifiable-fact > span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.verifiable-fact strong { font-family:var(--font-mono); font-size:.76rem; color:var(--ivory); overflow-wrap:anywhere; font-weight:500; }
+.verifiable-fact small { color:var(--steel); font-size:.72rem; line-height:1.45; }
+
+/* The gate is the one fact here that changes, so it is given its own weight and
+   its own colour once it is known. */
+.verifiable-gate { display:grid; gap:.22rem; margin-top:.6rem; padding:.75rem .85rem; border:1px solid var(--line-soft); border-radius:13px; background:rgba(6,9,11,.6); }
+.verifiable-gate > span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.verifiable-gate strong { font-family:var(--font-mono); font-size:1rem; letter-spacing:.03em; color:var(--steel); }
+.verifiable-gate small { color:var(--steel); font-size:.72rem; }
+.verifiable-gate[data-gate='closed'] { border-color:rgba(70,200,140,.24); }
+.verifiable-gate[data-gate='closed'] strong { color:var(--emerald-bright); }
+.verifiable-gate[data-gate='open'] { border-color:rgba(224,179,104,.3); }
+.verifiable-gate[data-gate='open'] strong { color:var(--amber); }
+/* Unknown is neither reassuring nor alarming: it is dim, because a gate nobody
+   could read must not be mistaken for one that is shut. */
+.verifiable-gate[data-gate='unknown'] strong { color:var(--dim); }
