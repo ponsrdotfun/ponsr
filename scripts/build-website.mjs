@@ -302,7 +302,22 @@ function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(Strin
 function tokenArt(token) {
   const logo=trustedLogoUrl(token.logo);
   if(logo)return `<div class="token-art has-image"><img src="${esc(logo)}" alt="${esc(token.name)} token image" loading="lazy" decoding="async"></div>`;
-  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="record-fingerprint"><i></i><i></i><i></i></span><small>Token image unavailable</small></div>`;
+  /**
+   * NO LOGO IS NOT A BROKEN CARD.
+   *
+   * The placeholder was a radar pattern, three dots, and the words TOKEN IMAGE
+   * UNAVAILABLE across the middle -- which reads as a failure every time, on a
+   * card whose token is perfectly fine. Two of three launches have no image, so
+   * that was most of the board announcing a problem that does not exist.
+   *
+   * The token's own ticker is the art instead: set in the display face on the
+   * same ground, it reads as identity rather than absence. `.art-symbol` was
+   * already styled for exactly this and was simply never rendered.
+   *
+   * The accessible label is unchanged, so a screen reader still learns there is
+   * no image -- the sighted reader is the one who did not need telling twice.
+   */
+  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="art-symbol" data-art-len="${Math.min(12, String(token.symbol || '?').length)}">${esc(String(token.symbol || '?').toUpperCase())}</span></div>`;
 }
 function tokenCard(token) {
   const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);

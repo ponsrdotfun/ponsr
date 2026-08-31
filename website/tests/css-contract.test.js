@@ -197,3 +197,58 @@ test('a card link does not underline its own contents', () => {
   assert.match(css, /a\.token-card:hover \{[^}]*border-color/);
   assert.match(css, /a\.token-card:focus-visible \{[^}]*outline/);
 });
+
+/**
+ * NO LOGO IS NOT A BROKEN CARD.
+ *
+ * The placeholder was a radar pattern, three dots, and the words TOKEN IMAGE
+ * UNAVAILABLE across the middle — which reads as a failure every time, on a
+ * card whose token is perfectly fine. Two of three launches have no image, so
+ * that was most of the board announcing a problem that does not exist.
+ *
+ * The token's own ticker is the art instead. `.art-symbol` was already styled
+ * for exactly this and had simply never been rendered.
+ */
+test('a launch with no image shows its ticker, not a failure notice', () => {
+  const build = read('scripts/build-website.mjs');
+  const app = read('website/assets/app.mjs');
+
+  for (const [name, source] of [['build', build], ['client', app]]) {
+    assert.match(source, /art-symbol/, `${name} renderer does not draw the ticker`);
+    assert.doesNotMatch(source, /'Token image unavailable'\)|>Token image unavailable</,
+      `${name} renderer still prints the failure notice on the card`);
+  }
+  // The accessible label is unchanged: a screen reader still learns there is no
+  // image. The sighted reader is the one who did not need telling twice.
+  assert.match(build, /aria-label="Token image unavailable for/);
+  assert.match(app, /Token image unavailable for \$\{token\.symbol\}/);
+});
+
+test('the ticker is sized without an inline style', () => {
+  const css = read('website/assets/site.css');
+  const build = read('scripts/build-website.mjs');
+  const app = read('website/assets/app.mjs');
+
+  // Measured: at one size a nine-character ticker needed 208px of a 211px box
+  // and a twelve-character one needed 256px, so it clipped mid-character —
+  // the same ugliness the placeholder replaced, moved one token along.
+  // CSS cannot measure text, so the length is published and the stylesheet
+  // carries one static rule per length. An inline custom property would have
+  // been an inline style, which this site's CSP forbids.
+  assert.match(build, /data-art-len="\$\{Math\.min\(12,/);
+  assert.match(app, /dataset\.artLen=String\(Math\.min\(12,/);
+  assert.doesNotMatch(app, /\.style\.setProperty\(['"]--art-len/);
+
+  // Plain string matching: a regex built by interpolation reads `[data-art-len]`
+  // as a character class, which is how the first version of this assertion threw
+  // rather than failed.
+  for (const n of [1, 6, 9, 12]) {
+    assert.ok(
+      css.includes(`.art-symbol[data-art-len='${n}'] { font-size:min(16cqi,`),
+      `no rule for a ${n}-character ticker`
+    );
+  }
+  // And a ticker of unusually wide letters ends in an ellipsis rather than being
+  // cut through the middle of one.
+  assert.match(css, /\.token-art \.art-symbol \{[^}]*text-overflow:ellipsis/);
+});

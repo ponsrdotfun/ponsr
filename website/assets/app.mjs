@@ -85,7 +85,14 @@ function fact(list, label, value) {
 }
 
 function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(String(value));if(url.protocol!=='https:'||url.hostname!=='pbs.twimg.com'||url.username||url.password||url.port||!/^\/media\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname))return null;for(const key of url.searchParams.keys())if(!['format','name'].includes(key))return null;return url.toString();}catch{return null;}}
-function tokenArtNode(token){const logo=trustedLogoUrl(token.logo),art=element('div',`token-art${logo?' has-image':' unavailable'}`);if(logo){const image=document.createElement('img');image.src=logo;image.alt=`${token.name} token image`;image.loading='lazy';image.decoding='async';art.append(image);return art;}art.setAttribute('role','img');art.setAttribute('aria-label',`Token image unavailable for ${token.symbol}`);const fingerprint=element('span','record-fingerprint');fingerprint.append(element('i'),element('i'),element('i'));art.append(element('span','art-grid'),fingerprint,element('small','','Token image unavailable'));return art;}
+function tokenArtNode(token){const logo=trustedLogoUrl(token.logo),art=element('div',`token-art${logo?' has-image':' unavailable'}`);if(logo){const image=document.createElement('img');image.src=logo;image.alt=`${token.name} token image`;image.loading='lazy';image.decoding='async';art.append(image);return art;}art.setAttribute('role','img');art.setAttribute('aria-label',`Token image unavailable for ${token.symbol}`);// The ticker is the art when there is no logo: identity rather than absence.
+// See the build renderer for why. The accessible label above is unchanged.
+const symbol=element('span','art-symbol',String(token.symbol||'?').toUpperCase());
+// A data attribute, never an inline style: this site keeps a strict CSP and a
+// test guards it. CSS cannot measure text, so the length is published and the
+// stylesheet carries one static rule per length.
+symbol.dataset.artLen=String(Math.min(12,String(token.symbol||'?').length));
+art.append(element('span','art-grid'),symbol);return art;}
 
 function tokenCard(token) {
   const card=element('article','token-card');const art=tokenArtNode(token);

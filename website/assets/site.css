@@ -716,7 +716,9 @@ p { margin: 0; }
 @media (max-width:600px) { .dossier-head { display:grid; } .dossier-head h2 { max-width:none; } .dossier-chip { justify-self:start; font-size:.68rem; } .dossier-row { padding:.52rem 0; } .dossier-index { font-size:.68rem; } .dossier-row>div { grid-template-columns:1fr; gap:.22rem; } .dossier-row dt,.dossier-row dd { font-size:.82rem; text-align:left; } .mechanics-state { align-items:flex-start; flex-direction:column; } .mechanics-state p { text-align:left; } .mechanics-state span,.reserve-metric-grid span,.observation-grid span,.curve-state-row>span { font-size:.68rem; } .reserve-metric-grid,.observation-grid,.verification-grid { grid-template-columns:1fr; } }
 .token-identity-strip { width:var(--shell); margin-inline:auto; display:grid; grid-template-columns:88px minmax(0,1fr) minmax(220px,.42fr); gap:1rem; align-items:center; padding:.85rem 0; }
 .token-identity-strip .token-art { width:88px; aspect-ratio:1; border:1px solid var(--line-soft); border-radius:14px; }
-.token-identity-strip .art-symbol { max-width:82%; font-size:1rem; letter-spacing:-.07em; }
+/* 92%, matching the card: the size formula is calibrated against that share of
+   the box, and at 82% a nine-character ticker clipped in an 82px square. */
+.token-identity-strip .art-symbol { max-width:92%; letter-spacing:-.07em; }
 .token-identity-main { min-width:0; display:grid; gap:.35rem; }
 .token-identity-main h1 { font-size:clamp(2rem,4vw,3.35rem); line-height:.92; }
 .identity-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.45rem; }
@@ -1316,3 +1318,36 @@ a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-of
 /* The provenance line is identical on every card in the directory, so it is
    context rather than content. At 13.44px it was competing with the symbol. */
 .simulator-directory .token-card .footer-note { font-size:.72rem; color:var(--dim); line-height:1.45; }
+
+/* --------------------------------------------------------------------------
+   THE TICKER MUST FIT THE CARD IT IS THE ART OF
+
+   Measured: at 16cqi a nine-character ticker needs 208px of a 211px box, and a
+   twelve-character one needs 256px — so it clipped mid-character, which is the
+   same ugliness the placeholder was replaced to remove, moved one token along.
+
+   CSS cannot measure text, so the renderer publishes the length and the size is
+   divided by it. 140cqi is calibrated from the real face: nine characters
+   measured 208px at 36.6px, which is ~0.63em per character.
+   -------------------------------------------------------------------------- */
+.token-art .art-symbol { overflow:hidden; text-overflow:ellipsis; }
+/* One static rule per ticker length, because CSS cannot measure text and an
+   inline custom property would be an inline style -- which this site's CSP
+   forbids and a test enforces. 140 is calibrated from the real face: nine
+   characters measured 208px at 36.6px, about 0.63em each. */
+.token-art .art-symbol[data-art-len='1'] { font-size:min(16cqi,140.0cqi); }
+.token-art .art-symbol[data-art-len='2'] { font-size:min(16cqi,70.0cqi); }
+.token-art .art-symbol[data-art-len='3'] { font-size:min(16cqi,46.67cqi); }
+.token-art .art-symbol[data-art-len='4'] { font-size:min(16cqi,35.0cqi); }
+.token-art .art-symbol[data-art-len='5'] { font-size:min(16cqi,28.0cqi); }
+.token-art .art-symbol[data-art-len='6'] { font-size:min(16cqi,23.33cqi); }
+.token-art .art-symbol[data-art-len='7'] { font-size:min(16cqi,20.0cqi); }
+.token-art .art-symbol[data-art-len='8'] { font-size:min(16cqi,17.5cqi); }
+.token-art .art-symbol[data-art-len='9'] { font-size:min(16cqi,15.56cqi); }
+.token-art .art-symbol[data-art-len='10'] { font-size:min(16cqi,14.0cqi); }
+.token-art .art-symbol[data-art-len='11'] { font-size:min(16cqi,12.73cqi); }
+.token-art .art-symbol[data-art-len='12'] { font-size:min(16cqi,11.67cqi); }
+/* The divisor is calibrated on average glyph width, so a ticker of unusually
+   wide letters can still exceed it. Chasing that case with arithmetic would
+   make every ordinary ticker needlessly small, so the rare one ends in an
+   ellipsis instead of being cut through the middle of a letter. */
