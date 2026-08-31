@@ -621,7 +621,7 @@ p { margin: 0; }
 .launchpad-media .token-art small { left:.55rem; bottom:.45rem; max-width:calc(100% - 1.1rem); font-size:.5rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .protocol-badge { position:absolute; z-index:3; left:.45rem; top:.45rem; padding:.18rem .38rem; border:1px solid rgba(130,227,179,.34); border-radius:6px; color:var(--emerald-bright); background:rgba(5,11,9,.86); font-family:var(--font-mono); font-size:.53rem; font-weight:800; }
 .launchpad-card-body { display:grid; gap:.25rem; padding:.58rem; }
-.launchpad-card-body h3 { min-width:0; font-family:var(--font-sans); font-size:.78rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.launchpad-card-body h3 { min-width:0; font-family:var(--font-body); font-size:.78rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .launchpad-card-body h3 a { position:relative; z-index:2; color:var(--ivory); text-decoration:none; }
 .launchpad-symbol,.launchpad-deployer { min-width:0; color:var(--dim); font-size:.59rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .launchpad-mcap { min-height:1.1rem; color:var(--silver); font-size:.65rem; }
@@ -1108,7 +1108,7 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
 /* Tabular figures so digits line up down the column; a fee table that jitters
    between rows is harder to compare than one that is simply smaller. */
 .fee-asset strong { font-family:var(--font-mono); font-size:1.02rem; color:var(--ivory); font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
-.fee-asset small { color:var(--mint); font-family:var(--font-mono); font-size:.7rem; font-variant-numeric:tabular-nums; }
+.fee-asset small { color:var(--emerald-bright); font-family:var(--font-mono); font-size:.7rem; font-variant-numeric:tabular-nums; }
 /* An unreadable balance is dimmed, never dressed as a zero. */
 .fee-asset.unavailable strong { color:var(--dim); font-size:.86rem; }
 .fee-asset.unavailable small { color:var(--dim); }
@@ -1122,4 +1122,71 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .fee-escrow-row:nth-child(3) { animation-delay:.12s; }
   .fee-escrow-row:nth-child(n+4) { animation-delay:.18s; }
   @keyframes feeRowIn { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
+}
+
+/* --------------------------------------------------------------------------
+   AN ABSENT VALUE SPEAKS QUIETLY
+
+   `.account-stat strong` is bright silver at the value size. "Unavailable"
+   therefore arrived in exactly the voice a real figure uses, and four of them
+   on one page is why the fees page read as broken rather than as not-yet.
+
+   Nothing is hidden: the word stays, the reason stays, and the card keeps its
+   place so the layout does not shift when a value does arrive. It simply stops
+   competing with the facts around it.
+   -------------------------------------------------------------------------- */
+.account-stat.is-unavailable { background:linear-gradient(145deg,rgba(18,22,25,.6),rgba(7,9,11,.86)); border-color:rgba(196,205,218,.09); }
+.account-stat.is-unavailable strong { color:var(--dim); font-family:var(--font-mono); font-size:.86rem; letter-spacing:.06em; text-transform:uppercase; }
+/* The reason is what a reader actually needs from an empty box, so it is the
+   line that keeps its weight. */
+.account-stat.is-unavailable span { color:var(--steel); }
+
+/* --------------------------------------------------------------------------
+   THE CUSTODY BOUNDARY IS A STATE, NOT AN ALERT
+
+   It appeared on all six account routes, in amber, with an infinite scanning
+   sweep — the loudest element on every page, saying the same thing each time,
+   about a condition that is not going to change while you read.
+
+   Amber also broke the palette: every other surface is emerald, so the eye was
+   pulled to the least actionable thing on screen. It reads as a status strip
+   now, in the system's own colour, and it holds still.
+   -------------------------------------------------------------------------- */
+.custody-boundary { border-color:rgba(70,200,140,.18); background:linear-gradient(105deg,rgba(12,26,21,.82),rgba(7,10,13,.95)); padding:.72rem .95rem; }
+.custody-boundary::after { display:none; }
+.custody-boundary .account-lock { color:var(--emerald-bright); }
+.custody-boundary .signed-out-label { color:var(--emerald-bright); }
+.custody-boundary strong { font-size:.92rem; }
+.custody-boundary p { font-size:.74rem; color:var(--dim); }
+
+/* --------------------------------------------------------------------------
+   A BADGE THAT SAYS "THE DATA IS HERE" MUST NOT LOOK LIKE ONE THAT SAYS IT IS NOT
+
+   `.status-readonly` existed in the markup and changed nothing: both badges
+   computed to the same amber, so "Public read-only" — a panel full of real,
+   verifiable figures — wore the exact colour of "Account unavailable". Two
+   opposite meanings, one appearance.
+   -------------------------------------------------------------------------- */
+.state-badge.status-readonly { color:var(--emerald-bright); border-color:rgba(70,200,140,.32); background:rgba(70,200,140,.07); }
+
+/* --------------------------------------------------------------------------
+   ONE VOICE PER PAGE
+
+   The fees route carried an h1 at 64px and then two panel headings at 46.4px —
+   three display lines competing, so nothing led. The page title keeps its size;
+   a panel is a section within it and now reads as one.
+   -------------------------------------------------------------------------- */
+.account-module-head h2,
+.account-primary h2,
+/* The availability panel sits beside .account-primary and fell through to the
+   global h2 at 29.6px, so one column shouted while the other spoke. */
+.account-side h2 { font-size:clamp(1.35rem,2.4vw,1.75rem); letter-spacing:-.01em; }
+
+/* Panels arrive once, in order, and then hold still. Anything that keeps moving
+   under a figure makes the figure harder to trust. */
+@media (prefers-reduced-motion:no-preference) {
+  .account-workspace-body > .panel { animation:accountPanelIn .44s var(--ease) both; }
+  .account-workspace-body > .panel:nth-child(2) { animation-delay:.07s; }
+  .account-workspace-body > .panel:nth-child(n+3) { animation-delay:.13s; }
+  @keyframes accountPanelIn { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:none; } }
 }

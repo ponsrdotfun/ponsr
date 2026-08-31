@@ -460,7 +460,16 @@ const accountRoutes = [
 ];
 
 const unavailableAction = (label) => `<button class="btn btn-disabled" type="button" disabled aria-disabled="true" title="Requires verified account connection">${esc(label)}</button>`;
-const unavailableValue = (label, detail) => `<article class="account-stat"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
+/**
+ * An absent value is MARKED absent, not typeset as one.
+ *
+ * `.account-stat strong` is bright silver at the value size, so "Unavailable"
+ * arrived in exactly the voice a real figure would use. Four of those on one
+ * page is why it read as broken rather than as not-yet: the design was shouting
+ * an absence in the register reserved for facts. The class lets the stylesheet
+ * say it quietly instead.
+ */
+const unavailableValue = (label, detail) => `<article class="account-stat is-unavailable"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
 
 function accountNav(current) {
   return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account preview sections">${accountRoutes.map(([label, href],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>Preview</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
