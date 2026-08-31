@@ -53,13 +53,57 @@ export const plural = (count, one, many) => `${whole(count)} ${Number(count) ===
  * trailing digits, which is the one thing this site must not do with a number
  * it claims came off the chain.
  */
-export function ethFromWei(wei, decimals = 6) {
+/**
+ * THE QUOTE ASSET IS NOT ALWAYS ETH.
+ *
+ * This printed " ETH" onto every amount it formatted, and every curve figure on
+ * a token page went through it. On a launch paired with native ETH that is
+ * right. On Microduck, paired with NVDA, the page stated a sell as
+ * `-0.320168264216621238 ETH` when not one wei of ETH was involved -- on the
+ * page whose entire purpose is evidence somebody can check.
+ *
+ * The pairing asset is the most consequential fact about a launch: it is what
+ * every buyer spends. Naming the wrong one is not a cosmetic slip.
+ *
+ * The arithmetic was never wrong. NVDA carries 18 decimals like ETH (read from
+ * its own contract), so only the label was false -- which is exactly why it
+ * survived: every number looked plausible.
+ */
+export function amountFromWei(wei, decimals = 6, unit = 'ETH') {
   const value = BigInt(wei ?? 0);
   const negative = value < 0n;
   const abs = negative ? -value : value;
   const units = abs / 10n ** 18n;
   const frac = (abs % 10n ** 18n).toString().padStart(18, '0').slice(0, decimals).replace(/0+$/, '');
-  return `${negative ? '-' : ''}${units}${frac ? `.${frac}` : ''} ETH`;
+  return `${negative ? '-' : ''}${units}${frac ? `.${frac}` : ''} ${unit}`;
+}
+
+/** Amounts that really are ETH: the launch fee, gas. Not curve quote amounts. */
+export function ethFromWei(wei, decimals = 6) {
+  return amountFromWei(wei, decimals, 'ETH');
+}
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
+ * What a launch's quote amounts are denominated in.
+ *
+ * The zero pair token is native ETH. Otherwise it is the asset's own ticker,
+ * read from its own contract. A label the feed could not resolve becomes
+ * "quote" rather than a guess -- an unrecognised unit is honest, and a wrong
+ * ticker is a financial claim.
+ */
+export function quoteName(token) {
+  // Prose says "native ETH" where a ticker would read oddly; amounts say "ETH".
+  const unit = quoteUnit(token);
+  return unit === 'ETH' ? 'native ETH' : unit;
+}
+
+export function quoteUnit(token) {
+  const pair = String(token?.pairToken ?? ZERO_ADDRESS).toLowerCase();
+  if (pair === ZERO_ADDRESS) return 'ETH';
+  const label = String(token?.pairLabel ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(label) ? label : 'quote';
 }
 
 /** Exact cumulative quote flow into the curve; buys add, sells subtract. */
@@ -94,8 +138,8 @@ export function activityLine(activity) {
 export function reserveRows(token) {
   if (token?.reserves?.state !== 'observed') return null;
   return [
-    ['Real quote reserve', ethFromWei(token.reserves.realQuoteReserveWei)],
-    ['Graduation threshold', ethFromWei(token.graduationThreshold, 2)],
+    ['Real quote reserve', amountFromWei(token.reserves.realQuoteReserveWei, 6, quoteUnit(token))],
+    ['Graduation threshold', amountFromWei(token.graduationThreshold, 2, quoteUnit(token))],
     ['Curve status', token.reserves.graduated ? 'Graduated' : 'On the curve'],
     ['Observed at', eventTime(token.reserves.observedAt)],
   ];

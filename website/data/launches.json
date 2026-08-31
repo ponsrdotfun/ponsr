@@ -8,12 +8,12 @@
   "startBlock": 26841846,
   "mechanism": "current-v2-bonding-curve"
  },
- "generatedAt": "2026-08-30T18:05:13.244Z",
- "observedAt": "2026-08-30T18:05:13.244Z",
- "asOfBlock": 50207600,
+ "generatedAt": "2026-08-30T22:23:31.088Z",
+ "observedAt": "2026-08-30T22:23:31.088Z",
+ "asOfBlock": 50356610,
  "publicGate": {
   "enabled": false,
-  "checkedAt": "2026-08-30T18:05:59.085Z",
+  "checkedAt": "2026-08-30T22:23:35.163Z",
   "source": "https://ponsr-backend.fly.dev/status/core",
   "state": "stale"
  },
@@ -22,14 +22,14 @@
    "id": "current-v2-chain",
    "state": "stale",
    "fromBlock": 26841846,
-   "throughBlock": 50207600,
+   "throughBlock": 50356610,
    "authoritativeTimestamps": true,
    "scope": "verified last-known-good snapshot; live function advances with 128-block overlap"
   },
   {
    "id": "ponsr-public-gate",
    "state": "stale",
-   "checkedAt": "2026-08-30T18:05:59.085Z"
+   "checkedAt": "2026-08-30T22:23:35.163Z"
   }
  ],
  "launches": [
@@ -51,11 +51,11 @@
    "logIndex": 207,
    "blockNumber": 47693658,
    "blockTimestamp": "2026-08-27T19:30:30.000Z",
-   "observedAt": "2026-08-30T18:05:13.244Z",
+   "observedAt": "2026-08-30T22:23:31.088Z",
    "reserves": {
     "state": "observed",
-    "observedAt": "2026-08-30T18:05:13.244Z",
-    "observedThroughBlock": 50207600,
+    "observedAt": "2026-08-30T22:23:31.088Z",
+    "observedThroughBlock": 50356610,
     "quoteReserveWei": "1685344697858840480",
     "tokenReserveWei": "996828721230956080714724798",
     "realQuoteReserveWei": "5344697858840480",
@@ -76,14 +76,14 @@
    "launchFeeEth": "0.0005",
    "metadata": {
     "state": "stale",
-    "observedThroughBlock": 50207600
+    "observedThroughBlock": 50356610
    },
    "activity": {
     "state": "observed",
-    "observedThroughBlock": 50207600,
+    "observedThroughBlock": 50356610,
     "curveBuys": 3,
     "curveSells": 1,
-    "observedAt": "2026-08-30T18:05:13.244Z",
+    "observedAt": "2026-08-30T22:23:31.088Z",
     "events": [
      {
       "kind": "buy",
@@ -158,15 +158,15 @@
    "logIndex": 34,
    "blockNumber": 50045026,
    "blockTimestamp": "2026-08-30T13:28:23.000Z",
-   "observedAt": "2026-08-30T18:05:13.244Z",
+   "observedAt": "2026-08-30T22:23:31.088Z",
    "reserves": {
     "state": "observed",
-    "observedAt": "2026-08-30T18:05:13.244Z",
-    "observedThroughBlock": 50207600,
+    "observedAt": "2026-08-30T22:23:31.088Z",
+    "observedThroughBlock": 50356610,
     "quoteReserveWei": "16640000000000000003",
     "tokenReserveWei": "1000000000000000000000000000",
     "realQuoteReserveWei": "3",
-    "trackedQuoteWei": "29320600743092342",
+    "trackedQuoteWei": "3",
     "graduated": false,
     "sourceState": "complete",
     "problem": null
@@ -180,17 +180,17 @@
    },
    "logo": null,
    "description": "",
-   "launchFeeEth": null,
+   "launchFeeEth": "0.0005",
    "metadata": {
     "state": "stale",
-    "observedThroughBlock": 50207600
+    "observedThroughBlock": 50356610
    },
    "activity": {
     "state": "observed",
-    "observedThroughBlock": 50207600,
+    "observedThroughBlock": 50356610,
     "curveBuys": 7,
     "curveSells": 7,
-    "observedAt": "2026-08-30T18:05:13.244Z",
+    "observedAt": "2026-08-30T22:23:31.088Z",
     "events": [
      {
       "kind": "buy",
