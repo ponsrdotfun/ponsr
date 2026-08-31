@@ -430,10 +430,30 @@ function revealOnScroll() {
 /* Boot                                                                        */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The signed-in session, read ONCE per page.
+ *
+ * Two independent painters need it, and each asking for its own copy meant two
+ * round trips on every load of the fees page for one answer that cannot differ
+ * between them. The promise is shared, not the value, so a caller that arrives
+ * while the first read is still in flight waits on it instead of starting a
+ * second.
+ */
+let sessionRead = null;
+const readSession = () => {
+  if (!sessionRead) {
+    sessionRead = readAccountJson('/api/account/session').then(
+      (r) => r.body,
+      () => ({ state: 'unauthenticated' })
+    );
+  }
+  return sessionRead;
+};
+
 const accountCookie=(name)=>document.cookie.split(';').map((v)=>v.trim()).find((v)=>v.startsWith(`${name}=`))?.slice(name.length+1)||'';
 async function readAccountJson(path,options={}){const response=await fetch(path,{credentials:'same-origin',headers:{Accept:'application/json',...(options.headers||{})},...options});const body=await response.json().catch(()=>({state:'error'}));return{ok:response.ok,body};}
 function paintAccountSession(session){const root=document.querySelector('.account-shell');if(!root)return;const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]'),label=root.querySelector('[data-account-session-label]'),title=root.querySelector('[data-account-session-title]'),detail=root.querySelector('[data-account-session-detail]'),mode=root.querySelector('[data-account-mode]');if(session?.state==='authenticated'){root.dataset.authState='authenticated';root.dataset.identityState='verified';root.dataset.privateDataState='authenticated';root.dataset.executionAuthority='NONE_PREVIEW_ONLY';setText(label,`Verified X identity · @${session.identity.handle}`);setText(title,'Existing wallet continuity verified');setText(detail,`${session.wallet.address} · read-only account access · signing, send, swap, and claims remain disabled.`);setText(mode,'Phase B · Authenticated read-only');setText(root.querySelector('.account-sidebar-state strong'),'Authenticated');const badge=root.querySelector('.state-badge');if(badge&&!badge.classList.contains('status-readonly'))setText(badge,'Authenticated · read-only');if(signIn)signIn.hidden=true;if(logout)logout.hidden=false;const wallet=root.querySelector('.wallet-address-shell strong');if(wallet)setText(wallet,session.wallet.address);for(const stat of root.querySelectorAll('.account-stat')){const label=stat.querySelector('p')?.textContent;if(label==='Embedded wallet')setText(stat.querySelector('strong'),shortAddress(session.wallet.address));}for(const item of root.querySelectorAll('.security-list article')){const label=item.querySelector('strong')?.textContent;if(label==='Identity binding')setText(item.querySelector('span'),'Verified');if(label==='Wallet continuity')setText(item.querySelector('span'),'Verified');if(label==='Session controls')setText(item.querySelector('span'),'Active');}return;}root.dataset.authState='signed-out';root.dataset.identityState='unavailable';root.dataset.privateDataState='locked';if(logout)logout.hidden=true;}
-async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}let session={state:'unauthenticated'};try{session=(await readAccountJson('/api/account/session')).body;}catch{}paintAccountSession(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
+async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
 
 async function readFeed() {
   // The function is authoritative; the committed snapshot is the fallback. A
@@ -628,11 +648,8 @@ async function wireCreatorFees() {
       signal: AbortSignal.timeout(9000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    // The session is read alongside, so a control is offered only where it
-    // applies. An unreadable session simply means no controls, never a wrong one.
-    let session = { state: 'unauthenticated' };
-    try { session = (await readAccountJson('/api/account/session')).body; } catch { /* no controls */ }
-    paintCreatorFees(await response.json(), session);
+    // An unreadable session simply means no controls, never a wrong one.
+    paintCreatorFees(await response.json(), await readSession());
   } catch {
     // The panel says why rather than emptying itself, and never falls back to
     // zero -- a figure a reader could act on must not be invented by a failure.
