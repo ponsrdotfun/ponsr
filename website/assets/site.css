@@ -1351,3 +1351,48 @@ a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-of
    wide letters can still exceed it. Chasing that case with arithmetic would
    make every ordinary ticker needlessly small, so the rare one ends in an
    ellipsis instead of being cut through the middle of a letter. */
+
+/* --------------------------------------------------------------------------
+   THE HEADER SHOULD LOOK LIKE NAVIGATION, NOT LIKE FINE PRINT
+
+   Measured at 1440px: the bar is 1180px wide and `space-between`, so the brand
+   sits at one edge and three links at the other with a wide emptiness between.
+   The links were 14.4px at weight 400 — the size of body copy, at the edge of
+   the screen, which is why the header read as unfinished.
+
+   They are grouped into a segmented control instead. That is not a new idea
+   here: the board's own sort tabs are exactly this shape, so the header now
+   speaks the language the rest of the site already uses.
+   -------------------------------------------------------------------------- */
+.nav-links {
+  gap:.25rem;
+  padding:.28rem;
+  border:1px solid var(--line-soft);
+  border-radius:999px;
+  background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.72));
+  backdrop-filter:blur(6px);
+}
+.nav-links a {
+  padding:.42rem .95rem;
+  border-radius:999px;
+  font-size:.84rem;
+  font-weight:520;
+  letter-spacing:.01em;
+  transition:color .2s var(--ease),background .2s var(--ease);
+}
+@media (hover:hover) and (pointer:fine) {
+  .nav-links a:hover { background:rgba(70,200,140,.08); }
+}
+/* The current page is a filled segment rather than an underline: inside a
+   control, a rule underneath reads as a stray line. */
+.nav-links a[aria-current="page"] { background:rgba(70,200,140,.13); color:var(--ivory); }
+.nav-links a[aria-current="page"]::after { display:none; }
+.nav-links a:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }
+
+/* A little more height, so the bar has presence without becoming furniture. */
+.nav { padding-block:.62rem; }
+
+@media (max-width:560px) {
+  .nav-links { gap:.15rem; padding:.22rem; }
+  .nav-links a { padding:.38rem .7rem; font-size:.78rem; }
+}

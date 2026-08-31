@@ -252,3 +252,36 @@ test('the ticker is sized without an inline style', () => {
   // cut through the middle of one.
   assert.match(css, /\.token-art \.art-symbol \{[^}]*text-overflow:ellipsis/);
 });
+
+/**
+ * THE HEADER SHOULD LOOK LIKE NAVIGATION, NOT LIKE FINE PRINT.
+ *
+ * Measured at 1440px: the bar is 1180px wide and `space-between`, so the brand
+ * sits at one edge and three links at the other with a wide emptiness between.
+ * The links were 14.4px at weight 400 — body-copy size, at the edge of the
+ * screen — which is why the header read as unfinished.
+ *
+ * They are a segmented control now. Not a new idea here: the board's own sort
+ * tabs are exactly this shape, so the header speaks the language the rest of
+ * the site already uses.
+ */
+test('the nav links are a control, not three loose words', () => {
+  const css = read('website/assets/site.css');
+  const rule = [...css.matchAll(/^\.nav-links \{[\s\S]*?\}/gm)].pop()?.[0] ?? '';
+  assert.ok(rule, 'the nav group has no rule of its own');
+  assert.match(rule, /border-radius:999px/);
+  assert.match(rule, /border:1px solid var\(--line-soft\)/);
+
+  // Inside a control, an underline under the current item reads as a stray
+  // line, so the active page is a filled segment instead.
+  // The LAST matching rule wins, and the original one earlier in the file has a
+  // selector ending the same way -- matching the first would test the rule this
+  // change replaced. That mistake has been made twice in this file already.
+  const active = [...css.matchAll(/\.nav-links a\[aria-current="page"\] \{[^}]*\}/g)].pop()?.[0] ?? '';
+  assert.ok(active, 'the current page has no segment style');
+  assert.match(active, /background:rgba\(70,200,140/);
+  assert.match(css, /\.nav-links a\[aria-current="page"\]::after \{ display:none; \}/);
+
+  // Keyboard users lose the underline too, so the focus ring has to be explicit.
+  assert.match(css, /\.nav-links a:focus-visible \{[^}]*outline/);
+});
