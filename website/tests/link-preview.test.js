@@ -560,27 +560,37 @@ test('the card cannot outlive the platform that runs it', async () => {
  * measured `Age: 170`. So the newest launch was invisible for exactly as long
  * as it mattered most, and this endpoint exists for precisely that moment.
  * -------------------------------------------------------------------------- */
-test('a token missing from the cached feed is looked up again, fresh', () => {
+test('a token missing from a STALE cached feed is looked up again, fresh', () => {
   const edge = read('netlify/edge-functions/token-meta.js');
 
   // A distinct URL is what actually bypasses the CDN.
   assert.match(edge, /target\.searchParams\.set\('fresh'/);
-  assert.match(edge, /await safely\(false\)/);
-  assert.match(edge, /if \(!launch\) launch = await safely\(true\)/);
+  assert.match(edge, /const cached = await safely\(false\)/);
+  assert.match(edge, /if \(!launch && \(cached === null \|\| cached\.ageMs > 45_000\)\)/);
 
-  // Order matters: the cached read must be tried first, or every page view
-  // pays for an uncached feed.
+  // Order matters: the cached read is tried first, or every page view pays for
+  // an uncached feed.
   assert.ok(
     edge.indexOf('await safely(false)') < edge.indexOf('await safely(true)'),
     'the fresh read is attempted before the cached one'
   );
 
+  // The retry is CONDITIONAL. Retrying every miss would let anyone force an
+  // uncached feed -- which does chain discovery -- by requesting
+  // /token/<40 random hex> repeatedly.
+  assert.match(edge, /ageMs/);
+
+  // Freshness is judged from the feed's own observedAt, not from how old the
+  // HTTP response is, and an unparseable timestamp counts as stale.
+  assert.match(edge, /Number\.isFinite\(Date\.parse\(body\.observedAt\)\)/);
+  assert.match(edge, /: Infinity/);
+
   // Each read guarded separately: a cached read that times out must not also
-  // cancel the fresh one, which is the read that knows about a new launch.
+  // cancel the fresh one.
   assert.match(edge, /const safely = async \(fresh\) => \{\s*try \{/);
 
-  // `cache: 'no-store'` is not relied on -- this runs on Deno, where an
-  // unsupported fetch option throws rather than being ignored.
+  // The no-store fetch option is not relied on -- this runs on Deno, where an
+  // unsupported option throws rather than being ignored.
   assert.doesNotMatch(edge, /cache: *'no-store'/);
 
   // And an unverified address still passes through untouched.

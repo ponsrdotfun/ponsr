@@ -81,7 +81,12 @@ export default async (request, context) => {
     if (!feed.ok) return null;
     const body = await feed.json();
     if (!Array.isArray(body?.launches)) return null;
-    return body.launches.find((l) => String(l.token).toLowerCase() === address) ?? null;
+    return {
+      launch: body.launches.find((l) => String(l.token).toLowerCase() === address) ?? null,
+      // How old the ANSWER is, not how old the HTTP response is. An
+      // unparseable timestamp counts as stale: it is not evidence of freshness.
+      ageMs: Number.isFinite(Date.parse(body.observedAt)) ? Date.now() - Date.parse(body.observedAt) : Infinity,
+    };
   };
 
   // Each read is guarded separately: a cached read that TIMES OUT must not also
@@ -94,8 +99,25 @@ export default async (request, context) => {
     }
   };
 
-  let launch = await safely(false);
-  if (!launch) launch = await safely(true);
+  const cached = await safely(false);
+  let launch = cached?.launch ?? null;
+
+  /**
+   * The second read is CONDITIONAL, and that is not an optimisation.
+   *
+   * Retrying every miss would mean any request for `/token/<40 random hex>`
+   * forces an uncached feed, which does chain discovery -- cheap to ask for and
+   * expensive to serve, repeatedly, by anyone who noticed.
+   *
+   * A miss only deserves a second look when the copy that missed could plausibly
+   * predate the launch. If the feed's own `observedAt` is seconds old, its miss
+   * is an answer: the address is not a Ponsr launch, and the page passes through
+   * as it always did.
+   */
+  if (!launch && (cached === null || cached.ageMs > 45_000)) {
+    launch = (await safely(true))?.launch ?? null;
+  }
+
   if (!launch) return response;
 
   const canonical = `${url.origin}/token/${address}`;
