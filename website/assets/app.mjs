@@ -585,7 +585,7 @@ function claimControl(launch, asset) {
           'content-type': 'application/json',
           'X-CSRF-Token': decodeURIComponent(accountCookie('__Host-ponsr_csrf')),
         },
-        body: JSON.stringify({ launchId: launch.launchId ?? launch.token, erc20: asset.erc20 }),
+        body: JSON.stringify({ token: launch.token, erc20: asset.erc20 }),
       });
       outcome = await response.json();
     } catch {

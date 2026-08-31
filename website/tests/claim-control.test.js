@@ -87,6 +87,11 @@ test('the page asks with a CSRF token and never invents an outcome it was not gi
   assert.match(control, /X-CSRF-Token/, 'the claim POST must carry the CSRF token');
   assert.match(control, /__Host-ponsr_csrf/);
   assert.match(control, /credentials:\s*'same-origin'/);
+  // The subject is the TOKEN address. The service resolves ownership from it
+  // against the session's own launches; a database row id is not something any
+  // reader can know, and asking for one refuses every real click as not-yours.
+  assert.match(control, /token:\s*launch\.token/);
+  assert.doesNotMatch(control, /launchId/);
   // Every outcome the service can return is named here. An unnamed one falls to
   // "temporarily unavailable" -- honest, but it must not be where a policy
   // refusal lands, because that sends somebody hunting a bug that is a setting.
