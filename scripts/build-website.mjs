@@ -482,6 +482,19 @@ function accountLaunches() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore"><span>Open public record</span></a></div></section>`;
 }
 
+/**
+ * The escrow's own record, which needs no account at all.
+ *
+ * The page said "Unavailable" in every box -- accrued, claimable, queued, paid --
+ * and read as broken rather than as not-yet. It was neither: the numbers exist,
+ * they are public, and they were 0.02052 NVDA and 0.00944 SPCX when this was
+ * written. What is genuinely account-scoped stays in the panel above; this is
+ * the part that was never private.
+ */
+function accountFeeEscrow() {
+  return `<section class="panel account-module fee-escrow" data-account-fee-escrow><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>Waiting in escrow</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">What the deployment&rsquo;s escrow has credited to each launch&rsquo;s fee splitter, read from chain. Anyone can verify it, and anyone can trigger the split &mdash; the creator&rsquo;s share is pushed to the creator&rsquo;s own wallet, never to the caller.</p><div class="fee-escrow-rows" data-fee-escrow-rows><p class="note-inline">Reading the escrow&hellip;</p></div><p class="footer-note">Escrow credit per launch, not account-scoped and not a claim of ownership. A balance that cannot be read is shown as unavailable, never as zero.</p></section>`;
+}
+
 function accountFees() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Creator trading fees</p><h2>Receipt-backed accounting</h2></div><span class="state-badge">Account unavailable</span></div><p class="lede">Creator fees are shown only after escrow, splitter, receipt, destination, and account ownership reconcile. They are not dividends or guaranteed earnings.</p><div class="account-stats account-stats-four">${unavailableValue('Accrued','Requires reconciled fee observations.')}${unavailableValue('Claimable','Requires proven escrow availability.')}${unavailableValue('Queued / Processing','Requires an active receipt state.')}${unavailableValue('Paid / Claimed','Requires receipt and custody reconciliation.')}</div><div class="account-actions">${unavailableAction('Claim available fees')}<p>Claim execution is deferred. A completed transaction alone is not enough; custody and accounting must reconcile.</p></div></section>`;
 }
@@ -499,7 +512,7 @@ function accountSecurity() {
 }
 
 function accountPage(route='/account') {
-  const content = route==='/account/launches' ? accountLaunches() : route==='/account/fees' ? accountFees() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
+  const content = route==='/account/launches' ? accountLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
   const title = accountRoutes.find(([,href])=>href===route)?.[0] || 'Overview';
   const routeIntro = {
     '/account':['Creator operations','One command center for launches, fees, wallet continuity, and account authority.'],

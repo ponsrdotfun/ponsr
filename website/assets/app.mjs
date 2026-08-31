@@ -453,6 +453,7 @@ async function boot() {
   wireActivityTabs();
   loadMarket();
   void wireAccount();
+  void wireCreatorFees();
 
   const { feed, error } = await readFeed();
   const state = reduceSourceState({ feed, error });
@@ -466,3 +467,81 @@ async function boot() {
 }
 
 boot();
+
+/**
+ * The escrow's own record, painted from chain.
+ *
+ * The fees page carried four boxes all reading "Unavailable" and read as broken
+ * rather than as not-yet. What is genuinely account-scoped still does; this is
+ * the part that was never private, and it is not shown as belonging to anybody.
+ *
+ * A row whose balance could not be read says so. It is never drawn as zero:
+ * "nothing accrued" and "we could not ask" are different answers, and one of
+ * them tells a creator there is no money waiting.
+ */
+function paintCreatorFees(payload) {
+  const host = document.querySelector('[data-fee-escrow-rows]');
+  if (!host) return;
+  const launches = Array.isArray(payload?.launches) ? payload.launches : [];
+  if (!launches.length) {
+    host.replaceChildren(element('p', 'note-inline', 'No verified launch has a fee splitter to read.'));
+    return;
+  }
+
+  const rows = launches.map((launch) => {
+    const row = element('article', 'fee-escrow-row');
+    const head = element('div', 'fee-escrow-head');
+    const name = element('div');
+    name.append(element('strong', '', launch.symbol || 'UNKNOWN'), element('small', '', launch.name || ''));
+    head.append(name);
+    if (/^0x[a-fA-F0-9]{40}$/.test(String(launch.token || ''))) {
+      const link = element('a', 'text-link', 'Open token →');
+      link.href = `/token/${String(launch.token).toLowerCase()}`;
+      head.append(link);
+    }
+    row.append(head);
+
+    const assets = Array.isArray(launch.assets) ? launch.assets : [];
+    if (!assets.length || launch.state === 'unavailable') {
+      row.append(element('p', 'note-inline', launch.problem || 'No escrow balance can be read for this launch.'));
+      return row;
+    }
+
+    const grid = element('div', 'fee-escrow-assets');
+    for (const asset of assets) {
+      const cell = element('article', `fee-asset ${asset.state === 'observed' ? '' : 'unavailable'}`.trim());
+      cell.append(element('span', '', `${asset.role} · ${asset.label ?? ''}`.trim()));
+      if (asset.state === 'observed') {
+        cell.append(
+          element('strong', '', amountFromWei(asset.accruedWei, 6, String(asset.label || 'units'))),
+          element('small', '', `creator ${amountFromWei(asset.creatorWei, 6, String(asset.label || 'units'))}`)
+        );
+      } else {
+        cell.append(element('strong', '', 'Unavailable'), element('small', '', asset.problem || 'The escrow balance could not be read.'));
+      }
+      grid.append(cell);
+    }
+    row.append(grid);
+    return row;
+  });
+
+  host.replaceChildren(...rows);
+}
+
+async function wireCreatorFees() {
+  const panel = document.querySelector('[data-account-fee-escrow]');
+  if (!panel) return;
+  const host = panel.querySelector('[data-fee-escrow-rows]');
+  try {
+    const response = await fetch('/.netlify/functions/creator-fees', {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    paintCreatorFees(await response.json());
+  } catch {
+    // The panel says why rather than emptying itself, and never falls back to
+    // zero -- a figure a reader could act on must not be invented by a failure.
+    if (host) host.replaceChildren(element('p', 'note-inline', 'The escrow record is temporarily unavailable. No balance is shown rather than a wrong one.'));
+  }
+}

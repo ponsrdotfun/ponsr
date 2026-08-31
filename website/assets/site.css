@@ -1084,3 +1084,42 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .sheen::after { display: none; }
   .bot { overflow: clip; border-radius: 50%; }
 }
+
+/* --------------------------------------------------------------------------
+   ESCROW RECORD ON THE FEES PAGE
+
+   The page carried four boxes all reading "Unavailable" and 115 words in 972px.
+   This panel is the part that was never private, so it is dense on purpose:
+   a figure per asset per launch, aligned so a reader compares down a column
+   rather than hunting across a card.
+
+   Motion is entry only, and once. A number that moves while being read is a
+   number a reader distrusts, and this one is money.
+   -------------------------------------------------------------------------- */
+.fee-escrow-rows { display:grid; gap:.7rem; }
+.fee-escrow-row { border:1px solid var(--line-soft); border-radius:16px; padding:.9rem 1rem; background:linear-gradient(158deg,rgba(18,26,24,.72),rgba(7,10,13,.72)); }
+.fee-escrow-head { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; margin-bottom:.65rem; }
+.fee-escrow-head strong { display:block; font-family:var(--font-mono); font-size:.92rem; letter-spacing:.04em; color:var(--ivory); }
+.fee-escrow-head small { display:block; color:var(--dim); font-size:.74rem; }
+.fee-escrow-assets { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.55rem; }
+
+.fee-asset { border:1px solid var(--line-soft); border-radius:12px; padding:.6rem .7rem; background:rgba(6,9,11,.55); display:grid; gap:.18rem; }
+.fee-asset > span { color:var(--dim); font-family:var(--font-mono); font-size:.61rem; letter-spacing:.09em; text-transform:uppercase; }
+/* Tabular figures so digits line up down the column; a fee table that jitters
+   between rows is harder to compare than one that is simply smaller. */
+.fee-asset strong { font-family:var(--font-mono); font-size:1.02rem; color:var(--ivory); font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+.fee-asset small { color:var(--mint); font-family:var(--font-mono); font-size:.7rem; font-variant-numeric:tabular-nums; }
+/* An unreadable balance is dimmed, never dressed as a zero. */
+.fee-asset.unavailable strong { color:var(--dim); font-size:.86rem; }
+.fee-asset.unavailable small { color:var(--dim); }
+
+.fee-escrow .note-inline { color:var(--dim); font-size:.82rem; margin:0; }
+
+/* Entry only: rows fade up once as the panel arrives, then hold still. */
+@media (prefers-reduced-motion:no-preference) {
+  .fee-escrow-row { animation:feeRowIn .42s var(--ease) both; }
+  .fee-escrow-row:nth-child(2) { animation-delay:.06s; }
+  .fee-escrow-row:nth-child(3) { animation-delay:.12s; }
+  .fee-escrow-row:nth-child(n+4) { animation-delay:.18s; }
+  @keyframes feeRowIn { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
+}

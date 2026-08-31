@@ -2,7 +2,11 @@
 // belong beside its address for the same reason everything else here does: a
 // superseded factory takes different calldata, and decoding one layout with
 // another's offsets yields a plausible address that is not the right one.
-export const DEPLOYMENT = Object.freeze({ id: 'pons-v2-current-7ed', chainId: 4663, factory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e', startBlock: 26841846, ponsrDeployer: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa', topic: '0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607' , launchSelector: '0xf35abbcf', feeWalletWord: 8 });
+export const DEPLOYMENT = Object.freeze({ id: 'pons-v2-current-7ed', chainId: 4663, factory: '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e', startBlock: 26841846, ponsrDeployer: '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa', topic: '0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607' , launchSelector: '0xf35abbcf', feeWalletWord: 8,
+  // Where this deployment CREDITS creator fees. A splitter's `escrow` immutable must
+  // read back this address, or the fees behind it are credited somewhere the splitter
+  // cannot reach -- which is why it is deployment identity and not a loose constant.
+  escrow: '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e' });
 export const CURVE_TOPICS = Object.freeze({
   buy: '0xec36bf571f136799e8dc0b0b8bea4b04d8bd3d43de838aab0d5fc21d4cbfc455',
   sell: '0x8113d738abdcb6b38357e9d53a54a7157861a09031b453651f0fe7fe151f59df',
