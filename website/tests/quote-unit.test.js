@@ -81,3 +81,31 @@ test('no renderer hardcodes the unit onto a curve amount', () => {
     assert.doesNotMatch(source, /Net ETH flow/, `${file} hardcodes the flow heading`);
   }
 });
+
+/**
+ * A TOKEN'S PICTURE IS PLACED IN ITS FRAME, NOT CROPPED TO FIT IT.
+ *
+ * Measured on NOBI's page at 1600px wide. `.dynamic-token-panel .token-art`
+ * carried `width:100%`, `aspect-ratio:1.6` AND `max-height:420px`, and the
+ * three fought: the ratio wanted a 697px tall box, the cap forced 418px, so the
+ * frame resolved to 1115x418 -- 2.67:1. With `object-fit:cover` a square photo
+ * lost most of its height, and a cat came out as a collar.
+ *
+ * This repository has already recorded one bug of exactly this shape: two rules
+ * fighting over the same element.
+ */
+test('the token panel frames the picture instead of cropping it', () => {
+  const css = read('website/assets/site.css');
+  const rule = css.match(/\.dynamic-token-panel \.token-art \{[^}]*\}/)?.[0] ?? '';
+  assert.ok(rule, 'the token panel art rule was not found');
+
+  // A capped height beside a fixed ratio is the fight itself.
+  assert.doesNotMatch(rule, /max-height: *\d/, 'a height cap can override the aspect ratio');
+  assert.doesNotMatch(rule, /aspect-ratio: *1\.6/, 'the banner ratio is back');
+  assert.match(rule, /aspect-ratio: *1\b/);
+  assert.match(rule, /width: *min\(/, 'the frame is unbounded on a wide screen');
+
+  // And the picture is fitted whole, at any aspect ratio.
+  const img = css.match(/\.dynamic-token-panel \.token-art\.has-image img \{[^}]*\}/)?.[0] ?? '';
+  assert.match(img, /object-fit: *contain/, 'the picture is still cropped to the frame');
+});
