@@ -285,3 +285,35 @@ test('the nav links are a control, not three loose words', () => {
   // Keyboard users lose the underline too, so the focus ring has to be explicit.
   assert.match(css, /\.nav-links a:focus-visible \{[^}]*outline/);
 });
+
+/**
+ * HERO DEPTH IS SCROLL-DRIVEN, AND MUST NOT COST WHAT IS ALREADY THERE.
+ *
+ * `animation` is not additive: a second declaration on an element silently
+ * replaces the first. `.hero-copy` runs `revealEnter` and `.hero-stage` runs
+ * `heroStageBreathe`, so the parallax goes on `.hero-inner`, which carries
+ * none — otherwise the robot would quietly stop breathing and nothing would
+ * report it.
+ *
+ * The timeline is the same one the scroll-progress bar already uses here: it
+ * runs off the main thread, so it cannot stutter while the page is busy, and it
+ * needs no inline style, which this site's CSP forbids.
+ */
+test('hero parallax sits on an element with no animation of its own', () => {
+  const css = read('website/assets/site.css');
+
+  const rule = [...css.matchAll(/\.hero-inner \{[^}]*\}/g)].map((m) => m[0]).join('\n');
+  assert.match(rule, /animation: *heroDepth/);
+  assert.match(rule, /animation-timeline: *scroll\(root block\)/);
+
+  // Neither of the animated hero elements may be given a competing animation.
+  for (const selector of ['.hero-copy', '.hero-stage']) {
+    const own = [...css.matchAll(new RegExp(`\${selector} \{[^}]*\}`, 'g'))].map((m) => m[0]).join('\n');
+    assert.doesNotMatch(own, /animation: *heroDepth/, `${selector} was given the parallax and would lose its own animation`);
+  }
+
+  // Guarded twice: unsupported browsers get nothing rather than a broken hero,
+  // and a reader who asked for less motion is not given more.
+  const block = css.slice(css.indexOf('@supports (animation-timeline: scroll())'));
+  assert.match(block.slice(0, 200), /@media \(prefers-reduced-motion: no-preference\)/);
+});

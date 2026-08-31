@@ -1424,3 +1424,39 @@ a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-of
     to { opacity:1; transform:none; filter:none; }
   }
 }
+
+/* --------------------------------------------------------------------------
+   HERO DEPTH, DRIVEN BY THE SCROLL ITSELF
+
+   Applied to `.hero-inner`, which carries no animation of its own. That is
+   deliberate rather than convenient: `.hero-copy` runs `revealEnter` and
+   `.hero-stage` runs `heroStageBreathe`, and `animation` is not additive — a
+   second declaration on either would silently replace the first, which is the
+   kind of change that looks fine until somebody notices the robot stopped
+   breathing.
+
+   `animation-timeline: scroll()` rather than a scroll listener: it runs off the
+   main thread, so it cannot stutter while the page is busy, and it needs no
+   inline style — which this site's CSP forbids and a test enforces. The same
+   technique already drives the scroll-progress bar here.
+
+   The content leaves slightly faster than the ground behind it. That difference
+   IS the depth; anything larger stops reading as parallax and starts reading as
+   the page sliding apart.
+   -------------------------------------------------------------------------- */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-inner {
+      animation: heroDepth linear both;
+      animation-timeline: scroll(root block);
+      /* Ends before the hero does, so the effect is finished by the time the
+         next section arrives rather than still moving underneath it. */
+      animation-range: 0 70vh;
+      will-change: transform, opacity;
+    }
+    @keyframes heroDepth {
+      from { transform:translate3d(0,0,0); opacity:1; }
+      to { transform:translate3d(0,-38px,0); opacity:.82; }
+    }
+  }
+}
