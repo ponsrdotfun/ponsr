@@ -1220,3 +1220,45 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .public-launch-cell { grid-column:1 / -1; grid-template-columns:auto 1fr; display:grid; align-items:baseline; gap:.5rem; }
   .public-launch-cell strong { text-align:right; }
 }
+
+/* --------------------------------------------------------------------------
+   THE BOARD: LET THE TOKEN LEAD ITS OWN CARD
+
+   Measured on a card 190px wide: the token's name was 12.48px at weight 400,
+   while "Market cap unavailable" sat beside it at weight 650. The card's
+   headline was outranked by a line saying a number is missing — the same defect
+   as the account pages, in the one place a reader looks first.
+
+   Nothing here changes what a card says. The name leads because it is the
+   identity; the metric supports because it is data about it, and that ordering
+   holds whether the number is missing or present.
+   -------------------------------------------------------------------------- */
+.launchpad-card-body h3 { font-size:.94rem; letter-spacing:-.01em; }
+.launchpad-card-body h3 a { color:var(--ivory); }
+.launchpad-symbol { font-size:.72rem; letter-spacing:.05em; }
+/* 650 -> 550, and a step down in colour. Legible when a real figure arrives,
+   never louder than the token it belongs to. */
+.launchpad-mcap strong { font-weight:550; color:var(--steel); }
+
+/* Five fixed columns put 8px type in a 190px card. A floor lets the grid choose
+   how many fit and gives the art and the name room to be read. */
+.launchpad-grid { grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:.8rem; }
+@media (max-width:900px) { .launchpad-grid { grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } }
+
+/* --------------------------------------------------------------------------
+   MOTION THAT SETTLES
+
+   `premiumCardIn` already existed and ran on every card at once, so the board
+   arrived as one block. A short stagger reads as the row assembling rather than
+   appearing, and it costs nothing — the cards are already animating.
+
+   Capped at the sixth card: a stagger that keeps growing makes the last card on
+   a long board feel broken rather than considered.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion:no-preference) {
+  .ready .launchpad-card:nth-child(2) { animation-delay:.05s; }
+  .ready .launchpad-card:nth-child(3) { animation-delay:.1s; }
+  .ready .launchpad-card:nth-child(4) { animation-delay:.15s; }
+  .ready .launchpad-card:nth-child(5) { animation-delay:.2s; }
+  .ready .launchpad-card:nth-child(n+6) { animation-delay:.24s; }
+}

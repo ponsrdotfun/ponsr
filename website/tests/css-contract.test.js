@@ -100,3 +100,46 @@ test('the wallet route is deliberately left alone', () => {
   assert.doesNotMatch(build, /function accountWallet\(\)[\s\S]{0,600}?public-launch-rows/);
   assert.doesNotMatch(build, /function accountWallet\(\)[\s\S]{0,600}?data-account-fee-escrow/);
 });
+
+/**
+ * THE TOKEN LEADS ITS OWN CARD.
+ *
+ * Measured on the board at a card 190px wide: the token's name was 12.48px at
+ * weight 400, while "Market cap unavailable" sat beside it at weight 650. The
+ * card's headline was outranked by a line saying a number is missing — the same
+ * defect as the account pages, in the one place a reader looks first.
+ *
+ * The ordering is what is pinned, not the exact numbers: the name is the
+ * identity, the metric is data about it, and that holds whether the figure is
+ * missing or present.
+ */
+test('a card\u2019s metric never outranks the token it belongs to', () => {
+  const css = read('website/assets/site.css');
+
+  const name = css.match(/\.launchpad-card-body h3 \{[^}]*font-size:\.?([\d.]+)rem/)?.[1];
+  assert.ok(name, 'the card name has no size of its own');
+  assert.ok(Number(name) >= 0.9, `the token name is ${name}rem, too quiet to lead the card`);
+
+  // The LAST declaration wins in CSS, so the last is the one to read -- the
+  // original rule is still in the file, at weight 650, earlier.
+  const mcap = [...css.matchAll(/\.launchpad-mcap strong \{[^}]*font-weight:(\d+)/g)].pop()?.[1];
+  assert.ok(mcap, 'the card metric has no weight of its own');
+  assert.ok(Number(mcap) <= 600, `the metric is weight ${mcap}, heavier than the name it sits under`);
+});
+
+test('the board gives a card room before it gives it a column', () => {
+  const css = read('website/assets/site.css');
+  // Five fixed columns put 8px type in a 190px card. A floor lets the grid
+  // choose how many fit, so the art and the name are readable at any width.
+  // Read the rule OUTSIDE a media query: the narrow-viewport override that
+  // follows it legitimately uses a smaller floor, and matching that instead is
+  // how this assertion would pass while testing the wrong breakpoint.
+  const wide = [...css.matchAll(/^\.launchpad-grid \{[^}]*\}/gm)].map((m) => m[0]).pop() ?? '';
+  assert.ok(wide, 'the board grid has no rule of its own outside a media query');
+  assert.match(wide, /repeat\(auto-fill,minmax\(2\d\dpx,1fr\)\)/);
+
+  // The entry animation already existed and ran on every card at once. A capped
+  // stagger reads as assembly; an uncapped one makes the last card feel broken.
+  assert.match(css, /\.ready \.launchpad-card:nth-child\(n\+6\) \{ animation-delay:\.24s; \}/);
+  assert.match(css, /@media \(prefers-reduced-motion:no-preference\)/);
+});
