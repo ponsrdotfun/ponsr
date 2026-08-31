@@ -41,6 +41,16 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const BALANCE_OF_TOKEN = '0xf59e38b7';
 const word = (address) => String(address).toLowerCase().replace('0x', '').padStart(64, '0');
 
+/**
+ * `creator()` on the splitter.
+ *
+ * Published so a signed-in reader can be shown a claim control for the launches
+ * that actually pay THEM, and only those. It is public on chain like everything
+ * else here -- this endpoint still knows nothing about who is asking, and the
+ * comparison happens in the page against a session the page already holds.
+ */
+const CREATOR = '0x02d05d3f';
+
 /** The splitter's own constants, so a share is quoted from the contract that applies it. */
 const CREATOR_BPS = 9500n;
 const BPS = 10000n;
@@ -109,6 +119,7 @@ export default async () => {
       name: launch.name,
       splitter: ADDRESS.test(splitter) ? splitter : null,
       pairLabel: launch.pairLabel,
+      creator: null,
       assets: [],
     };
 
@@ -126,6 +137,15 @@ export default async () => {
         ? []
         : [{ role: 'pair asset', erc20: launch.pairToken, label: launch.pairLabel }]),
     ];
+
+    jobs.push(
+      rpc('eth_call', [{ to: entry.splitter, data: CREATOR }, 'latest']).then(
+        (raw) => {
+          if (typeof raw === 'string' && raw.length >= 66) entry.creator = `0x${raw.slice(-40)}`;
+        },
+        () => undefined
+      )
+    );
 
     for (const asset of assets) {
       const cell = { ...asset, state: 'unavailable', problem: 'The escrow balance could not be read.' };
