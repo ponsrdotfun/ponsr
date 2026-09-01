@@ -1,6 +1,35 @@
 # Letting the treasury send a fee claim
 
-**Status: not done. This is an owner action, and it is deliberately the last step.**
+**Status: DONE 2026-09-01. Policy `22f53547-16c6-49af-9b09-1fc86fba18f3`,
+`ponsr-bot: claim creator fees`, created by the owner in the dashboard with the root
+passkey. Option A was chosen.** Proven by signing, nothing broadcast:
+
+```
+splitter                     claim   funded   arbitrary   factory   verdict
+MICRODUCK 0x18d1d206…      ALLOWED  denied     denied     ALLOWED   PASS  exit 0
+NOBI      0xA45a3615…      ALLOWED  denied     denied     ALLOWED   PASS  exit 0
+PSTONKS   0xF78DC016…       denied  denied     denied     ALLOWED   -
+```
+
+**The PSTONKS row is the load-bearing one.** Its splitter is not in the address list, and
+it is refused — which is what proves the rule is bound to two destinations rather than
+being a blanket allow that would have passed the other two rows identically.
+
+The stored condition reads back exactly as written, parentheses included:
+
+```
+eth.tx.value == 0 && (eth.tx.to == '0x18d1d206a042260aa86f2af87a8bf7c959f899d5' || eth.tx.to == '0xa45a3615cf951bb0f0c29d4dee9ca9b2a27fa955')
+```
+
+Without those parentheses `&&` would bind only the first address and NOBI would have been
+a destination with no constraint on value at all. The signer now holds **three** policies.
+
+Everything below is the reasoning that produced this, kept because the next launch will
+need it: a new splitter is NOT covered by this rule.
+
+---
+
+**Originally: not done. An owner action, and deliberately the last step.**
 
 Everything else is built and verified. The website shows a collect button to the
 signed-in creator, the route guards it, and the service refuses a claim that is

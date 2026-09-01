@@ -203,9 +203,16 @@ Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key)
 A signed-in creator can press collect on `/account/fees`. Built as an owner brief, which is
 what the freeze requires before backend feature work.
 
-**Nothing can actually be sent yet, and that is the intended state.** The signer holds no
-policy permitting calls to splitter addresses, so every claim returns `policy-refused` and
-the page says so in those words. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
+**The policy exists as of 2026-09-01 and the path is open**, for two splitters only:
+`22f53547-16c6-49af-9b09-1fc86fba18f3`, `eth.tx.value == 0 && (Microduck || NOBI)`. Proven
+by signing, nothing broadcast: both ALLOWED, a funded claim denied, an arbitrary
+destination denied, the factory still ALLOWED. PSTONKS's splitter is **denied**, which is
+what proves the rule binds two destinations rather than being a blanket allow.
+
+**A launch made after that date is NOT covered.** Option A was chosen deliberately, and its
+cost is that each new splitter needs the policy edited or its creator's fees sit
+unclaimable behind a button that reports a refusal. Move to the selector-bound form before
+the public gate opens. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
 write the rule and which to choose; `scripts/turnkey-verify-claim.ts` proves it afterwards by
 signing, never by trusting a config flag. Measured 2026-09-01, nothing broadcast: claim
 **denied**, funded claim **denied**, arbitrary destination **denied**, factory ALLOWED —
