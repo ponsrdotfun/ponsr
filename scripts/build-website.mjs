@@ -330,7 +330,7 @@ function home() {
         `<article class="economics-figure is-primary"><b>66.5%</b><span>of trading fees, to you</span>` +
           `<small>Pushed to your own wallet by the splitter. Ponsr cannot redirect it.</small></article>` +
         `<article class="economics-figure"><b>3.5%</b><span>to Ponsr</span>` +
-          `<small>What the treasury keeps for running the bot and paying the fees below.</small></article>` +
+          `<small>What the treasury keeps for running the bot and covering the launch fee and gas.</small></article>` +
         `<article class="economics-figure"><b>Nothing</b><span>to launch</span>` +
           `<small>Ponsr pays the launch fee and the gas, including the gas to collect.</small></article>` +
       `</div>` +
