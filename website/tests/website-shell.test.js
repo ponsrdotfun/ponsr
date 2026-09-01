@@ -695,10 +695,16 @@ test('the how-to note is raised from the feed, not frozen at build time', () => 
   const html = read('website/index.html');
   const app = read('website/assets/app.mjs');
 
-  // The build ships the cautious state and nothing else.
-  const note = html.slice(html.indexOf('data-howto-gate'), html.indexOf('</section>', html.indexOf('data-howto-gate')));
-  assert.match(note, /Paused right now/);
-  assert.doesNotMatch(note, /Open now/, 'the build is claiming a gate it has not observed');
+  // EVERY copy of the note, not the first one. There are two on the landing page
+  // now -- one beside the request in the hero, one in the how-to section -- and
+  // raising only the first would leave them contradicting each other on the same
+  // screen, which is worse than either being wrong alone.
+  const notes = [...html.matchAll(/data-howto-gate[\s\S]*?<\/p>/g)].map((m) => m[0]);
+  assert.equal(notes.length, 2, 'expected the hero note and the how-to note');
+  for (const note of notes) {
+    assert.match(note, /Paused right now/);
+    assert.doesNotMatch(note, /Open now/, 'the build is claiming a gate it has not observed');
+  }
 
   // And the client can raise it, from a feed it actually read.
   const branch = app.slice(app.indexOf('[data-howto-gate]'), app.indexOf('[data-gate-longform]'));
@@ -706,7 +712,13 @@ test('the how-to note is raised from the feed, not frozen at build time', () => 
   assert.match(branch, /feed\.publicGate\?\.enabled === true/);
   assert.match(branch, /'Open now'/);
   assert.match(branch, /'Paused right now'/);
+  // It must raise ALL of them; querySelector would leave the second contradicting
+  // the first. Checked against the whole source, not `branch` -- that slice starts
+  // AT the selector string, so the call wrapping it is already behind the window.
+  assert.match(app, /querySelectorAll\('\[data-howto-gate\]'\)/, 'only the first gate note would be raised');
   // Guarded on having a feed at all: with none, the build-time value stands
-  // rather than being replaced by a guess.
-  assert.match(branch, /howto && feed/);
+  // rather than being replaced by a guess. Asserted as the PROPERTY rather than
+  // the identifier -- this line read /howto && feed/ and broke on a rename, which
+  // tests the variable's name and nothing about the behaviour.
+  assert.match(branch, /&&\s*feed\)/, 'the client is not guarding on having read a feed');
 });

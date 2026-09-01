@@ -206,6 +206,40 @@ function nav(current) {
 const BUILD_GATE_ENABLED = false;
 
 /**
+ * THE REQUEST, DESCRIBED ONCE.
+ *
+ * It appears twice on the landing page -- beside the hero, where somebody
+ * arriving from X sees it without scrolling, and again in the how-to section
+ * where it is explained. Twice on screen, once in source: this repository has
+ * already paid for a component described by two producers, and four visible
+ * defects in one day came out of it.
+ *
+ * The copy button carries `data-copy-text` rather than an address, because
+ * `wireCopyButtons` refuses anything that is not 40 hex characters and a tweet
+ * is not one. That guard is not weakened here; a second, explicit path exists.
+ */
+const REQUEST_TEXT = `@${X_HANDLE} launch a token called Micro Duck, symbol MICRODUCK`;
+
+function requestLine() {
+  return `<span class="howto-mention">@${esc(X_HANDLE)}</span> launch a token called Micro Duck, symbol MICRODUCK`;
+}
+
+function copyRequestButton(label) {
+  return `<button class="btn btn-ghost howto-copy" type="button" data-copy-text="${esc(REQUEST_TEXT)}">${esc(label)}</button>`;
+}
+
+/**
+ * Always the closed state -- see BUILD_GATE_ENABLED above. Every copy of this
+ * note carries `data-howto-gate`, and the client raises all of them together.
+ */
+function gateNote(extraClass = '') {
+  return `<p class="note howto-gate${extraClass ? ` ${extraClass}` : ''}" data-howto-gate><strong>${BUILD_GATE_ENABLED ? 'Open now' : 'Paused right now'}</strong>` +
+    `${BUILD_GATE_ENABLED
+      ? 'Requests are being read. Post the tweet and Ponsr will answer it.'
+      : `New launches are paused, so a request will not be answered yet. Follow <a href="https://x.com/${esc(X_HANDLE)}" target="_blank" rel="noopener noreferrer">@${esc(X_HANDLE)}</a> — that is where it is announced when they open.`}</p>`;
+}
+
+/**
  * Ships `stale`. See the honesty rule at the top of this file — the build has
  * observed nothing about right now, and says so.
  */
@@ -284,6 +318,24 @@ function home() {
           `<span aria-hidden="true" class="sheen metal-emerald"><em>on the record.</em></span></h1>` +
         `<p class="lede">Ponsr launches tokens from a tag on X and writes down what actually happened — the factory, the curve, the block, the fee. ` +
           `If a number cannot be read from the chain, this site does not show it.</p>` +
+        /**
+         * THE ACTION THE PRODUCT IS FOR, ON THE FIRST SCREEN.
+         *
+         * The hero offered "Explore launches" and "Open dashboard" -- both about
+         * reading records -- while the one thing Ponsr exists to do, tagging the
+         * bot, was a section down the page. Somebody arriving from X who wanted
+         * exactly what Ponsr sells had to scroll to find out how to ask.
+         *
+         * The gate note travels with it, and stays pessimistic at build time
+         * like every other copy of it. Inviting a tweet without saying whether
+         * it will be answered is the half-truth this whole page exists to avoid.
+         */
+        `<div class="hero-request">` +
+          `<p class="hero-request-label">Launch one — tag the bot on X</p>` +
+          `<p class="hero-request-line">${requestLine()}</p>` +
+          copyRequestButton('Copy this request') +
+          gateNote('hero-request-gate') +
+        `</div>` +
         `<div class="hero-cta home-actions">` +
           `<a class="btn btn-primary home-action" href="/explore/" data-home-action="explore"><span>Explore launches</span><i class="action-icon" aria-hidden="true">→</i></a>` +
           `<a class="btn btn-secondary home-action" href="/account/" data-home-action="dashboard"><span>Open dashboard</span><i class="action-icon" aria-hidden="true">→</i></a>` +
@@ -325,13 +377,10 @@ function home() {
           `<small>Sign in here with the same X account and collect them. Ponsr sends the transaction and pays the gas.</small></article>` +
       `</div>` +
       `<figure class="howto-example"><figcaption>An example request</figcaption>` +
-        `<blockquote><span class="howto-mention">@${esc(X_HANDLE)}</span> launch a token called Micro Duck, symbol MICRODUCK</blockquote>` +
-        `<button class="btn btn-ghost howto-copy" type="button" data-copy-text="@${esc(X_HANDLE)} launch a token called Micro Duck, symbol MICRODUCK">Copy this request</button>` +
+        `<blockquote>${requestLine()}</blockquote>` +
+        copyRequestButton('Copy this request') +
       `</figure>` +
-      `<p class="note howto-gate" data-howto-gate><strong>${BUILD_GATE_ENABLED ? 'Open now' : 'Paused right now'}</strong>` +
-        `${BUILD_GATE_ENABLED
-          ? 'Requests are being read. Post the tweet and Ponsr will answer it.'
-          : `New launches are paused, so a request will not be answered yet. Follow <a href="https://x.com/${esc(X_HANDLE)}" target="_blank" rel="noopener noreferrer">@${esc(X_HANDLE)}</a> — that is where it is announced when they open.`}</p>` +
+      gateNote() +
     `</section>` +
     /**
      * WHAT THE CREATOR ACTUALLY KEEPS.

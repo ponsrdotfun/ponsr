@@ -77,21 +77,28 @@ function paintStatus(state, feed) {
    * "Paused right now" and nothing ever raised it, so on the day the gate opened
    * the landing page went on telling visitors not to bother while the bot was
    * answering. The gate moved and the page did not.
+   *
+   * querySelectorAll, not querySelector: the same note sits beside the request
+   * in the hero and again in the how-to section. Raising only the first would
+   * leave one of them contradicting the other on the same screen, which is worse
+   * than either being wrong alone.
    */
-  const howto = document.querySelector('[data-howto-gate]');
-  if (howto && feed) {
+  const gateNotes = document.querySelectorAll('[data-howto-gate]');
+  if (gateNotes.length && feed) {
     const open = feed.publicGate?.enabled === true;
-    howto.replaceChildren();
-    howto.append(element('strong', '', open ? 'Open now' : 'Paused right now'));
-    if (open) {
-      howto.append(document.createTextNode('Requests are being read. Post the tweet and Ponsr will answer it.'));
-    } else {
-      howto.append(document.createTextNode('New launches are paused, so a request will not be answered yet. Follow '));
-      const link = element('a', '', '@ponsrdotfun');
-      link.href = 'https://x.com/ponsrdotfun';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      howto.append(link, document.createTextNode(' — that is where it is announced when they open.'));
+    for (const note of gateNotes) {
+      note.replaceChildren();
+      note.append(element('strong', '', open ? 'Open now' : 'Paused right now'));
+      if (open) {
+        note.append(document.createTextNode('Requests are being read. Post the tweet and Ponsr will answer it.'));
+      } else {
+        note.append(document.createTextNode('New launches are paused, so a request will not be answered yet. Follow '));
+        const link = element('a', '', '@ponsrdotfun');
+        link.href = 'https://x.com/ponsrdotfun';
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        note.append(link, document.createTextNode(' — that is where it is announced when they open.'));
+      }
     }
   }
 
