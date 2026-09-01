@@ -169,6 +169,38 @@ function paintGrid(feed) {
   }
 }
 
+/**
+ * COPYING SOMETHING THAT IS NOT AN ADDRESS.
+ *
+ * `wireCopyButtons` refuses anything that is not a 40-hex address, and that
+ * guard is worth keeping -- it is what stops a copy control from putting
+ * arbitrary text on somebody's clipboard. So the example request gets its own
+ * mechanism rather than a loosened one.
+ *
+ * Without this it would have been a dead button: the tweet fails the address
+ * test, the handler returns, and nothing happens at all. A control that can
+ * only fail is worse than no control, and this one nearly shipped.
+ */
+function wireCopyText() {
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest?.('[data-copy-text]');
+    if (!button) return;
+    const text = button.dataset.copyText;
+    if (!text) return;
+    const idle = button.dataset.copyIdle || button.textContent;
+    button.dataset.copyIdle = idle;
+    try {
+      await navigator.clipboard.writeText(text);
+      setText(button, 'Copied');
+    } catch {
+      // A refused clipboard is not a failed page. The text is on screen and
+      // selectable, so say what happened rather than pretending it worked.
+      setText(button, 'Copy blocked — select it above');
+    }
+    setTimeout(() => setText(button, idle), 2400);
+  });
+}
+
 function wireCopyButtons() {
   document.addEventListener('click',async(event)=>{const button=event.target.closest?.('[data-copy-address]');if(!button)return;const address=button.dataset.copyAddress;const label=button.querySelector('[data-copy-label]');const idleLabel=label?.textContent||'Copy CA';if(!/^0x[a-fA-F0-9]{40}$/.test(address||''))return;try{await navigator.clipboard.writeText(address);setText(label,'Copied');button.classList.add('copied');window.setTimeout(()=>{setText(label,idleLabel);button.classList.remove('copied');},1600);}catch{setText(label,'Copy failed');}});
 }
@@ -603,7 +635,7 @@ async function boot() {
   wirePremiumTilt();
   wireLivingMascot();
   wireSimulator();
-  wireCopyButtons();
+  wireCopyButtons();wireCopyText();
   wireActivityTabs();
   loadMarket();
   void wireAccount();

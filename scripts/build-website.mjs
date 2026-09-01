@@ -42,6 +42,17 @@ import { activityLine, amountFromWei, curveFlowSeries, ethFromWei, eventTime, pl
 const site = path.join(process.cwd(), 'website');
 const feed = JSON.parse(await fs.readFile(path.join(site, 'data/launches.json'), 'utf8'));
 
+/**
+ * The bot's handle, in one place.
+ *
+ * It was a literal in the footer and nowhere else on the page -- so the product
+ * whose entire interface is "tag this account" never printed the account except
+ * as a link captioned "Registry updates". Now that it appears in the
+ * instructions, the example request and the paused note, one source is the
+ * difference between renaming an account and hunting for its spellings.
+ */
+const X_HANDLE = 'ponsrdotfun';
+
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
 // Named here rather than inlined: both are deployment identity, and a wrong one
 // would be a confident link to the wrong contract.
@@ -199,7 +210,7 @@ function footer() {
     `<div class="footer-top"><strong>PONSR</strong><span class="lede">Launches recorded from the chain, and nothing that is not.</span></div>` +
     `<div class="footer-links">` +
       `<a href="https://ponsfamily.com" target="_blank" rel="noopener noreferrer">pons ↗</a>` +
-      `<a href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer">@ponsrdotfun ↗</a>` +
+      `<a href="https://x.com/${esc(X_HANDLE)}" target="_blank" rel="noopener noreferrer">@${esc(X_HANDLE)} ↗</a>` +
       `<a href="/terms">Terms</a>` +
     `</div>` +
     `<p class="footer-note">Ponsr is independent. It is not operated by, affiliated with, or endorsed by pons, Robinhood, or X. ` +
@@ -270,6 +281,61 @@ function home() {
       `<a href="/account/"><span class="pathway-index">02</span><div><p class="eyebrow">Private workspace</p><h3>Account command center</h3><p>Launches, creator fees, wallet continuity, and security—only after verified identity exists.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
       `<a href="/explore/"><span class="pathway-index">03</span><div><p class="eyebrow">Market context</p><h3>Inspect token workstations</h3><p>Chart, curve ledger, holders, transfers, provenance, and read-only wallet analysis.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
     `</div></section>` +
+    /**
+     * THE PAGE NEVER SAID HOW TO USE THE PRODUCT.
+     *
+     * The whole thing is "tag the bot on X". Before this, `@ponsrdotfun`
+     * appeared only in the footer as "Registry updates", there was no example
+     * of a request, and the how-it-works step read "A recognized launch request
+     * begins the process" without ever saying what one looks like. A stranger
+     * who wanted exactly what Ponsr sells could not find out how to ask.
+     *
+     * The call to action follows the REAL gate. Paused, it says so and offers
+     * the one useful next step instead of a dead end; open, it asks for the
+     * tweet. Nobody has to remember to edit this when the gate moves.
+     */
+    `<section class="section reveal launch-howto" id="how-to-launch"><div class="section-head"><p class="eyebrow">How to launch</p><h2>Tag the bot. That is the whole interface.</h2>` +
+      `<p class="lede">No wallet to connect, no form to fill in, nothing to install. Ponsr reads the request, pays the launch fee, and writes the token to the chain.</p></div>` +
+      `<div class="howto-grid">` +
+        `<article class="howto-step"><b>01</b><span>Write the tweet</span>` +
+          `<small>Name the token and its symbol in plain words. Ponsr asks rather than guesses when either is missing.</small></article>` +
+        `<article class="howto-step"><b>02</b><span>Ponsr replies</span>` +
+          `<small>With the contract address and the transaction, or with the exact reason it could not — never with silence.</small></article>` +
+        `<article class="howto-step"><b>03</b><span>The fees are yours</span>` +
+          `<small>Sign in here with the same X account and collect them. Ponsr sends the transaction and pays the gas.</small></article>` +
+      `</div>` +
+      `<figure class="howto-example"><figcaption>An example request</figcaption>` +
+        `<blockquote><span class="howto-mention">@${esc(X_HANDLE)}</span> launch a token called Micro Duck, symbol MICRODUCK</blockquote>` +
+        `<button class="btn btn-ghost howto-copy" type="button" data-copy-text="@${esc(X_HANDLE)} launch a token called Micro Duck, symbol MICRODUCK">Copy this request</button>` +
+      `</figure>` +
+      `<p class="note howto-gate" data-howto-gate><strong>${feed.publicGate.enabled ? 'Open now' : 'Paused right now'}</strong>` +
+        `${feed.publicGate.enabled
+          ? 'Requests are being read. Post the tweet and Ponsr will answer it.'
+          : `New launches are paused, so a request will not be answered yet. Follow <a href="https://x.com/${esc(X_HANDLE)}" target="_blank" rel="noopener noreferrer">@${esc(X_HANDLE)}</a> — that is where it is announced when they open.`}</p>` +
+    `</section>` +
+    /**
+     * WHAT THE CREATOR ACTUALLY KEEPS.
+     *
+     * The reason to use Ponsr rather than launching yourself, and it was on no
+     * page: "66.5", "3.5%" and "95" appeared nowhere on this site.
+     *
+     * These two are the only figures allowed in user-facing copy, because they
+     * are what the contracts actually transfer and anyone can check them. The
+     * launchpad's own locker takes its cut BEFORE Ponsr's splitter sees
+     * anything, so naming it is the difference between an honest 66.5% and a
+     * number with thirty percent quietly missing.
+     */
+    `<section class="section reveal creator-economics"><div class="section-head"><p class="eyebrow">What you keep</p><h2>The trading fees are the creator&rsquo;s.</h2></div>` +
+      `<div class="economics-grid">` +
+        `<article class="economics-figure is-primary"><b>66.5%</b><span>of trading fees, to you</span>` +
+          `<small>Pushed to your own wallet by the splitter. Ponsr cannot redirect it.</small></article>` +
+        `<article class="economics-figure"><b>3.5%</b><span>to Ponsr</span>` +
+          `<small>What the treasury keeps for running the bot and covering the launch fee and gas.</small></article>` +
+        `<article class="economics-figure"><b>Nothing</b><span>to launch</span>` +
+          `<small>Ponsr pays the launch fee and the gas, including the gas to collect.</small></article>` +
+      `</div>` +
+      `<p class="note"><strong>Where the rest goes</strong>The launchpad&rsquo;s locker takes 30% of trading fees before Ponsr&rsquo;s splitter sees any of it; 66.5% and 3.5% are what is left, divided 95/5. Every share is set by contracts on chain, not by this page, and can be read there.</p>` +
+    `</section>` +
     `<section class="section reveal protocol-section"><div class="section-head"><p class="eyebrow">How a record becomes public</p><h2>Signal to chain, without the mythology.</h2></div><div class="protocol-flow"><span class="flow-trace" aria-hidden="true"></span>` +
       `<article><b>01</b><span>X signal</span><small>A recognized launch request begins the process.</small></article>` +
       `<article><b>02</b><span>Verified factory</span><small>Only the exact current Protocol V2 deployment counts.</small></article>` +

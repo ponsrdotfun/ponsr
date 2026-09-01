@@ -590,3 +590,90 @@ test('the ready-but-signed-out banner has copy of its own', () => {
   assert.doesNotMatch(branch, /Private account data is locked/);
   assert.doesNotMatch(branch, /Account connection unavailable/);
 });
+
+/**
+ * THE PAGE MUST SAY HOW TO USE THE PRODUCT, AND WHAT THE CREATOR KEEPS.
+ *
+ * Measured across the whole landing page before this section existed:
+ *
+ *   - `@ponsrdotfun` appeared ONLY in the footer, captioned "Registry updates".
+ *   - No example of a request. The how-it-works step said "A recognized launch
+ *     request begins the process" and never said what one looks like.
+ *   - "66.5", "3.5%" and "95" appeared nowhere on the site.
+ *
+ * The entire product is "tag the bot on X", and the reason to use it rather
+ * than launching yourself is the fee split. A stranger could find out neither.
+ */
+test('the landing page says who to tag, with an example, and what the split is', () => {
+  const html = read('website/index.html');
+  const main = html.slice(html.indexOf('<main>'), html.indexOf('<footer'));
+
+  // In the body, not only in the footer.
+  assert.match(main, /@ponsrdotfun/, 'the handle is still absent from the page body');
+  assert.match(main, /id="how-to-launch"/);
+  assert.match(main, /class="howto-example"/);
+  assert.match(main, /launch a token called Micro Duck, symbol MICRODUCK/);
+
+  assert.match(main, /66\.5%/);
+  assert.match(main, /3\.5%/);
+  // The locker's cut is named, because 66.5% with thirty percent silently
+  // missing is the kind of honest-looking number this site exists not to print.
+  assert.match(main, /locker takes 30%/i);
+});
+
+/**
+ * ONLY THE FIGURES THE CONTRACTS ACTUALLY TRANSFER.
+ *
+ * CLAUDE.md is explicit: 66.5% and 3.5% are what the contracts move and anyone
+ * can check them on chain. The splitter's own 95/5 divides what is left AFTER
+ * the launchpad's locker takes 30%, so quoting 95% as a creator's share would
+ * overstate it by about 1.4x.
+ */
+test('no user-facing copy quotes the splitter share as the creator share', () => {
+  const html = read('website/index.html');
+  const main = html.slice(html.indexOf('<main>'), html.indexOf('<footer'));
+  assert.doesNotMatch(main, /95%\s*(of|to)\s*(trading\s*)?fees/i);
+  assert.doesNotMatch(main, /you keep 95/i);
+});
+
+/**
+ * THE CALL TO ACTION FOLLOWS THE REAL GATE.
+ *
+ * "Paused" was a dead end: honest, and with nowhere to go. It offers the one
+ * useful next step now, and when the gate opens the same section asks for the
+ * tweet instead -- from the committed gate state, so nobody has to remember to
+ * edit a paragraph on the day it matters.
+ */
+test('the how-to-launch note matches the committed gate state', () => {
+  const html = read('website/index.html');
+  const feed = JSON.parse(read('website/data/launches.json'));
+  const note = html.slice(html.indexOf('data-howto-gate'), html.indexOf('</section>', html.indexOf('data-howto-gate')));
+
+  if (feed.publicGate.enabled) {
+    assert.match(note, /Open now/);
+    assert.match(note, /Post the tweet/);
+  } else {
+    assert.match(note, /Paused right now/);
+    // Not a dead end.
+    assert.match(note, /x\.com\/ponsrdotfun/);
+  }
+});
+
+/**
+ * THE COPY BUTTON MUST NOT BE A CONTROL THAT CAN ONLY FAIL.
+ *
+ * `wireCopyButtons` refuses anything that is not a 40-hex address -- a guard
+ * worth keeping. The example request is a tweet, so on `data-copy-address` it
+ * would have failed that test, returned, and done nothing at all. It nearly
+ * shipped that way.
+ */
+test('the example request uses the text copy path, not the address one', () => {
+  const html = read('website/index.html');
+  const app = read('website/assets/app.mjs');
+  assert.match(html, /data-copy-text="@ponsrdotfun launch a token/);
+  assert.doesNotMatch(html, /data-copy-address="@/, 'a tweet is being passed to the address-only copy handler');
+  assert.match(app, /\[data-copy-text\]/);
+  assert.match(app, /wireCopyText\(\)/);
+  // The address guard stays exactly as strict as it was.
+  assert.match(app, /\^0x\[a-fA-F0-9\]\{40\}\$/);
+});
