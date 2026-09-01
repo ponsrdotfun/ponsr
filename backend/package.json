@@ -1,7 +1,8 @@
 {
   "name": "launch-bot-backend",
   "version": "0.1.0",
-  "description": "Twitter-native token launch bot backend for Pons factory on Robinhood Chain",
+  "license": "MIT",
+  "description": "X-native token launch bot backend for the pons factory on Robinhood Chain",
   "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {

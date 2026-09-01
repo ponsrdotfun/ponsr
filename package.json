@@ -1,6 +1,7 @@
 {
   "name": "ponsr-contracts-workspace",
   "private": true,
+  "license": "MIT",
   "description": "Compile/test workspace for FeeSplitter.sol -- see contracts-test/README.md",
   "scripts": {
     "compile": "node compile-all.js",
