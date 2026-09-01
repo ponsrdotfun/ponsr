@@ -33,6 +33,15 @@
  * actually appeared -- which is when a token needs its page -- or when the gap
  * has grown far enough to matter, and otherwise the run is a no-op.
  */
+/**
+ * `creator()` on a FeeSplitter, computed once rather than remembered.
+ *
+ * A wrong selector does not fail loudly: it calls a different function or falls
+ * into a fallback and returns an address that looks like an answer. This one is
+ * checked against ethers' own hash in the tests.
+ */
+const CREATOR_SELECTOR = '0x02d05d3f';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -196,6 +205,21 @@ for (const launch of decoded) {
 
   // Facts the chain speaks for. A read that fails keeps the committed value
   // rather than replacing it with a shrug.
+  /**
+   * `creator()` on the splitter, if there is one. Read with the same tolerance
+   * as everything else here: a failure keeps whatever is committed.
+   */
+  let creator = null;
+  const splitterForCreator = prior.splitter ?? launch.splitter ?? null;
+  if (splitterForCreator && /^0x[0-9a-fA-F]{40}$/.test(String(splitterForCreator))) {
+    try {
+      const raw = await rpc('eth_call', [{ to: splitterForCreator, data: CREATOR_SELECTOR }, 'latest']);
+      if (typeof raw === 'string' && raw.length >= 66) creator = `0x${raw.slice(-40)}`;
+    } catch {
+      log(`  ${launch.token} creator() unreadable; keeping the committed value`);
+    }
+  }
+
   let metadata = null;
   try {
     metadata = await collectTokenMetadata({ rpc, token: launch.token, blockNumber: head });
@@ -348,6 +372,23 @@ for (const launch of decoded) {
     logo: metadata ? metadata.logo : prior.logo ?? null,
     description: metadata ? metadata.description : prior.description ?? '',
     splitter: prior.splitter ?? splitter ?? launch.splitter ?? null,
+    /**
+     * WHO THE SPLITTER ACTUALLY PAYS.
+     *
+     * `deployer` is the treasury, because the treasury sends every launch. That
+     * is a true fact and a misleading headline: the board read "by 0x08e01f…"
+     * on every card, so three tokens appeared to belong to one anonymous wallet
+     * on a product whose pitch is "launch YOUR token".
+     *
+     * The creator is public -- `creator()` on the launch's own splitter -- and
+     * is read here rather than on every page load, because it can never change
+     * for a given splitter.
+     *
+     * A read that fails keeps the committed value rather than replacing it with
+     * a shrug, and null means unknown rather than "the treasury". The page must
+     * be able to tell those apart.
+     */
+    creator: creator ?? prior.creator ?? null,
     launchFeeEth: prior.launchFeeEth ?? launchFeeEth,
     name: metadata?.name ?? prior.name ?? launch.name,
     symbol: metadata?.symbol ?? prior.symbol ?? launch.symbol,
@@ -374,6 +415,36 @@ const merged = new Map(existing.launches.map((l) => [String(l.token).toLowerCase
 for (const launch of observed) merged.set(String(launch.token).toLowerCase(), launch);
 const launches = [...merged.values()];
 const carried = existing.launches.filter((l) => !seen.has(String(l.token).toLowerCase())).length;
+
+/**
+ * A CARRIED-FORWARD LAUNCH KEEPS ITS VALUES, BUT A MISSING FIELD IS STILL FILLED.
+ *
+ * The window scan does not re-decode launches older than it, which is the whole
+ * point -- re-reading settled ground is what made this refresh fail forever. But
+ * "keep what is committed" and "never learn anything new" are different rules,
+ * and only the first one is wanted. Without this, `creator` would be null on
+ * every existing launch permanently, and the board would keep attributing all of
+ * them to the treasury.
+ *
+ * Bounded: it asks only for launches that have a splitter and no creator yet, so
+ * it costs one call per launch exactly once and nothing thereafter.
+ */
+for (const launch of launches) {
+  if (launch.creator || !launch.splitter) continue;
+  try {
+    // Through `attempt`, because the sweep that ran first leaves a shared public
+    // endpoint throttling: the first version of this reported every launch as
+    // unreadable and the real reason was HTTP 429. A catch that hides why is
+    // worse than no catch, which is how that was found in one run.
+    const raw = await attempt(() => rpc('eth_call', [{ to: launch.splitter, data: CREATOR_SELECTOR }, 'latest']));
+    if (typeof raw === 'string' && raw.length >= 66) {
+      launch.creator = `0x${raw.slice(-40)}`;
+      log(`  ${launch.symbol.padEnd(12)} creator backfilled ${launch.creator}`);
+    }
+  } catch (error) {
+    log(`  ${launch.symbol.padEnd(12)} creator() unreadable: ${error?.message ?? error}`);
+  }
+}
 log(`refreshed       ${observed.length} in window, ${carried} carried forward unchanged`);
 
 const gate = await fetchPublicGate(GATE_URL, existing.publicGate);

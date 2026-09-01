@@ -434,3 +434,79 @@ test('every internal link resolves to a file without a redirect', () => {
   }
   assert.deepEqual(offenders, [], `internal links that redirect:\n  ${offenders.join('\n  ')}`);
 });
+
+/**
+ * THE BOARD MUST NOT ATTRIBUTE EVERY TOKEN TO PONSR.
+ *
+ * Every explore card read "by 0x08e01f…7c74fa". That is the TREASURY, and it is
+ * factually the on-chain deployer of every launch — so the field was not false,
+ * and that is exactly what made it dangerous. "by" reads as authorship, so three
+ * tokens appeared to belong to one anonymous wallet on a product whose pitch is
+ * "launch YOUR token".
+ *
+ * The creator was knowable the whole time: `creator()` on the launch's own
+ * splitter, which the fees page already read. It is in the snapshot now, read
+ * once at refresh rather than on every page load, because it cannot change for
+ * a given splitter.
+ */
+test('a launch is credited to its creator, and the treasury is named as the sender', () => {
+  const feed = loadJson('website/data/launches.json');
+  const withSplitter = feed.launches.filter((l) => l.splitter);
+  assert.ok(withSplitter.length > 0, 'no launch has a splitter to read a creator from');
+  for (const launch of withSplitter) {
+    assert.match(String(launch.creator ?? ''), /^0x[0-9a-fA-F]{40}$/, `${launch.symbol} has no creator`);
+  }
+
+  // Microduck was launched by the owner through the bot, so its creator is NOT
+  // the treasury. If this ever equals the deployer, the read has silently
+  // fallen back to the sender and the board is misattributing again.
+  const microduck = feed.launches.find((l) => l.symbol === 'MICRODUCK');
+  assert.ok(microduck, 'MICRODUCK is missing from the feed');
+  assert.notEqual(
+    String(microduck.creator).toLowerCase(),
+    String(microduck.deployer).toLowerCase(),
+    'the creator has collapsed back into the treasury'
+  );
+
+  const explore = read('website/explore/index.html');
+  assert.match(explore, /class="launchpad-deployer">creator /);
+  assert.doesNotMatch(explore, /class="launchpad-deployer">by /, 'the bare "by" attribution is back');
+
+  /**
+   * THE CLIENT BUILDS THIS CARD TOO, AND IT REPAINTS OVER THE BUILT ONE.
+   *
+   * Asserting only the built HTML is how this defect survived being fixed once
+   * already: the build script emitted the corrected card and app.mjs overwrote
+   * it with the old markup, so the page still read "by 0x08e01f…" while every
+   * test passed. Fifty-four CSS classes are emitted by both producers; a check
+   * that reads one of them proves nothing about what a visitor sees.
+   */
+  const app = read('website/assets/app.mjs');
+  assert.match(app, /launchpad-deployer',\s*token\.creator\s*\?/, 'the client card ignores the creator');
+  assert.doesNotMatch(app, /launchpad-deployer',`by /, 'the client card still says "by"');
+
+  // The token page names both, because the treasury really did send it.
+  const page = read(`website/token/${microduck.token.toLowerCase()}/index.html`);
+  assert.match(page, /Deployed by/);
+  assert.match(page, new RegExp(`creator[^<]*<a[^>]*${microduck.creator.slice(2, 10)}`, 'i'));
+});
+
+/**
+ * A BARE PERCENTAGE UNDER "MARKET CAP UNAVAILABLE" READS AS A PRICE CHANGE.
+ *
+ * The card rendered `<span>0.00%</span>` directly beneath the market-cap line,
+ * with no label anywhere and no accessible name on the `<progress>`. It is
+ * bonding-curve progress — the token page has always called it "Curve progress"
+ * — and this repository's own rule is that the board hides the 24h change
+ * rather than inventing one. An unlabelled 0.00% invents it by adjacency.
+ */
+test('curve progress is named on the card, on screen and to a screen reader', () => {
+  const explore = read('website/explore/index.html');
+  assert.match(explore, /class="launchpad-progress"><span>[\d.]+% to graduation<\/span>/);
+  assert.match(explore, /<progress[^>]*aria-label="Bonding curve progress to graduation"/);
+
+  // And the client's copy of the same card, for the same reason.
+  const app = read('website/assets/app.mjs');
+  assert.match(app, /\$\{progress\.toFixed\(2\)\}% to graduation/);
+  assert.match(app, /setAttribute\('aria-label','Bonding curve progress to graduation'\)/);
+});
