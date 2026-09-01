@@ -11,6 +11,7 @@ const FEE = ETH / 2000n; // 0.0005 ETH, the live mainnet fee on 2026-08-06
 
 function deps(over: Partial<StatusDeps> = {}): StatusDeps {
   return {
+    replyIncludeLink: false,
     expectedChainId: 4663,
     getChainId: async () => 4663,
     getBlockNumber: async () => 1234,
@@ -196,5 +197,39 @@ describe('buildStatus', () => {
   it('is explicit that the parser was not actually called', async () => {
     const r = await buildStatus(deps());
     expect(find(r, 'parser').detail).toContain('not called');
+  });
+});
+
+/**
+ * A PRICE THAT CANNOT BE OBSERVED HAS BEEN BOUGHT ON FAITH.
+ *
+ * `REPLY_INCLUDE_LINK` decides whether a success reply carries a link, and X
+ * charges $0.200 for a post containing a URL against $0.015 without --
+ * thirteen times, for one link. It lives in a Fly secret, and a Fly secret's
+ * VALUE cannot be read back: an operator who sets it has no way to confirm what
+ * they set.
+ *
+ * That is not hypothetical here. `z.coerce.boolean()` was once applied to this
+ * exact setting, so writing `REPLY_INCLUDE_LINK=false` opted INTO the expensive
+ * behaviour, silently and permanently until somebody read an invoice.
+ */
+describe('the reply-link price is published', () => {
+  it('reports the value it was given, both ways', async () => {
+    const { buildStatus } = require('../src/statusReport');
+    for (const value of [true, false]) {
+      const d: any = deps({ replyIncludeLink: value });
+      const status: any = await buildStatus(d);
+      expect(status.spend.replyIncludeLink).toBe(value);
+    }
+  });
+
+  it('does not confuse it with the launch gate', async () => {
+    const { buildStatus } = require('../src/statusReport');
+    // Two independent booleans that have both been false for weeks. A copy-paste
+    // that wired one to the other would look correct in every existing test.
+    const d: any = deps({ replyIncludeLink: true, publicLaunchEnabled: false });
+    const status: any = await buildStatus(d);
+    expect(status.spend.replyIncludeLink).toBe(true);
+    expect(status.spend.publicLaunchEnabled).toBe(false);
   });
 });

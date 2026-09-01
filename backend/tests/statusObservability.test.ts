@@ -15,6 +15,7 @@ const FEE = ETH / 2000n;
 
 function deps(over: Partial<StatusDeps> = {}): StatusDeps {
   return {
+    replyIncludeLink: false,
     expectedChainId: 4663,
     getChainId: async () => 4663,
     getBlockNumber: async () => 1234,

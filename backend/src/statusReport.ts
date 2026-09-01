@@ -222,6 +222,16 @@ export interface StatusDeps {
   treasuryAddress?: string;
   /** Ponsr's own gate. A healthy upstream factory is not public availability. */
   publicLaunchEnabled: boolean;
+  /**
+   * Whether a success reply carries a link to the token's page.
+   *
+   * Published because a Fly secret's value cannot be read back, and this one is
+   * a PRICE: X charges $0.200 for a post containing a URL against $0.015
+   * without. An operator who sets it and cannot observe it has bought a
+   * thirteenfold cost increase on faith -- and a boolean setting in this
+   * codebase has silently meant its opposite before.
+   */
+  replyIncludeLink: boolean;
   /** Which factory launches are built for. v1 prices every launch in ETH. */
   factoryVersion: 'v1' | 'v2';
   /** Symbols a launch can be paired against. Absent on v1, where there is nothing
@@ -404,6 +414,7 @@ export async function buildStatus(deps: StatusDeps, timeoutMs = 5000): Promise<S
           factory: deps.deploymentFactory,
           treasury: deps.treasuryAddress,
           publicLaunchEnabled: deps.publicLaunchEnabled,
+          replyIncludeLink: deps.replyIncludeLink,
           generatedAt: new Date().toISOString(),
         }
       : undefined;

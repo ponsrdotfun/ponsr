@@ -58,6 +58,7 @@ const slow = <T>(v: T, ms: number) => new Promise<T>((r) => setTimeout(() => r(v
 
 function deps(over: Partial<StatusDeps> = {}): StatusDeps {
   return {
+    replyIncludeLink: false,
     expectedChainId: D.chainId,
     getChainId: async () => D.chainId,
     getBlockNumber: async () => 1234,
