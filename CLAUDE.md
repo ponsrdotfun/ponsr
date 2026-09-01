@@ -198,6 +198,41 @@ Two hard-won guards came out of it, and both must stay:
 Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key),
 `validate-splitter.ts` (testnet rehearsal), `phase-b-launch.ts`, `collect-and-split.ts`.
 
+### Claiming creator fees (2026-09-01)
+
+A signed-in creator can press collect on `/account/fees`. Built as an owner brief, which is
+what the freeze requires before backend feature work.
+
+**Nothing can actually be sent yet, and that is the intended state.** The signer holds no
+policy permitting calls to splitter addresses, so every claim returns `policy-refused` and
+the page says so in those words. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
+write the rule and which to choose; `scripts/turnkey-verify-claim.ts` proves it afterwards by
+signing, never by trusting a config flag. Measured 2026-09-01, nothing broadcast: claim
+**denied**, funded claim **denied**, arbitrary destination **denied**, factory ALLOWED —
+verdict NOT YET, exit 3.
+
+Four things about this path are load-bearing:
+
+- **`claimAndSplit` is permissionless and pays the CREATOR, never the caller.** The treasury
+  sending one cannot move anybody's fees anywhere except to the person already owed them. It
+  spends gas on their behalf and nothing else, which is what lets the account pages keep the
+  custody boundary they advertise. No reply or document may describe this as the treasury
+  collecting somebody's fees.
+- **`eth.tx.value == 0` is not optional on the claim rule.** A splitter's native `withdraw()`
+  pays `msg.sender`, so ETH landing in a splitter can be taken by whoever asks first. Allowing
+  an address is not the same as allowing it to be paid — the same shape as the funded-creation
+  finding closed 2026-08-22.
+- **One claim per asset in flight.** Measured before the guard: six concurrent calls sent SIX
+  transactions. Only the first can succeed, so the rest revert with `NothingToClaim` and burn
+  gas. The balance read cannot see them because none has landed, and the button's own
+  disabling is client-side — two tabs walk past it.
+- **A claim names the TOKEN, not a database row id.** The website cannot learn a row id, and a
+  route that demanded one refused every real click as "not yours" — the most misleading refusal
+  available, because it names a guard that never fired.
+
+The fee-collection path is still **untested end to end**: no swap, trade or claim has moved
+value. 95/5 remains asserted by the splitter's constants, not by anything having been paid.
+
 ## Immediate next actions
 
 **THE BACKEND IS FROZEN as of 2026-08-28.** The launch path is proven end to end on mainnet
@@ -299,14 +334,25 @@ Still blocked on the owner:
    to be sequenced with the canary plan — is history now, and is kept only in
    `PONSR-DEPLOY-PAUSED-REPORT.txt`.
 
-### Production, as actually deployed (2026-08-31)
+### Production, as actually deployed (2026-09-01)
 
-`ponsr-backend` on Fly runs **release v47**, image
-`sha256:3489ae266369ddb03b69055048a8b748df9ffda84e11001bdcd888481190374d` (deployed as v46;
-v47 is that image with `PUBLIC_LAUNCH_ENABLED` set back to false). One machine
+`ponsr-backend` on Fly runs **release v51**, image
+`sha256:9ee66f24ed544a20af5540cd1169c95a42c2efd24557bf67dbe989136651b170`. One machine
 (`867634bee0e048`, `iad`), volume `vol_r1j1nwjzdx6p7q3r` attached. Rollback target is the
-exact previous digest, `sha256:e1474a314a58ce9208ba4adee782fe4c6449df2ee905761e348e10e4e62ef13d`
-(v45) — name the digest, never "the previous release".
+exact previous digest, `sha256:3489ae266369ddb03b69055048a8b748df9ffda84e11001bdcd888481190374d`
+(v50) — name the digest, never "the previous release".
+
+**This section said v47 while production had been through v48, v49 and v50.** Those were
+config releases on one image, and the entry was not updated as they landed. The digest
+recorded here as v47's was in fact the image v50 was still serving. The rule that already
+sits below — read `/status` before describing what production believes — applies to the
+version line too, and `flyctl image show` is the only thing that names the digest.
+
+**Measured immediately after the v51 deploy: `/status` was 503 with `rpc`, `launch-fee`,
+`launchpad` and `treasury-hot` all failing.** Two and a half minutes later it was 200 in
+0.845 s with those four ok. That is a cold start, not a fault — the same shape as the
+`mention-sweep` note below, and worth the same restraint. Do not diagnose a deploy from the
+first `/status` after it.
 
 Live `/status/core` reads `ok: true`, `problems: []`, `publicLaunchEnabled: false`. On the
 full `/status`, overall `degraded` is CORRECT — `public-launches` is the only non-ok check
