@@ -26,6 +26,8 @@
  */
 import { reduceSourceState, publicGateMessage } from './data-state.mjs';
 import { claimableBy, feeTotals } from './claim.mjs';
+import { launchpadCard as launchpadCardModel, tokenArt as tokenArtModel, curveProgress, tokenHref } from './cards.mjs';
+import { toDom } from './markup.mjs';
 import { byEventTimeDesc, normaliseLaunch } from './feed-model.mjs';
 import { element, setText } from './render.mjs';
 // The build renders these same facts. Sharing the formatters is what stops the
@@ -85,15 +87,14 @@ function fact(list, label, value) {
   list.append(row);
 }
 
-function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(String(value));if(url.protocol!=='https:'||url.hostname!=='pbs.twimg.com'||url.username||url.password||url.port||!/^\/media\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname))return null;for(const key of url.searchParams.keys())if(!['format','name'].includes(key))return null;return url.toString();}catch{return null;}}
-function tokenArtNode(token){const logo=trustedLogoUrl(token.logo),art=element('div',`token-art${logo?' has-image':' unavailable'}`);if(logo){const image=document.createElement('img');image.src=logo;image.alt=`${token.name} token image`;image.loading='lazy';image.decoding='async';art.append(image);return art;}art.setAttribute('role','img');art.setAttribute('aria-label',`Token image unavailable for ${token.symbol}`);// The ticker is the art when there is no logo: identity rather than absence.
-// See the build renderer for why. The accessible label above is unchanged.
-const symbol=element('span','art-symbol',String(token.symbol||'?').toUpperCase());
-// A data attribute, never an inline style: this site keeps a strict CSP and a
-// test guards it. CSS cannot measure text, so the length is published and the
-// stylesheet carries one static rule per length.
-symbol.dataset.artLen=String(Math.min(12,String(token.symbol||'?').length));
-art.append(element('span','art-grid'),symbol);return art;}
+/**
+ * The artwork block, from the model the deploy-time build also renders.
+ *
+ * This was a second implementation of the same block, beside a second copy of
+ * `trustedLogoUrl` -- a security check duplicated byte for byte, which is two
+ * chances to relax one of them.
+ */
+function tokenArtNode(token){return toDom(tokenArtModel(token));}
 
 function tokenCard(token) {
   const card=element('article','token-card');const art=tokenArtNode(token);
@@ -113,13 +114,23 @@ function relativeLaunchTime(iso,anchor) {
 function sortLaunchpad(launches,sort) {
   const copy=[...launches];if(sort==='oldest')return copy.sort((a,b)=>new Date(a.blockTimestamp||0)-new Date(b.blockTimestamp||0));if(sort==='market-cap')return copy.sort((a,b)=>(Number(b.marketCapUsd)||-1)-(Number(a.marketCapUsd)||-1));if(sort==='recent-buys')return copy.sort((a,b)=>new Date(latestCanonicalBuyTime(b)||0)-new Date(latestCanonicalBuyTime(a)||0));return copy.sort(byEventTimeDesc);
 }
-function launchpadCardNode(token,anchor) {
-  const card=element('article','launchpad-card');const href=`/token/${String(token.token).toLowerCase()}`;const cover=element('a','launchpad-card-link');cover.href=href;cover.setAttribute('aria-label',`Inspect ${token.name}`);
-  const media=element('div','launchpad-media');const art=tokenArtNode(token);const badge=element('span','protocol-badge','V2');badge.dataset.protocolBadge='';media.append(art,badge);
-  const reserve=BigInt(token.reserves?.realQuoteReserveWei||0),threshold=BigInt(token.graduationThreshold||0);const progress=threshold>0n?Number((reserve*100000n)/threshold)/1000:0;
-  const body=element('div','launchpad-card-body');body.append(element('h3','',token.name),element('p','launchpad-symbol',`$${token.symbol}`));const mcap=element('p','launchpad-mcap');mcap.dataset.cardMarketCap='';mcap.append(element('strong','',token.marketCapUsd?`$${Number(token.marketCapUsd).toLocaleString()} MC`:'Market cap unavailable'));body.append(mcap);
-  const curve=element('div','launchpad-progress');curve.append(element('span','',`${progress.toFixed(2)}% to graduation`));const bar=document.createElement('progress');bar.max=100;bar.value=progress;bar.textContent=`${progress.toFixed(2)}%`;bar.setAttribute('aria-label','Bonding curve progress to graduation');curve.append(bar);body.append(curve,element('p','launchpad-deployer',token.creator?`creator ${shortAddress(token.creator)}`:`deployer ${shortAddress(token.deployer)}`));
-  const bottom=element('div','launchpad-bottom');const copy=element('button');copy.type='button';copy.dataset.copyAddress=token.token;copy.setAttribute('aria-label',`Copy contract address ${token.token}`);copy.append(element('span','',shortAddress(token.token)));const copyLabel=element('i','','Copy');copyLabel.dataset.copyLabel='';copyLabel.setAttribute('role','status');copyLabel.setAttribute('aria-live','polite');copy.append(copyLabel);const time=document.createElement('time');time.dateTime=token.blockTimestamp||'';time.dataset.cardRelativeTime='';time.textContent=relativeLaunchTime(latestCanonicalBuyTime(token),anchor);bottom.append(copy,time);body.append(bottom);card.append(cover,media,body);return card;
+/**
+ * The launchpad card, from the shared model.
+ *
+ * It was written here and in the build script, and the two had drifted four
+ * ways: the cover link, the attribution, the percentage label, and the progress
+ * arithmetic. Only the values this side knows stay here -- the market cap it
+ * has observed and the clock it anchors relative time against.
+ */
+function launchpadCardNode(token, anchor) {
+  return toDom(launchpadCardModel({
+    token,
+    art: tokenArtModel(token),
+    marketCapLabel: token.marketCapUsd
+      ? `$${Number(token.marketCapUsd).toLocaleString()} MC`
+      : 'Market cap unavailable',
+    relativeTime: relativeLaunchTime(latestCanonicalBuyTime(token), anchor),
+  }));
 }
 function paintLaunchpad(feed,state) {
   const grid=document.querySelector('[data-launchpad-grid]');if(!grid||!feed)return;const params=new URLSearchParams(location.search);let sort=params.get('sort')||'recent-buys';if(!['recent-buys','newest','oldest','market-cap'].includes(sort))sort='recent-buys';const query=String(document.querySelector('[data-launch-search]')?.value||'').trim().toLowerCase();const launches=feed.launches.map((raw)=>normaliseLaunch(raw,feed.observedAt)).filter((token)=>!query||[token.name,token.symbol,token.token].some((value)=>String(value).toLowerCase().includes(query)));const sorted=sortLaunchpad(launches,sort);grid.replaceChildren(...sorted.map((token)=>launchpadCardNode(token,feed.observedAt)));setText(document.querySelector('[data-launch-count]'),`${sorted.length} launched`);const sourceCopy=state?.kind==='error'?'Last-known records · live source error':state?.kind==='partial'?'Partial live coverage · preserved records':state?.kind==='stale'?'Last-known snapshot · source not live':'Exact verified records';setText(document.querySelector('[data-result-detail]'),query?`Matching “${query}” · ${sort.replace('-', ' ')} · ${sourceCopy}`:`${sort==='recent-buys'?'Recent canonical buys':sort.replace('-', ' ')} · ${sourceCopy}`);const panel=grid.closest('.launchpad-panel');if(panel)panel.dataset.sourceState=state?.kind||'unknown';const empty=document.querySelector('[data-empty-note]');if(empty)empty.hidden=sorted.length>0;for(const button of document.querySelectorAll('[data-launch-sort]'))button.setAttribute('aria-pressed',String(button.dataset.launchSort===sort));
