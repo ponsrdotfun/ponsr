@@ -139,3 +139,105 @@ describe('ChainPairTokenSource.approvalHistory', () => {
     await expect(src.approvalHistory()).resolves.toEqual([]);
   });
 });
+
+/**
+ * THE SCAN WATERMARK MUST OUTLIVE THE PROCESS.
+ *
+ * The scan was already incremental within a process: `scannedTo` means a second
+ * call reads only new blocks. Across a restart it was not, so every deploy swept
+ * from the deployment's first block to the head again -- 25 million blocks by
+ * 2026-09-01, in million-block windows, against a shared public endpoint. Over
+ * ten hours of retained logs, boot discovery failed twice and succeeded twice,
+ * and the sweep only gets longer as the chain does.
+ *
+ * The same defect appeared in three places on one day: here, the launchpad
+ * watch's `closed` flag, and the snapshot refresh. In-memory state that has to
+ * outlive the process is not state, it is a cache with an opinion.
+ */
+describe('the approval scan resumes after a restart', () => {
+  const makeStore = () => {
+    const values = new Map<string, string>();
+    return { get: (k: string) => values.get(k) ?? null, set: (k: string, v: string) => { values.set(k, v); }, values };
+  };
+
+  /** Records every block range asked for, so "did it rescan?" is measurable. */
+  const makeProvider = (head: number, ranges: Array<[number, number]>) => ({
+    getBlockNumber: async () => head,
+    // Enough of a contract for queryFilter; the source builds its own ethers.Contract,
+    // so the ranges are captured through the filter call below.
+    ranges,
+  });
+
+  it('reads only the new window on the second process', async () => {
+    const store = makeStore();
+    const start = 26841846;
+    const asked: Array<[number, number]> = [];
+
+    const build = () => {
+      const source: any = Object.create(ChainPairTokenSource.prototype);
+      source.opts = { store, chunkSize: 1_000_000, provider: { getBlockNumber: async () => start + 2_500_000 } };
+      source.deployment = { id: 'pons-v2-current-7ed', startBlock: start, factory: '0x' + '7'.repeat(40) };
+      source.fromBlock = start;
+      source.scannedTo = null;
+      source.seen = [];
+      source.hydrated = false;
+      source.factory = {
+        filters: { PairTokenApprovalUpdated: () => ({}) },
+        queryFilter: async (_f: unknown, lo: number, hi: number) => {
+          asked.push([lo, hi]);
+          return [];
+        },
+      };
+      return source;
+    };
+
+    const first = build();
+    await first.approvalHistory();
+    const firstSweep = asked.length;
+    expect(firstSweep).toBeGreaterThan(1);
+
+    // A deploy: a brand new object, the same database.
+    asked.length = 0;
+    const second = build();
+    await second.approvalHistory();
+
+    expect(asked).toHaveLength(0);
+    expect(store.values.size).toBe(1);
+  });
+
+  it('discards a watermark that claims to have scanned below the deployment', async () => {
+    const store = makeStore();
+    const start = 26841846;
+    store.set(`pair-approvals:pons-v2-current-7ed`, JSON.stringify({ scannedTo: start - 1, seen: [] }));
+
+    const source: any = Object.create(ChainPairTokenSource.prototype);
+    source.opts = { store, chunkSize: 1_000_000 };
+    source.deployment = { id: 'pons-v2-current-7ed', startBlock: start };
+    source.fromBlock = start;
+    source.scannedTo = null;
+    source.seen = [];
+    source.hydrated = false;
+    source.hydrate();
+
+    // A corrupt watermark would skip the window it claims to have read, and an
+    // approval missed there becomes an asset the bot quietly refuses to offer.
+    expect(source.scannedTo).toBeNull();
+  });
+
+  it('discards a blob that is not the shape it stored', async () => {
+    const start = 26841846;
+    for (const bad of ['not json', '{"scannedTo":"soon","seen":[]}', '{"scannedTo":30000000}', '{"scannedTo":30000000,"seen":[{"pairToken":1}]}']) {
+      const store = makeStore();
+      store.set('pair-approvals:pons-v2-current-7ed', bad);
+      const source: any = Object.create(ChainPairTokenSource.prototype);
+      source.opts = { store };
+      source.deployment = { id: 'pons-v2-current-7ed', startBlock: start };
+      source.fromBlock = start;
+      source.scannedTo = null;
+      source.seen = [];
+      source.hydrated = false;
+      source.hydrate();
+      expect(source.scannedTo).toBeNull();
+    }
+  });
+});
