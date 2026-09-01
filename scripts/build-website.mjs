@@ -360,7 +360,7 @@ function explore() {
   return page({
     title: 'Explore · Ponsr',
     description: 'Every current V2 token Ponsr has launched on Robinhood Chain, with source state, block and authoritative event time.',
-    canonical: 'https://ponsr.fun/explore',
+    canonical: 'https://ponsr.fun/explore/',
     socialImage: socialImages.explore,
     body,
   });
@@ -459,7 +459,7 @@ function tokenPage(token) {
   return page({
     title: `${token.name} (${token.symbol}) — Ponsr`,
     description: `${token.symbol} on Robinhood Chain: factory, bonding curve, fee splitter, deployer, pair asset, launch transaction, block and authoritative event time — as recorded on chain.`,
-    canonical: `https://ponsr.fun/token/${token.token.toLowerCase()}`,
+    canonical: `https://ponsr.fun/token/${token.token.toLowerCase()}/`,
     socialImage: socialImages.tokens.get(token.token.toLowerCase()),
     body,
   });
@@ -638,7 +638,7 @@ function accountPage(route='/account') {
     '/account/security':['Authority & recovery','Identity, sessions, custody, and signing boundaries in one place.'],
   }[route] || ['Creator operations','Verified private account workspace.'];
   const body=`<main class="account-shell" data-auth-state="signed-out" data-identity-state="unavailable" data-private-data-state="locked" data-execution-authority="NO_WALLET_AUTHORITY" data-can-sign="false" data-can-send="false" data-can-swap="false" data-can-claim="false"><div class="account-command-shell">${accountSidebar(route)}<section class="account-workspace" data-account-route="${esc(route)}"><header class="account-route-head"><div><p class="eyebrow">${esc(routeIntro[0])}</p><h1 class="metal">${esc(title)}</h1><p class="lede">${esc(routeIntro[1])}</p></div><span class="workspace-mode" data-account-mode><i></i>Phase B · Unavailable</span></header>${accountConnection()}<div class="account-workspace-body">${content}</div></section></div></main>`;
-  return page({title:`${title} — Ponsr account`,description:'The Ponsr account command center architecture, with honest unavailable states until verified X identity and existing-wallet continuity are wired.',canonical:`https://ponsr.fun${route}`,socialImage:socialImages.account,body});
+  return page({title:`${title} — Ponsr account`,description:'The Ponsr account command center architecture, with honest unavailable states until verified X identity and existing-wallet continuity are wired.',canonical:`https://ponsr.fun${route}/`,socialImage:socialImages.account,body});
 }
 
 /* -------------------------------------------------------------------------- */
@@ -652,7 +652,7 @@ function dynamicTokenPage() {
   return page({
     title: 'Inspect a Ponsr launch',
     description: 'Inspect an exact current V2 Ponsr launch address from the canonical live feed.',
-    canonical: 'https://ponsr.fun/token',
+    canonical: 'https://ponsr.fun/token/',
     noindex: true,
     body: `<main class="section dynamic-token" data-dynamic-token-page>` +
       `<div class="section-head"><p class="eyebrow">Current V2 launch</p>` +
@@ -736,7 +736,23 @@ for (const token of launches) {
 }
 
 const routes = ['', 'explore', 'terms', ...accountRoutes.map(([, route]) => route.slice(1)), ...launches.map((token) => `token/${token.token.toLowerCase()}`)];
-const urls = routes.map((route) => `  <url><loc>https://ponsr.fun/${route}</loc></url>`).join('\n');
+/**
+ * THE SITEMAP LISTS THE URL THAT SERVES 200, NOT ONE THAT REDIRECTS.
+ *
+ * Measured live: `/explore` answers 301 to `/explore/`, while `/terms` answers
+ * 200 and `/terms/` answers 301 the other way. The rule is not "always add a
+ * slash" -- it is how the page was WRITTEN. A page written as `terms.html` is
+ * served at `/terms`; one written as `explore/index.html` at `/explore/`. A
+ * blanket trailing slash would have broken the two file-backed pages, which is
+ * why this is derived from the layout rather than decreed.
+ *
+ * It matters twice over: a canonical tag naming a redirecting URL points away
+ * from itself, and every crawl of every page paid for a round trip carrying no
+ * content.
+ */
+const FILE_BACKED = new Set(['terms', '404']);
+const canonicalPath = (route) => (route === '' || FILE_BACKED.has(route) ? route : `${route}/`);
+const urls = routes.map((route) => `  <url><loc>https://ponsr.fun/${canonicalPath(route)}</loc></url>`).join('\n');
 await fs.writeFile(
   path.join(site, 'sitemap.xml'),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`
