@@ -181,9 +181,13 @@ describe('incomplete identity fails closed', () => {
     expect(s.problems.map((p) => p.code)).toContain('missing-consensus');
   });
 
-  it('a condition whose case carries meaning is refused rather than lowercased', () => {
+  it('a condition that cannot be parsed is refused rather than guessed at', () => {
     const rows = baseline();
-    rows[0].condition = "eth.tx.data == '0xAbCdEf'";
+    // A calldata comparison is normalizable now, with its case preserved. What
+    // still fails closed is a condition that cannot be PARSED -- identity is
+    // what a deletion binds to, and an unterminated literal has no settled
+    // meaning to bind.
+    rows[0].condition = "eth.tx.to == '0xAbCdEf";
     const s = projectPolicyInventory(rows, ORG);
     expect(s.problems.map((p) => p.code)).toContain('condition-unnormalizable');
     expect(s.usableForMutation).toBe(false);

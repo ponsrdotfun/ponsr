@@ -43,28 +43,65 @@ export interface PolicyLike {
  */
 export function normalizeCondition(condition: string | undefined): string {
   const raw = String(condition ?? '');
+  const stripped = raw.replace(/\s+/g, '');
 
-  // Refuse what this has not been shown to handle.
-  //
-  // Lowercasing the whole expression is correct for the rules that exist -- EVM
-  // addresses are case-insensitive, and two scripts can submit the same rule with
-  // different checksum casing. It is not correct in general: calldata and function names
-  // carry meaning in their case, so lowercasing makes two DIFFERENT rules compare equal.
-  //
-  // This function decides whether a rule already exists. Answering "yes" wrongly means
-  // the rule somebody needs never gets created -- and the rules likely to arrive next are
-  // exactly the case-sensitive ones, since binding a selector is one of the proposed
-  // closures for the funded-creation finding.
-  if (/eth\.tx\.(data|function_name|contract_call_args)/i.test(raw)) {
-    throw new Error(
-      'normalizeCondition only handles address, chain-id and value comparisons. This ' +
-        'condition compares calldata or a function name, where case is meaning: ' +
-        raw.slice(0, 120) +
-        ' -- preserve case-sensitive literals before comparing, rather than lowercasing.'
-    );
+  /**
+   * Case is lowered where it cannot carry meaning, and preserved where it can.
+   *
+   * The whole expression used to be lowercased, which is right for the rules
+   * that existed -- EVM addresses are case-insensitive and two scripts can
+   * submit the same rule with different checksum casing. It is wrong the moment
+   * a rule compares CALLDATA: `eth.tx.data[0..10] == '0x56C937FC'` and
+   * `== '0x56c937fc'` are different string comparisons, and only one of them
+   * matches what the node actually produces.
+   *
+   * So this function refused such conditions outright, and said in its own error
+   * message what the fix would be. That refusal was written before any selector
+   * rule existed and correctly predicted this one. It is now the rule the signer
+   * holds, so refusing it means the inventory reports the organisation as
+   * unusable for mutation -- and the next step in the migration IS a mutation.
+   *
+   * The rule now: strip whitespace, lowercase everything OUTSIDE quotes, and
+   * inside quotes lowercase only a full 20-byte address, which is the one
+   * literal whose case genuinely cannot matter. Every other literal is compared
+   * exactly as written.
+   */
+  const ADDRESS_LITERAL = /^0x[0-9a-fA-F]{40}$/;
+  let out = '';
+  let index = 0;
+  while (index < stripped.length) {
+    const quote = stripped[index];
+    if (quote !== "'" && quote !== '"') {
+      out += stripped[index].toLowerCase();
+      index += 1;
+      continue;
+    }
+    const close = stripped.indexOf(quote, index + 1);
+    if (close === -1) {
+      /**
+       * An unterminated literal is refused, and that refusal is the point.
+       *
+       * This function decides a policy's IDENTITY, and identity is what a
+       * deletion is bound to. A condition whose quoting cannot be parsed is one
+       * whose meaning cannot be established, so binding a mutation to it would
+       * be binding to a guess.
+       *
+       * It also keeps the inventory's fail-closed path alive. Handling calldata
+       * removed the only case that used to reach it; a normalizer that can never
+       * refuse turns `condition-unnormalizable` into dead code, and a guard that
+       * cannot fire is not a guard.
+       */
+      throw new Error(
+        'normalizeCondition cannot parse a condition with an unterminated string ' +
+          'literal, and will not bind an identity to a guess: ' +
+          raw.slice(0, 120)
+      );
+    }
+    const literal = stripped.slice(index + 1, close);
+    out += quote + (ADDRESS_LITERAL.test(literal) ? literal.toLowerCase() : literal) + quote;
+    index = close + 1;
   }
-
-  return raw.replace(/\s+/g, '').toLowerCase();
+  return out;
 }
 
 /**

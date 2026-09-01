@@ -31,7 +31,13 @@ describe('normalizeCondition', () => {
   });
 
   it('ignores address casing, because EVM addresses are case-insensitive', () => {
-    expect(normalizeCondition("eth.tx.to == '0xAbCd'")).toBe(normalizeCondition("eth.tx.to == '0xabcd'"));
+    // A REAL address, not a short stub. Only a full 20-byte literal is case
+    // normalised, because that is the only literal whose case cannot carry
+    // meaning -- four hex characters could be anything, including a selector.
+    const checksummed = '0x18d1d206A042260aA86F2aF87a8bf7c959f899D5';
+    expect(normalizeCondition(`eth.tx.to == '${checksummed}'`)).toBe(
+      normalizeCondition(`eth.tx.to == '${checksummed.toLowerCase()}'`)
+    );
   });
 
   it('does not treat different addresses as the same', () => {
@@ -128,25 +134,57 @@ describe('normalizeCondition refuses what it cannot safely compare', () => {
   });
 
   /**
-   * The one that matters: calldata is case-sensitive in a way addresses are not, and a
-   * selector comparison lowercased is a selector comparison that can collide.
+   * CALLDATA IS HANDLED NOW, AND ITS CASE IS PRESERVED.
+   *
+   * This function used to throw on any calldata comparison, and the refusal was
+   * right when it was written: lowercasing the whole expression would make
+   * `'0x56C937FC'` and `'0x56c937fc'` compare equal, and they are different
+   * string comparisons at runtime -- only one matches what the node produces.
+   * The comment predicted a selector rule would arrive next, and one did.
+   *
+   * Refusing it stopped being free the moment the signer held such a rule: the
+   * inventory reported the whole organisation as NOT USABLE FOR MUTATION, and
+   * the next step of the migration is a deletion. So the case is preserved
+   * instead of the condition being refused.
    */
-  it('refuses a calldata comparison rather than lowercasing it', () => {
-    expect(() => normalizeCondition("eth.tx.data[0..10] == '0xF35ABBCF'")).toThrow(/case|calldata|data/i);
+  it('normalises a calldata comparison instead of refusing it', () => {
+    expect(() => normalizeCondition("eth.tx.data[0..10] == '0x56c937fc'")).not.toThrow();
+    expect(normalizeCondition("eth.tx.value == 0 && eth.tx.data[0..10] == '0x56c937fc'")).toBe(
+      "eth.tx.value==0&&eth.tx.data[0..10]=='0x56c937fc'"
+    );
   });
 
-  it('refuses a function-name comparison, where case is meaning', () => {
-    // `launchToken` and `launchtoken` are different functions as far as an ABI is
-    // concerned; treating them as one would match a rule that does not exist.
-    expect(() => normalizeCondition("eth.tx.function_name == 'launchToken'")).toThrow(/case|function/i);
+  it('does NOT make two selector casings compare equal', () => {
+    // The exact collision the old refusal existed to prevent. These are
+    // different rules: a node producing lowercase calldata matches one and not
+    // the other, so an identity check that merged them would report a rule as
+    // already in place when the one somebody needs does not exist.
+    expect(normalizeCondition("eth.tx.data[0..10] == '0x56C937FC'")).not.toBe(
+      normalizeCondition("eth.tx.data[0..10] == '0x56c937fc'")
+    );
   });
 
-  it('says what to do rather than only refusing', () => {
-    try {
-      normalizeCondition("eth.tx.data[0..10] == '0xF35ABBCF'");
-      throw new Error('should have refused');
-    } catch (e: any) {
-      expect(e.message).toMatch(/case-sensitive|preserve/i);
-    }
+  it('preserves case in a function name, where case is meaning', () => {
+    // `launchToken` and `launchtoken` are different functions as far as an ABI
+    // is concerned; merging them would match a rule that does not exist.
+    expect(normalizeCondition("eth.tx.function_name == 'launchToken'")).not.toBe(
+      normalizeCondition("eth.tx.function_name == 'launchtoken'")
+    );
+  });
+
+  it('still lowercases the field names around a case-sensitive literal', () => {
+    // Only what is inside quotes is protected. The expression itself is not
+    // case-sensitive, and two rules differing only in field casing are one rule.
+    expect(normalizeCondition("ETH.TX.DATA[0..10] == '0x56c937fc'")).toBe(
+      normalizeCondition("eth.tx.data[0..10] == '0x56c937fc'")
+    );
+  });
+
+  it('refuses an unterminated literal rather than binding an identity to a guess', () => {
+    // The one case that still fails closed. Identity is what a deletion binds
+    // to, so a condition whose quoting cannot be parsed must not produce one --
+    // and a normalizer that can never refuse turns the inventory's
+    // `condition-unnormalizable` guard into dead code.
+    expect(() => normalizeCondition("eth.tx.to == '0xAbCd")).toThrow(/unterminated|parse/i);
   });
 });
