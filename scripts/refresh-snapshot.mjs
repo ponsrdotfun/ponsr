@@ -211,6 +211,50 @@ for (const launch of decoded) {
     log(`    launch transaction unreadable (${String(error?.message ?? error).slice(0, 80)}); leaving the fee unrecorded`);
   }
 
+  /**
+   * THE FEE SPLITTER, READ FROM THE LAUNCH'S OWN CALLDATA.
+   *
+   * The launch event does not carry it, so the feed published `splitter: null`
+   * for every launch except the one that was committed by hand -- and the token
+   * page showed an empty "Fee splitter" row. Nothing was lost by that: the
+   * splitter exists and is correctly wired on chain, and the backend records it
+   * in `launch_provenance`. It was the SITE that could not see it.
+   *
+   * The address travels as `feeWallet` in the launch calldata, so it is read
+   * back from the transaction that created it. Three guards, because decoding
+   * is where a plausible wrong answer comes from:
+   *
+   *   - the selector must be THIS deployment's. A superseded factory takes a
+   *     different tuple, and the same word offset there is a different field.
+   *   - the result must be a contract. A word that happens to hold twenty
+   *     non-zero bytes is not a splitter.
+   *   - a committed splitter is never overwritten, and the run stops if the
+   *     chain disagrees with one -- the same rule as every other identity here.
+   */
+  let splitter = null;
+  try {
+    const tx = await attempt(() => rpc('eth_getTransactionByHash', [launch.transactionHash]));
+    const input = String(tx?.input ?? '');
+    if (!input.toLowerCase().startsWith(DEPLOYMENT.launchSelector)) {
+      log(`    launch calldata is not ${DEPLOYMENT.launchSelector}; not reading a splitter from it`);
+    } else {
+      const word = DEPLOYMENT.feeWalletWord;
+      const candidate = `0x${input.slice(10 + word * 64 + 24, 10 + (word + 1) * 64)}`;
+      if (!/^0x[0-9a-f]{40}$/i.test(candidate) || /^0x0{40}$/.test(candidate)) {
+        log('    fee wallet word is not an address; leaving the splitter unrecorded');
+      } else {
+        const code = await attempt(() => rpc('eth_getCode', [candidate, 'latest']));
+        if (code && code !== '0x') splitter = candidate;
+        else log('    fee wallet is not a contract; leaving the splitter unrecorded');
+      }
+    }
+  } catch {
+    log('    launch calldata unreadable; leaving the splitter unrecorded');
+  }
+  if (splitter && prior.splitter && String(prior.splitter).toLowerCase() !== splitter.toLowerCase()) {
+    refuse(`${launch.token}: committed splitter ${prior.splitter} is not what the calldata reports (${splitter})`);
+  }
+
   let curve = null;
   try {
     curve = await collectCurveState({ rpc, curve: launch.curve, blockNumber: head, observedAt });
@@ -276,7 +320,7 @@ for (const launch of decoded) {
     // Preserved: no getter produces these, and losing them is a silent regression.
     logo: metadata ? metadata.logo : prior.logo ?? null,
     description: metadata ? metadata.description : prior.description ?? '',
-    splitter: prior.splitter ?? launch.splitter ?? null,
+    splitter: prior.splitter ?? splitter ?? launch.splitter ?? null,
     launchFeeEth: prior.launchFeeEth ?? launchFeeEth,
     name: metadata?.name ?? prior.name ?? launch.name,
     symbol: metadata?.symbol ?? prior.symbol ?? launch.symbol,
