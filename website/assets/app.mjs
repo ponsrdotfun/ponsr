@@ -453,6 +453,73 @@ const readSession = () => {
 const accountCookie=(name)=>document.cookie.split(';').map((v)=>v.trim()).find((v)=>v.startsWith(`${name}=`))?.slice(name.length+1)||'';
 async function readAccountJson(path,options={}){const response=await fetch(path,{credentials:'same-origin',headers:{Accept:'application/json',...(options.headers||{})},...options});const body=await response.json().catch(()=>({state:'error'}));return{ok:response.ok,body};}
 /**
+ * THE FOUR OVERVIEW CELLS, EACH FROM A SOURCE THAT CAN ACTUALLY ANSWER IT.
+ *
+ * Every one of them used to read "Unavailable" with a reason that had stopped
+ * being true: an identity that was connected, an account scope that existed, a
+ * wallet whose address was printed in the cell above the caption denying it.
+ *
+ * An unreadable value stays unavailable and says so. It is never rendered as a
+ * zero, which on a balance would tell a reader they have nothing.
+ */
+async function paintOverview(session) {
+  const panel = document.querySelector('[data-overview="wallet"]')?.closest('.account-stats');
+  if (!panel) return;
+
+  const write = (key, value, note, unavailable) => {
+    const cell = panel.querySelector(`[data-overview="${key}"]`);
+    if (!cell) return;
+    cell.classList.toggle('is-unavailable', Boolean(unavailable));
+    setText(cell.querySelector('strong'), value);
+    setText(cell.querySelector('span'), note);
+  };
+
+  const address = session?.state === 'authenticated' ? session.wallet?.address : null;
+  if (!address) {
+    write('wallet', 'Not connected', 'Sign in with X to resolve your existing wallet.', true);
+    write('balance', 'Unavailable', 'No address to ask about yet.', true);
+    write('fees', 'Unavailable', 'Sign in to see what is waiting for you.', true);
+    write('launches', 'Unavailable', 'Sign in to list launches by your identity.', true);
+    return;
+  }
+
+  write('wallet', shortAddress(address), 'Your existing embedded wallet. Ponsr holds no key for it.', false);
+
+  // Each of the three remaining cells is filled by its own read, and one
+  // failing must not blank the others -- they answer different questions from
+  // different sources and a shared fate would hide which one is actually down.
+  readAccountJson('/api/account/wallet').then(
+    ({ body }) => {
+      const wei = body?.balanceWei;
+      if (typeof wei !== 'string') {
+        return write('balance', 'Unavailable', 'The balance could not be read just now.', true);
+      }
+      write('balance', ethFromWei(BigInt(wei)), 'Native balance, read from chain.', false);
+    },
+    () => write('balance', 'Unavailable', 'The balance could not be read just now.', true)
+  );
+
+  readAccountJson('/api/account/launches').then(
+    ({ body }) => {
+      const list = Array.isArray(body?.launches) ? body.launches : null;
+      if (!list) return write('launches', 'Unavailable', 'The launch list could not be read.', true);
+      write('launches', whole(list.length), list.length ? 'Launched by your X identity.' : 'No launch on record for your identity yet.', false);
+    },
+    () => write('launches', 'Unavailable', 'The launch list could not be read.', true)
+  );
+
+  fetch('/.netlify/functions/creator-fees', { headers: { accept: 'application/json' } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+    .then((body) => {
+      const t = feeTotals(body?.launches, session);
+      if (!t.launches) return write('fees', 'None', 'No launch on record pays this wallet.', true);
+      if (t.mixed) return write('fees', `${t.launches} ${plural(t.launches, 'launch', 'launches')}`, 'Held in different assets; see the fees page.', true);
+      write('fees', t.unit ? amountFromWei(t.creator, 6, t.unit) : whole(0), 'Your share, waiting in escrow.', false);
+    })
+    .catch(() => write('fees', 'Unavailable', 'The escrow record could not be read.', true));
+}
+
+/**
  * The controls the wallet page promised and never grew.
  *
  * The page printed the verified address and, underneath it, a sentence saying
@@ -496,7 +563,7 @@ function wireWalletAddress(address) {
 }
 
 function paintAccountSession(session){const root=document.querySelector('.account-shell');if(!root)return;const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]'),label=root.querySelector('[data-account-session-label]'),title=root.querySelector('[data-account-session-title]'),detail=root.querySelector('[data-account-session-detail]'),mode=root.querySelector('[data-account-mode]');if(session?.state==='authenticated'){root.dataset.authState='authenticated';root.dataset.identityState='verified';root.dataset.privateDataState='authenticated';root.dataset.executionAuthority='NONE_PREVIEW_ONLY';setText(label,`Verified X identity · @${session.identity.handle}`);setText(title,'Existing wallet continuity verified');setText(detail,`${session.wallet.address} · read-only account access · signing, send and swap remain disabled. Collecting needs no signature: the split pays this wallet whoever sends it.`);setText(mode,'Phase B · Authenticated read-only');setText(root.querySelector('.account-sidebar-state strong'),'Authenticated');const badge=root.querySelector('.state-badge');if(badge&&!badge.classList.contains('status-readonly'))setText(badge,'Authenticated · read-only');if(signIn)signIn.hidden=true;if(logout)logout.hidden=false;const wallet=root.querySelector('.wallet-address-shell strong');if(wallet)setText(wallet,session.wallet.address);for(const stat of root.querySelectorAll('.account-stat')){const label=stat.querySelector('p')?.textContent;if(label==='Embedded wallet')setText(stat.querySelector('strong'),shortAddress(session.wallet.address));}for(const item of root.querySelectorAll('.security-list article')){const label=item.querySelector('strong')?.textContent;if(label==='Identity binding')setText(item.querySelector('span'),'Verified');if(label==='Wallet continuity')setText(item.querySelector('span'),'Verified');if(label==='Session controls')setText(item.querySelector('span'),'Active');}return;}root.dataset.authState='signed-out';root.dataset.identityState='unavailable';root.dataset.privateDataState='locked';if(logout)logout.hidden=true;}
-async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);wireWalletAddress(session?.wallet?.address);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
+async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);wireWalletAddress(session?.wallet?.address);paintOverview(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
 
 async function readFeed() {
   // The function is authoritative; the committed snapshot is the fallback. A

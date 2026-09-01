@@ -514,8 +514,24 @@ function accountConnection() {
   return `<section class="custody-boundary" role="status" data-account-connection><span class="account-lock" aria-hidden="true">◇</span><div><span class="signed-out-label" data-account-session-label>Custody boundary · Phase B unavailable</span><strong data-account-session-title>Private account data is locked</strong><p data-account-session-detail>Account connection unavailable until the authenticated backend reports ready. Numeric X identity must map to the exact existing Ponsr embedded wallet without creating another wallet.</p></div><div class="connection-actions"><button class="btn btn-disabled" type="button" disabled aria-disabled="true" data-account-signin>Sign-in not available</button><button class="btn btn-ghost" type="button" hidden data-account-logout>Sign out</button><a class="btn btn-ghost" href="/explore"><span>Explore public records</span></a></div></section>`;
 }
 
+/**
+ * THE OVERVIEW, WHICH USED TO ANSWER FOUR QUESTIONS WITH "UNAVAILABLE".
+ *
+ * All four were answerable. The wallet card printed the verified address and
+ * captioned it "Requires verified account binding"; Launches said "No verified
+ * identity is connected" to a reader whose identity was connected; Creator fees
+ * said no account scope existed while the fees page beneath it collected real
+ * money.
+ *
+ * Each cell now names where its answer comes from, and each is filled by the
+ * client from a source it can actually read. A cell that cannot be read stays
+ * unavailable and says why -- it is never quietly rendered as a zero, which on
+ * a balance would be a claim that somebody has nothing.
+ */
 function accountOverview() {
-  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">One place for launches, creator trading fees, wallet access, and security—after identity and wallet continuity are verified.</p><div class="account-stats">${unavailableValue('Embedded wallet','Requires verified account binding.')}${unavailableValue('Native balance','No authenticated address is available.')}${unavailableValue('Creator fees','No reconciled account scope is available.')}${unavailableValue('Launches','No verified identity is connected.')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-deferred">Not shipped</span>X identity and existing-wallet access</li><li><span class="status-disabled">Disabled</span>Claims, send, swap, and signing</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
+  const cell = (label, hint, key) =>
+    `<article class="account-stat is-unavailable" data-overview="${key}"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(hint)}</span></article>`;
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">Launches, creator trading fees, wallet access and security, once your X identity and its existing wallet are verified.</p><div class="account-stats">${cell('Embedded wallet','Sign in to resolve your existing wallet.','wallet')}${cell('Native balance','Read from chain once an address is known.','balance')}${cell('Creator fees','Waiting in escrow for your launches.','fees')}${cell('Launches','Tokens launched by your X identity.','launches')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-readonly">Live</span>X sign-in, resolving your existing wallet</li><li><span class="status-readonly">Live</span>Collecting creator fees, gas paid by Ponsr</li><li><span class="status-disabled">Disabled</span>Send, swap, and any signing by this site</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
 }
 
 /**

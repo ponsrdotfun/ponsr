@@ -194,7 +194,10 @@ const accountClaims = new AccountClaimService({
   provider: { call: (tx) => provider.call(tx) },
   signer: treasurySigner,
 });
-app.use('/api', accountRouter(accountAuth, accountClaims));
+app.use('/api', accountRouter(accountAuth, accountClaims, async (address) => {
+  const wei = await provider.getBalance(address);
+  return wei.toString();
+}));
 
 /**
  * What a leaked webhook secret costs.
