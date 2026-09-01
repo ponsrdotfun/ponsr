@@ -44,24 +44,51 @@ const pad = (label: string, value: unknown) => `  ${label.padEnd(34)} ${value}`;
  * entry is harmless here: any real splitter address answers the question the
  * probe is asking, which is what the POLICY does with it.
  */
-function resolveSplitter(argv: string[]): { address: string; erc20: string; source: string } {
+function resolveSplitter(argv: string[]): {
+  address: string;
+  erc20: string;
+  source: string;
+  others: string[];
+} {
   const snapshot = require('../../website/data/launches.json');
-  const withSplitter = (snapshot.launches ?? []).find((l: any) => ADDRESS.test(String(l.splitter ?? '')));
+  const all = (snapshot.launches ?? []).filter((l: any) => ADDRESS.test(String(l.splitter ?? '')));
+  const withSplitter = all[0];
 
   const given = argv.find((a) => ADDRESS.test(a));
-  if (given && !withSplitter) {
-    throw new Error('A splitter was given but no launch is on record to take an ERC20 argument from');
+  /**
+   * A given splitter is matched back to ITS OWN launch.
+   *
+   * The ARGUMENT to claimAndSplit is an ERC20, and taking it from whichever
+   * launch happens to be first would build calldata pairing one launch's
+   * splitter with another launch's token -- a shape the bot never sends, which
+   * is precisely the failure mode a signed probe exists to avoid.
+   */
+  const chosen = given
+    ? all.find((l: any) => ethers.getAddress(l.splitter) === ethers.getAddress(given))
+    : withSplitter;
+  if (given && !chosen) {
+    throw new Error(
+      `${given} is not a splitter on record. Known: ${all.map((l: any) => l.splitter).join(', ') || 'none'}`
+    );
   }
-  if (!withSplitter) {
+  if (!chosen) {
     throw new Error('No splitter address given and none found in website/data/launches.json');
   }
   return {
-    address: ethers.getAddress(given ?? withSplitter.splitter),
-    // The ARGUMENT to claimAndSplit is an ERC20, not the escrow. A probe carrying
-    // the wrong kind of address in that word would exercise a rule the bot never
-    // triggers, which is the whole failure mode a signed probe exists to avoid.
-    erc20: ethers.getAddress(withSplitter.token),
-    source: given ? 'command line' : `website/data/launches.json (${withSplitter.symbol})`,
+    address: ethers.getAddress(chosen.splitter),
+    erc20: ethers.getAddress(chosen.token),
+    source: given ? `command line (${chosen.symbol})` : `website/data/launches.json (${chosen.symbol})`,
+    /**
+     * The splitters NOT probed, named so the trap is visible.
+     *
+     * A policy that binds an ADDRESS LIST covers the addresses in it and no
+     * others, so probing one left out of the list reports NOT YET forever while
+     * the policy works perfectly. The default here is whichever launch happens
+     * to come first in the snapshot, which is nobody's deliberate choice.
+     */
+    others: all
+      .filter((l: any) => ethers.getAddress(l.splitter) !== ethers.getAddress(chosen.splitter))
+      .map((l: any) => `${l.symbol} ${ethers.getAddress(l.splitter)}`),
   };
 }
 
@@ -153,6 +180,12 @@ function resolveSplitter(argv: string[]): { address: string; erc20: string; sour
     'not-yet':
       '=== NOT YET === the claim is refused and nothing else is wrong.\n' +
       '    This is the expected state until the owner creates the policy.\n' +
+      `    Probed ${splitter.address}.\n` +
+      (splitter.others.length
+        ? '    NOT probed, and a policy binding an ADDRESS LIST covers only what is in it:\n' +
+          splitter.others.map((o) => `      ${o}\n`).join('') +
+          '    Pass one as an argument to check it.\n'
+        : '') +
       '    See docs/TURNKEY-CLAIM-AUTHORITY.md.',
     unsafe: '=== UNSAFE === an authority is open, or the launch path broke. Do not proceed.',
     inconclusive:
