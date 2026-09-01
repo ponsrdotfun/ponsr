@@ -27,10 +27,25 @@ name: refresh snapshot
 
 on:
   schedule:
-    # Every six hours. The threshold below decides whether a run writes
-    # anything, so a quiet day costs nothing and a new launch is picked up
-    # within hours rather than whenever somebody remembers.
-    - cron: '17 */6 * * *'
+    # EVERY FIFTEEN MINUTES, because the gap between a launch and its page is
+    # what a stranger actually experiences.
+    #
+    # This ran every six hours, chosen when Actions minutes were scarce -- they
+    # were exhausted on 2026-08-31 and the Windows job had to be split out to
+    # stop the bleeding. The repository is public now, so standard runners are
+    # free and that constraint is gone.
+    #
+    # Six hours stopped being defensible on 2026-09-02, when a real user's
+    # launch was invisible on the board while the live chain source sat at
+    # `state: error` and the site served the committed snapshot alone. With the
+    # live scan unreliable, this schedule IS the site's freshness.
+    #
+    # A quiet tick costs nothing and publishes nothing: the script exits before
+    # writing unless a launch appeared or the gap passed `stale_after`. The
+    # concurrency group below keeps two from racing, and the short-scan fix of
+    # the same day means a tick that cannot read the tail banks its progress
+    # rather than discarding the run.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       stale_after:
