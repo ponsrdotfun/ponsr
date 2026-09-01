@@ -77,3 +77,40 @@ test('a partial scan is never written, scheduled or not', () => {
   const write = script.indexOf('await fs.writeFile(SNAPSHOT');
   assert.ok(write > script.lastIndexOf('refuse(`'), 'a refusal can be followed by a write');
 });
+
+/**
+ * A WINDOW SCAN MUST NEVER DELETE A LAUNCH IT SIMPLY DID NOT LOOK AT.
+ *
+ * The refresh swept from the deployment's first block to the head on every run
+ * -- 24 million blocks by 2026-09-01 -- and refuses to write a partial scan.
+ * Correct on its own, and together a ratchet: the scheduled run failed three
+ * times in a row on a range near block 28623096 that could not be read even at
+ * 12 500 blocks after eight attempts, and it would have failed forever, because
+ * that range sits behind every future run and the window only grows.
+ *
+ * Scanning forward from `asOfBlock` fixes it and introduces the one bug that
+ * would be worse than a stale snapshot: building the launch list from what the
+ * window saw would delete every launch older than the window. That is the exact
+ * outcome the partial-scan refusal exists to prevent, arriving through the front
+ * door. These assertions are on the merge, not on the scan.
+ */
+test('the window carries forward what it did not scan, and never rebuilds from scratch', () => {
+  const source = read('scripts/refresh-snapshot.mjs');
+
+  // The default start is the snapshot's own reach, not the deployment's first block.
+  assert.match(source, /const scanFrom = FROM_GENESIS[\s\S]{0,200}Number\(existing\.asOfBlock/);
+  assert.match(source, /REORG_OVERLAP/, 'a reorg near the tip must be re-read');
+  assert.match(source, /--from-genesis/, 'a full sweep must remain available');
+
+  // The published list is a MERGE over the committed one. If this ever becomes
+  // `const launches = observed`, every launch outside the window is deleted.
+  const merge = source.slice(source.indexOf('const seen = new Set('), source.indexOf('const gate = await fetchPublicGate('));
+  assert.match(merge, /new Map\(existing\.launches\.map/);
+  assert.match(merge, /for \(const launch of observed\) merged\.set/);
+  assert.match(merge, /const launches = \[\.\.\.merged\.values\(\)\]/);
+  assert.doesNotMatch(source, /^const launches = observed;?$/m);
+
+  // The source record must state the window it actually read. A source that
+  // overstates its own coverage is worse than one that admits a window.
+  assert.match(source, /fromBlock: FROM_GENESIS \? DEPLOYMENT\.startBlock : scanFrom/);
+});

@@ -154,14 +154,41 @@ async function scanAll(fromBlock, toBlock, { page = 1_000_000, minPage = 12_500,
   return logs;
 }
 
-log(`scanning ${head - DEPLOYMENT.startBlock} blocks for launches...`);
-const discovery = { logs: await scanAll(DEPLOYMENT.startBlock, head, { label: 'launch range' }) };
-log(`found           ${discovery.logs.length} launch events`);
+/**
+ * INCREMENTAL BY DEFAULT, BECAUSE A FULL RESCAN EVENTUALLY BECOMES IMPOSSIBLE.
+ *
+ * This swept from the deployment's first block to the head on every run. That
+ * was 24 million blocks by 2026-09-01, and it refuses to write a partial scan --
+ * correctly, since a partial sweep that silently dropped a launch would delete a
+ * creator's token from the site.
+ *
+ * Put together, those two make a ratchet. The scheduled refresh failed three
+ * times in a row on a range around block 28623096 that could not be read even at
+ * 12 500 blocks after eight attempts, and it would have kept failing forever: the
+ * bad range sits behind every future run, and the window only grows.
+ *
+ * So the default now starts where the snapshot already reached. Everything
+ * before `asOfBlock` was scanned successfully when that snapshot was written --
+ * re-reading it proves nothing new and stakes every future update on a range
+ * that has already been read once.
+ *
+ * The overlap covers a reorg near the tip. `--from-genesis` still does the whole
+ * thing for when the question really is "did we ever miss one".
+ */
+const REORG_OVERLAP = 5_000;
+const FROM_GENESIS = process.argv.includes('--from-genesis');
+const scanFrom = FROM_GENESIS
+  ? DEPLOYMENT.startBlock
+  : Math.max(DEPLOYMENT.startBlock, Number(existing.asOfBlock || 0) - REORG_OVERLAP);
+
+log(`scanning ${head - scanFrom} blocks for launches${FROM_GENESIS ? ' (from genesis)' : ` from ${scanFrom}`}...`);
+const discovery = { logs: await scanAll(scanFrom, head, { label: 'launch range' }) };
+log(`found           ${discovery.logs.length} launch events in that window`);
 
 const observedAt = new Date().toISOString();
 const decoded = await decodeLaunches(rpc, discovery.logs, observedAt);
 
-const launches = [];
+const observed = [];
 for (const launch of decoded) {
   const key = String(launch.token).toLowerCase();
   const prior = previous.get(key) ?? {};
@@ -314,7 +341,7 @@ for (const launch of decoded) {
     identity[field] = prior[field];
   }
 
-  launches.push({
+  observed.push({
     ...launch,
     ...identity,
     // Preserved: no getter produces these, and losing them is a silent regression.
@@ -334,6 +361,21 @@ for (const launch of decoded) {
   });
 }
 
+/**
+ * A window scan REPLACES what it saw and KEEPS what it did not.
+ *
+ * The array used to be whatever the sweep decoded, which was safe only because
+ * the sweep covered everything. With a window it would delete every launch older
+ * than the window -- the exact failure the partial-scan refusal exists to
+ * prevent, arriving through the front door instead.
+ */
+const seen = new Set(observed.map((l) => String(l.token).toLowerCase()));
+const merged = new Map(existing.launches.map((l) => [String(l.token).toLowerCase(), l]));
+for (const launch of observed) merged.set(String(launch.token).toLowerCase(), launch);
+const launches = [...merged.values()];
+const carried = existing.launches.filter((l) => !seen.has(String(l.token).toLowerCase())).length;
+log(`refreshed       ${observed.length} in window, ${carried} carried forward unchanged`);
+
 const gate = await fetchPublicGate(GATE_URL, existing.publicGate);
 
 const refreshed = {
@@ -346,7 +388,9 @@ const refreshed = {
     {
       id: 'current-v2-chain',
       state: 'stale',
-      fromBlock: DEPLOYMENT.startBlock,
+      // What this run actually read, not what the first run once did. A source
+      // that overstates its own coverage is worse than one that admits a window.
+      fromBlock: FROM_GENESIS ? DEPLOYMENT.startBlock : scanFrom,
       throughBlock: head,
       authoritativeTimestamps: true,
       scope: 'verified last-known-good snapshot; live function advances with 128-block overlap',
