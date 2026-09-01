@@ -8,6 +8,7 @@ import { createParser } from './parser';
 import { PrivyWalletResolver } from './walletResolver';
 import { createXClient } from './xClient';
 import { createTreasurySigner } from './treasurySigner';
+import { AccountClaimService } from './accountClaim';
 import { createProvider, getLiveFeeWei, getBalanceWei, getLaunchReadiness, getSwitchState } from './chainClient';
 import { probeLaunchPermission } from './readinessProbe';
 import { RpcPool, parseChainId, parseEndpointList } from './rpcPool';
@@ -179,7 +180,21 @@ const accountAuth = new AccountAuthService(
     walletContinuityConfigured: !!config.PRIVY_APP_ID && !!config.PRIVY_APP_SECRET,
   }
 );
-app.use('/api', accountRouter(accountAuth));
+/**
+ * Claiming is wired here because it needs the same provider and signer the
+ * launch path already uses -- one chain view and one signer, not a second set
+ * that could drift from it.
+ *
+ * Until a Turnkey policy permits calls to splitter addresses, every claim will
+ * be refused by the signer and reported as `signer-refused`. That is the
+ * intended state, not a broken deployment.
+ */
+const accountClaims = new AccountClaimService({
+  db,
+  provider: { call: (tx) => provider.call(tx) },
+  signer: treasurySigner,
+});
+app.use('/api', accountRouter(accountAuth, accountClaims));
 
 /**
  * What a leaked webhook secret costs.
