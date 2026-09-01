@@ -102,3 +102,91 @@ test('the page asks with a CSRF token and never invents an outcome it was not gi
   // be told the balance is already gone.
   assert.match(control, /!==\s*'sent'\)\s*button\.disabled\s*=\s*false/);
 });
+
+/**
+ * A SUMMARY MUST NEVER FLATTER THE NUMBER UNDERNEATH IT.
+ *
+ * The panel above the escrow rows used to read "Unavailable" in four boxes with
+ * a dead button captioned "Claim execution is deferred". It said that directly
+ * above the working collect control on 2026-09-01, the day the owner used it.
+ *
+ * What replaced it can be wrong in two ways that matter, and both are asserted
+ * here with the real figures from the two launches that were collected:
+ * swallowing a balance nobody could read, and adding two different assets
+ * because they happen to share a decimals field.
+ */
+test('an unreadable balance is excluded from the total, never counted as zero', async () => {
+  const { feeTotals } = await import('../assets/claim.mjs');
+  const OWNER = '0xcdce6c82d995d3223d4e956a3c28d36bad875dc0';
+  const signedIn = { state: 'authenticated', wallet: { address: OWNER } };
+
+  const totals = feeTotals(
+    [
+      {
+        creator: OWNER,
+        assets: [
+          { state: 'observed', accruedWei: '20524420520164638', label: 'NVDA' },
+          { state: 'unavailable', problem: 'The escrow balance could not be read.' },
+        ],
+      },
+    ],
+    signedIn
+  );
+
+  assert.equal(totals.accrued, 20524420520164638n);
+  assert.equal(totals.unreadable, 1, 'the excluded cell must be counted and reported');
+  // The split is the splitter's own constants, and these are the exact figures
+  // the chain paid out: 19498199494156406 to the creator, the rest to Ponsr.
+  assert.equal(totals.creator, 19498199494156406n);
+  assert.equal(totals.treasury, 1026221026008232n);
+  assert.equal(totals.creator + totals.treasury, totals.accrued, 'nothing may be left behind');
+});
+
+test('two different assets are never added together', async () => {
+  const { feeTotals } = await import('../assets/claim.mjs');
+  const OWNER = '0xcdce6c82d995d3223d4e956a3c28d36bad875dc0';
+
+  const totals = feeTotals(
+    [
+      { creator: OWNER, assets: [{ state: 'observed', accruedWei: '20524420520164638', label: 'NVDA' }] },
+      { creator: OWNER, assets: [{ state: 'observed', accruedWei: '9443171751664034', label: 'SPCX' }] },
+    ],
+    { state: 'authenticated', wallet: { address: OWNER } }
+  );
+
+  // NVDA and SPCX both carry 18 decimals, so a sum of them formats perfectly and
+  // means nothing -- the same shape as the bug that printed a Microduck sell in
+  // ETH. The panel reports a count instead of inventing a common currency.
+  assert.equal(totals.mixed, true);
+  assert.equal(totals.unit, null);
+  assert.equal(totals.launches, 2);
+});
+
+test('the summary narrows to the reader, and a zero total keeps no unit', async () => {
+  const { feeTotals } = await import('../assets/claim.mjs');
+  const OWNER = '0xcdce6c82d995d3223d4e956a3c28d36bad875dc0';
+  const TREASURY = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
+  const rows = [
+    { creator: TREASURY, assets: [{ state: 'observed', accruedWei: '0', label: 'PSTONKS' }] },
+    { creator: OWNER, assets: [{ state: 'observed', accruedWei: '7', label: 'NVDA' }] },
+  ];
+
+  const mine = feeTotals(rows, { state: 'authenticated', wallet: { address: OWNER } });
+  assert.equal(mine.scope, 'mine');
+  assert.equal(mine.launches, 1, 'the canary pays the treasury and is not the reader’s');
+  assert.equal(mine.accrued, 7n);
+
+  const anyone = feeTotals(rows, { state: 'unauthenticated' });
+  assert.equal(anyone.scope, 'public');
+  assert.equal(anyone.launches, 2);
+
+  // Everything collected: a number with no unit, not a zero of some asset
+  // nobody holds. A zero cell must not claim the unit for the whole panel.
+  const empty = feeTotals(
+    [{ creator: OWNER, assets: [{ state: 'observed', accruedWei: '0', label: 'NVDA' }] }],
+    { state: 'authenticated', wallet: { address: OWNER } }
+  );
+  assert.equal(empty.unit, null);
+  assert.equal(empty.mixed, false);
+  assert.equal(empty.accrued, 0n);
+});

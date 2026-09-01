@@ -1115,6 +1115,11 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
 .fee-asset.unavailable strong { color:var(--dim); font-size:.86rem; }
 .fee-asset.unavailable small { color:var(--dim); }
 
+/* The controls sit under the address they act on, quiet until wanted. */
+.wallet-address-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.75rem; }
+.wallet-address-actions .btn { font-size:.7rem; padding:.4rem .8rem; letter-spacing:.06em; }
+.wallet-address-actions[hidden] { display:none; }
+
 /* The claim control sits inside the asset cell it applies to, so there is never
    a question of WHICH balance a button would collect. It stays quiet until
    hovered: the number is the subject of the cell, not the button. */

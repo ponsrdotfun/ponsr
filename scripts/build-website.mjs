@@ -469,13 +469,25 @@ function tokenPage(token) {
 /* Account — honest signed-out architecture                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Each module says what it actually is, rather than all six saying "Preview".
+ *
+ * They stopped being previews at different times and are still not the same
+ * thing as each other. Creator fees collects real fees -- it did so on
+ * 2026-09-01 -- while Wallet shows a verified address and can still not send or
+ * swap anything. One word covering both is wrong about one of them whichever
+ * word is chosen.
+ *
+ * The third element is that word. It is a claim about what the module DOES, so
+ * changing a module's behaviour means changing it here in the same commit.
+ */
 const accountRoutes = [
-  ['Overview', '/account'],
-  ['Launches', '/account/launches'],
-  ['Creator fees', '/account/fees'],
-  ['Wallet', '/account/wallet'],
-  ['What-if lab', '/account/simulator'],
-  ['Security', '/account/security'],
+  ['Overview', '/account', 'Live'],
+  ['Launches', '/account/launches', 'Live'],
+  ['Creator fees', '/account/fees', 'Live'],
+  ['Wallet', '/account/wallet', 'Read-only'],
+  ['What-if lab', '/account/simulator', 'Public'],
+  ['Security', '/account/security', 'Reference'],
 ];
 
 const unavailableAction = (label) => `<button class="btn btn-disabled" type="button" disabled aria-disabled="true" title="Requires verified account connection">${esc(label)}</button>`;
@@ -491,7 +503,7 @@ const unavailableAction = (label) => `<button class="btn btn-disabled" type="but
 const unavailableValue = (label, detail) => `<article class="account-stat is-unavailable"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
 
 function accountNav(current) {
-  return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account preview sections">${accountRoutes.map(([label, href],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>Preview</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
+  return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account sections">${accountRoutes.map(([label, href, status],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>${esc(status)}</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
 }
 
 function accountSidebar(current) {
@@ -502,8 +514,24 @@ function accountConnection() {
   return `<section class="custody-boundary" role="status" data-account-connection><span class="account-lock" aria-hidden="true">◇</span><div><span class="signed-out-label" data-account-session-label>Custody boundary · Phase B unavailable</span><strong data-account-session-title>Private account data is locked</strong><p data-account-session-detail>Account connection unavailable until the authenticated backend reports ready. Numeric X identity must map to the exact existing Ponsr embedded wallet without creating another wallet.</p></div><div class="connection-actions"><button class="btn btn-disabled" type="button" disabled aria-disabled="true" data-account-signin>Sign-in not available</button><button class="btn btn-ghost" type="button" hidden data-account-logout>Sign out</button><a class="btn btn-ghost" href="/explore"><span>Explore public records</span></a></div></section>`;
 }
 
+/**
+ * THE OVERVIEW, WHICH USED TO ANSWER FOUR QUESTIONS WITH "UNAVAILABLE".
+ *
+ * All four were answerable. The wallet card printed the verified address and
+ * captioned it "Requires verified account binding"; Launches said "No verified
+ * identity is connected" to a reader whose identity was connected; Creator fees
+ * said no account scope existed while the fees page beneath it collected real
+ * money.
+ *
+ * Each cell now names where its answer comes from, and each is filled by the
+ * client from a source it can actually read. A cell that cannot be read stays
+ * unavailable and says why -- it is never quietly rendered as a zero, which on
+ * a balance would be a claim that somebody has nothing.
+ */
 function accountOverview() {
-  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">One place for launches, creator trading fees, wallet access, and security—after identity and wallet continuity are verified.</p><div class="account-stats">${unavailableValue('Embedded wallet','Requires verified account binding.')}${unavailableValue('Native balance','No authenticated address is available.')}${unavailableValue('Creator fees','No reconciled account scope is available.')}${unavailableValue('Launches','No verified identity is connected.')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-deferred">Not shipped</span>X identity and existing-wallet access</li><li><span class="status-disabled">Disabled</span>Claims, send, swap, and signing</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
+  const cell = (label, hint, key) =>
+    `<article class="account-stat is-unavailable" data-overview="${key}"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(hint)}</span></article>`;
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">Launches, creator trading fees, wallet access and security, once your X identity and its existing wallet are verified.</p><div class="account-stats">${cell('Embedded wallet','Sign in to resolve your existing wallet.','wallet')}${cell('Native balance','Read from chain once an address is known.','balance')}${cell('Creator fees','Waiting in escrow for your launches.','fees')}${cell('Launches','Tokens launched by your X identity.','launches')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-readonly">Live</span>X sign-in, resolving your existing wallet</li><li><span class="status-readonly">Live</span>Collecting creator fees, gas paid by Ponsr</li><li><span class="status-disabled">Disabled</span>Send, swap, and any signing by this site</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
 }
 
 /**
@@ -538,16 +566,36 @@ function accountFeeEscrow() {
   return `<section class="panel account-module fee-escrow" data-account-fee-escrow><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>Waiting in escrow</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">What the deployment&rsquo;s escrow has credited to each launch&rsquo;s fee splitter, read from chain. Anyone can verify it, and anyone can trigger the split &mdash; the creator&rsquo;s share is pushed to the creator&rsquo;s own wallet, never to the caller.</p><div class="fee-escrow-rows" data-fee-escrow-rows><p class="note-inline">Reading the escrow&hellip;</p></div><p class="footer-note">Escrow credit per launch, not account-scoped and not a claim of ownership. A balance that cannot be read is shown as unavailable, never as zero.</p></section>`;
 }
 
+/**
+ * WHAT THE FEES ACTUALLY ARE, SUMMED, FROM THE SAME READ AS THE DETAIL BELOW.
+ *
+ * This panel used to carry four boxes reading "Unavailable" -- accrued,
+ * claimable, queued, paid -- above a badge saying "Account unavailable" and a
+ * dead button captioned "Claim execution is deferred". Every one of those became
+ * false on 2026-09-01, when the owner signed in and collected two launches'
+ * fees from this page. A panel that says a feature is deferred, directly above
+ * the working control for that feature, is worse than no panel.
+ *
+ * The three figures kept are the three that can be READ: what the escrow holds,
+ * and how the splitter's own constants divide it. Queued and Paid are gone
+ * rather than reworded -- neither is readable from chain without indexing past
+ * events, and this repository does not display what it cannot read.
+ *
+ * The values are painted by the client from the same payload that fills the
+ * per-launch rows, so a summary can never disagree with the detail under it.
+ */
 function accountFees() {
-  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Creator trading fees</p><h2>Receipt-backed accounting</h2></div><span class="state-badge">Account unavailable</span></div><p class="lede">Creator fees are shown only after escrow, splitter, receipt, destination, and account ownership reconcile. They are not dividends or guaranteed earnings.</p><div class="account-stats account-stats-four">${unavailableValue('Accrued','Requires reconciled fee observations.')}${unavailableValue('Claimable','Requires proven escrow availability.')}${unavailableValue('Queued / Processing','Requires an active receipt state.')}${unavailableValue('Paid / Claimed','Requires receipt and custody reconciliation.')}</div><div class="account-actions">${unavailableAction('Claim available fees')}<p>Claim execution is deferred. A completed transaction alone is not enough; custody and accounting must reconcile.</p></div></section>`;
+  const cell = (label, hint, key) =>
+    `<article class="account-stat is-unavailable" data-fee-total="${key}"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(hint)}</span></article>`;
+  return `<section class="panel account-module" data-account-fee-summary><div class="account-module-head"><div><p class="eyebrow">Creator trading fees</p><h2>Receipt-backed accounting</h2></div><span class="state-badge status-readonly" data-fee-summary-scope>Public record</span></div><p class="lede">Read from the deployment&rsquo;s fee escrow and divided by the splitter&rsquo;s own constants. Fees are earned by trading; they are not dividends or guaranteed earnings.</p><div class="account-stats">${cell('Waiting in escrow','Across every Ponsr launch.','accrued')}${cell('Creator share','95% &mdash; paid to the creator&rsquo;s own wallet.','creator')}${cell('Ponsr share','5% &mdash; what the treasury keeps.','treasury')}</div><p class="note"><strong>Collecting needs no signature</strong>Anyone may trigger a split; the creator&rsquo;s share is pushed to the creator&rsquo;s own wallet, never to whoever called. Ponsr sends it for you and pays the gas.</p></section>`;
 }
 
 function accountWallet() {
-  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Embedded wallet</p><h2>Exact wallet continuity</h2><p class="lede">The website must recover access to the exact existing embedded-wallet address associated with the verified account. It must never create a replacement wallet or expose a private key.</p><div class="wallet-address-shell"><span>Wallet address</span><strong>Unavailable until account verification</strong><p>Copy, explorer, and QR controls appear only after the authenticated account endpoint returns the verified address.</p></div><div class="account-actions account-action-row">${unavailableAction('Receive')}${unavailableAction('Send')}${unavailableAction('Swap')}</div></section><aside class="panel account-side"><p class="eyebrow">Linked wallets</p><h2>No linking session</h2><p>External wallets require a domain-bound signed challenge with nonce, chain, expiry, and replay protection.</p>${unavailableAction('Link external wallet')}</aside></div>`;
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Embedded wallet</p><h2>Exact wallet continuity</h2><p class="lede">The website must recover access to the exact existing embedded-wallet address associated with the verified account. It must never create a replacement wallet or expose a private key.</p><div class="wallet-address-shell"><span>Wallet address</span><strong>Unavailable until account verification</strong><p data-wallet-hint>The verified address appears here once the authenticated account endpoint returns it.</p><div class="wallet-address-actions" data-wallet-actions hidden><button class="btn btn-ghost" type="button" data-wallet-copy>Copy address</button><a class="btn btn-ghost" data-wallet-explorer href="#" target="_blank" rel="noopener noreferrer">View on explorer &#8599;</a></div></div><div class="account-actions account-action-row">${unavailableAction('Receive')}${unavailableAction('Send')}${unavailableAction('Swap')}</div></section><aside class="panel account-side"><p class="eyebrow">Linked wallets</p><h2>No linking session</h2><p>External wallets require a domain-bound signed challenge with nonce, chain, expiry, and replay protection.</p>${unavailableAction('Link external wallet')}</aside></div>`;
 }
 
 function accountSimulator() {
-  return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Financial execution remains locked</strong>Receive, send, swap, creator-fee claims, and account-linked X/Privy access remain Phase B features.</p></section>`;
+  return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Nothing here executes anything</strong>The lab reads history and does arithmetic on it. Receive, send and swap remain unavailable; collecting creator fees has moved to the fees page and needs no signature.</p></section>`;
 }
 
 /**
@@ -575,7 +623,7 @@ function accountVerifiableNow() {
 }
 
 function accountSecurity() {
-  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Security & recovery</p><h2>Authority must be proven, not assumed</h2></div><span class="state-badge">Phase B required</span></div><div class="security-list"><article><strong>Identity binding</strong><p>Stable numeric X user ID, verified server-side and independent of a mutable handle.</p><span>Unavailable</span></article><article><strong>Wallet continuity</strong><p>Exact existing Privy embedded wallet, with duplicate-creation races blocked.</p><span>Unavailable</span></article><article><strong>Session controls</strong><p>Expiration, CSRF defense, logout, replay protection, and recovery evidence.</p><span>Unavailable</span></article><article><strong>Signing authority</strong><p>No website signing, claim, send, swap, or treasury authority is enabled.</p><span>Disabled</span></article></div>${unavailableAction('Review recovery options')}</section>`;
+  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Security &amp; recovery</p><h2>Authority must be proven, not assumed</h2></div><span class="state-badge status-readonly">Verified</span></div><div class="security-list"><article><strong>Identity binding</strong><p>The stable numeric X user ID, verified server-side. A handle can be changed or reused; the number cannot.</p><span>Active</span></article><article><strong>Wallet continuity</strong><p>Sign-in resolves the exact existing Privy embedded wallet. It never creates a replacement, and a duplicate-creation race is refused rather than raced.</p><span>Active</span></article><article><strong>Session controls</strong><p>Host-prefixed cookies, a CSRF token matched on every write, expiry, and logout that revokes server-side rather than only clearing a cookie.</p><span>Active</span></article><article><strong>Signing authority</strong><p>The website holds no key and asks you for no signature &mdash; a test fails the build if any signing surface appears in it. Collecting fees needs neither: the split pays your wallet whoever sends it, so Ponsr sends it and pays the gas.</p><span>None, by design</span></article></div><p class="note"><strong>What this page is</strong>A description of the mechanisms, not a report on your session. Nothing here changes with who is reading it.</p></section>`;
 }
 
 function accountPage(route='/account') {

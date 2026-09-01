@@ -41,3 +41,60 @@ export function claimableBy(launch, asset, session) {
     return false;
   }
 }
+
+/**
+ * THE THREE SUMMARY FIGURES, AS ARITHMETIC OVER CELLS THAT WERE ACTUALLY READ.
+ *
+ * Pure, and separate from the painting, for the same reason `claimableBy` is:
+ * these are money figures, and the rules that decide them deserve tests with
+ * real values rather than an assertion about some markup.
+ *
+ * Two rules do the work.
+ *
+ * An unreadable cell is EXCLUDED and counted, never treated as zero. A total
+ * that quietly swallows a balance nobody could read understates what is owed,
+ * and on a money figure that is the expensive direction to be wrong in.
+ *
+ * And amounts are summed only when they are the SAME asset. NVDA and SPCX are
+ * both 18 decimals, so adding them yields a number that formats perfectly and
+ * means nothing -- the same shape as the bug that printed a Microduck sell in
+ * ETH. With more than one unit in play there is no common currency to report.
+ */
+export function feeTotals(launches, session) {
+  const rows = Array.isArray(launches) ? launches : [];
+  const mine =
+    session?.state === 'authenticated' && ADDRESS.test(String(session.wallet?.address ?? ''))
+      ? String(session.wallet.address).toLowerCase()
+      : null;
+  const scoped = mine ? rows.filter((l) => String(l?.creator ?? '').toLowerCase() === mine) : rows;
+
+  let accrued = 0n;
+  let unreadable = 0;
+  const units = new Set();
+  for (const launch of scoped) {
+    for (const asset of launch?.assets ?? []) {
+      if (asset?.state !== 'observed') { unreadable += 1; continue; }
+      let wei;
+      try { wei = BigInt(asset.accruedWei ?? '0'); } catch { unreadable += 1; continue; }
+      // Only a NON-ZERO balance names a unit. A zero cell adds nothing, so
+      // letting it claim the unit would make two empty assets look like a
+      // conflict and hide a figure that is perfectly well defined.
+      if (wei > 0n) units.add(String(asset.label ?? ''));
+      accrued += wei;
+    }
+  }
+
+  const creator = (accrued * 9500n) / 10000n;
+  return {
+    scope: mine ? 'mine' : 'public',
+    launches: scoped.length,
+    accrued,
+    creator,
+    treasury: accrued - creator,
+    unreadable,
+    // Empty means nothing has accrued anywhere, which is a number without a
+    // unit rather than a conflict between units.
+    unit: units.size === 1 ? [...units][0] : null,
+    mixed: units.size > 1,
+  };
+}

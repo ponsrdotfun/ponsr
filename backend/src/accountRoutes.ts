@@ -4,14 +4,34 @@ import {FixedWindowRateLimit} from './webhookRateLimit';
 import type {AccountClaimService} from './accountClaim';
 const sessionCookie='__Host-ponsr_session',pendingCookie='__Host-ponsr_oauth_pending',csrfCookie='__Host-ponsr_csrf';
 const noStore=(res:Response)=>{res.set('Cache-Control','private, no-store');res.set('Pragma','no-cache');res.set('Vary','Cookie, Origin');};
-export function accountRouter(service:AccountAuthService,claims?:AccountClaimService){
+/**
+ * Reads the signed-in wallet's native balance.
+ *
+ * Session-scoped deliberately. The obvious alternative -- a public endpoint
+ * taking an address -- would be an open RPC proxy anybody could point at any
+ * address, for a figure this site has no reason to answer about strangers.
+ *
+ * Returns null when it cannot be read. NEVER zero: this repository has the same
+ * lesson written down about the launch fee and the rolling spend, and a balance
+ * is the worst place to repeat it, because zero is a statement that somebody has
+ * nothing rather than that nobody could ask.
+ */
+export type BalanceReader = (address:string)=>Promise<string|null>;
+
+export function accountRouter(service:AccountAuthService,claims?:AccountClaimService,balanceOf?:BalanceReader){
   const r=Router(),startLimit=new FixedWindowRateLimit(60,60_000),claimLimit=new FixedWindowRateLimit(12,60_000);r.use((_req,res,next)=>{noStore(res);next()});
   r.get('/ready',(_req,res)=>res.json({state:service.readiness()?'ready':'unavailable',siteOrigin:service.siteOrigin(),executionAuthority:'NONE_PREVIEW_ONLY'}));
   r.post('/auth/x/start',(req,res)=>{try{service.assertOrigin(req.get('origin'));const limit=startLimit.check();if(!limit.allowed){res.set('Retry-After',String(limit.resetInSeconds));return res.status(429).json({state:'error',problem:'rate_limited'});}const started=service.start(req.get('origin'));if(started.state!=='ready')return res.status(503).json(started);res.setHeader('Set-Cookie',secureCookie(pendingCookie,started.pending,600));return res.json({state:'ready',authorizationUrl:started.authorizationUrl});}catch{return res.status(403).json({state:'error',problem:'request_rejected'});}});
   r.get('/auth/x/callback',async(req,res)=>{try{const result:any=await service.callback({pending:cookieValue(req.get('cookie'),pendingCookie),state:String(req.query.state||''),code:String(req.query.code||'')});if(result.state!=='authenticated'){res.setHeader('Set-Cookie',expireCookie(pendingCookie));return res.redirect(303,'/account/?auth=unavailable');}res.setHeader('Set-Cookie',[secureCookie(sessionCookie,result.token,28800),`${csrfCookie}=${result.csrf}; Path=/; Secure; SameSite=Strict; Max-Age=28800`,expireCookie(pendingCookie)]);return res.redirect(303,'/account/?auth=complete');}catch{res.setHeader('Set-Cookie',expireCookie(pendingCookie));return res.redirect(303,'/account/?auth=error');}});
   r.get('/account/session',(req,res)=>res.json(service.session(cookieValue(req.get('cookie'),sessionCookie))));
   r.get('/account/launches',(req,res)=>{const value:any=service.launches(cookieValue(req.get('cookie'),sessionCookie));return res.status(value.state==='authenticated'?200:401).json(value);});
-  r.get('/account/wallet',(req,res)=>{const value:any=service.wallet(cookieValue(req.get('cookie'),sessionCookie));return res.status(value.state==='authenticated'?200:401).json(value);});
+  r.get('/account/wallet',async(req,res)=>{
+    const value:any=service.wallet(cookieValue(req.get('cookie'),sessionCookie));
+    if(value.state==='authenticated'&&balanceOf){
+      try{value.balanceWei=await balanceOf(value.wallet.address);}catch{value.balanceWei=null;}
+    } else if(value.state==='authenticated'){value.balanceWei=null;}
+    return res.status(value.state==='authenticated'?200:401).json(value);
+  });
   /**
    * Claiming is a WRITE, so it is guarded like one.
    *

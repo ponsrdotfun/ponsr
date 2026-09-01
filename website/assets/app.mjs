@@ -25,7 +25,7 @@
  * to write the comment differently rather than to loosen the pattern.
  */
 import { reduceSourceState, publicGateMessage } from './data-state.mjs';
-import { claimableBy } from './claim.mjs';
+import { claimableBy, feeTotals } from './claim.mjs';
 import { byEventTimeDesc, normaliseLaunch } from './feed-model.mjs';
 import { element, setText } from './render.mjs';
 // The build renders these same facts. Sharing the formatters is what stops the
@@ -452,8 +452,118 @@ const readSession = () => {
 
 const accountCookie=(name)=>document.cookie.split(';').map((v)=>v.trim()).find((v)=>v.startsWith(`${name}=`))?.slice(name.length+1)||'';
 async function readAccountJson(path,options={}){const response=await fetch(path,{credentials:'same-origin',headers:{Accept:'application/json',...(options.headers||{})},...options});const body=await response.json().catch(()=>({state:'error'}));return{ok:response.ok,body};}
+/**
+ * THE FOUR OVERVIEW CELLS, EACH FROM A SOURCE THAT CAN ACTUALLY ANSWER IT.
+ *
+ * Every one of them used to read "Unavailable" with a reason that had stopped
+ * being true: an identity that was connected, an account scope that existed, a
+ * wallet whose address was printed in the cell above the caption denying it.
+ *
+ * An unreadable value stays unavailable and says so. It is never rendered as a
+ * zero, which on a balance would tell a reader they have nothing.
+ */
+async function paintOverview(session) {
+  const panel = document.querySelector('[data-overview="wallet"]')?.closest('.account-stats');
+  if (!panel) return;
+
+  const write = (key, value, note, unavailable) => {
+    const cell = panel.querySelector(`[data-overview="${key}"]`);
+    if (!cell) return;
+    cell.classList.toggle('is-unavailable', Boolean(unavailable));
+    setText(cell.querySelector('strong'), value);
+    setText(cell.querySelector('span'), note);
+  };
+
+  const address = session?.state === 'authenticated' ? session.wallet?.address : null;
+  if (!address) {
+    write('wallet', 'Not connected', 'Sign in with X to resolve your existing wallet.', true);
+    write('balance', 'Unavailable', 'No address to ask about yet.', true);
+    write('fees', 'Unavailable', 'Sign in to see what is waiting for you.', true);
+    write('launches', 'Unavailable', 'Sign in to list launches by your identity.', true);
+    return;
+  }
+
+  write('wallet', shortAddress(address), 'Your existing embedded wallet. Ponsr holds no key for it.', false);
+
+  // Each of the three remaining cells is filled by its own read, and one
+  // failing must not blank the others -- they answer different questions from
+  // different sources and a shared fate would hide which one is actually down.
+  readAccountJson('/api/account/wallet').then(
+    ({ body }) => {
+      const wei = body?.balanceWei;
+      if (typeof wei !== 'string') {
+        return write('balance', 'Unavailable', 'The balance could not be read just now.', true);
+      }
+      write('balance', ethFromWei(BigInt(wei)), 'Native balance, read from chain.', false);
+    },
+    () => write('balance', 'Unavailable', 'The balance could not be read just now.', true)
+  );
+
+  readAccountJson('/api/account/launches').then(
+    ({ body }) => {
+      const list = Array.isArray(body?.launches) ? body.launches : null;
+      if (!list) return write('launches', 'Unavailable', 'The launch list could not be read.', true);
+      write('launches', whole(list.length), list.length ? 'Launched by your X identity.' : 'No launch on record for your identity yet.', false);
+    },
+    () => write('launches', 'Unavailable', 'The launch list could not be read.', true)
+  );
+
+  fetch('/.netlify/functions/creator-fees', { headers: { accept: 'application/json' } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+    .then((body) => {
+      const t = feeTotals(body?.launches, session);
+      if (!t.launches) return write('fees', 'None', 'No launch on record pays this wallet.', true);
+      if (t.mixed) return write('fees', `${t.launches} ${plural(t.launches, 'launch', 'launches')}`, 'Held in different assets; see the fees page.', true);
+      write('fees', t.unit ? amountFromWei(t.creator, 6, t.unit) : whole(0), 'Your share, waiting in escrow.', false);
+    })
+    .catch(() => write('fees', 'Unavailable', 'The escrow record could not be read.', true));
+}
+
+/**
+ * The controls the wallet page promised and never grew.
+ *
+ * The page printed the verified address and, underneath it, a sentence saying
+ * copy and explorer controls "appear only after the authenticated account
+ * endpoint returns the verified address". It had returned it. The sentence
+ * described a feature that did not exist, which is a worse failure than an
+ * absent button: a reader waits for something that was never coming.
+ *
+ * QR is deliberately not among them. Every library that would draw one is a
+ * third-party script the content policy forbids, and promising it again while
+ * not building it is the exact mistake this replaces.
+ */
+function wireWalletAddress(address) {
+  const actions = document.querySelector('[data-wallet-actions]');
+  if (!actions) return;
+  const hint = document.querySelector('[data-wallet-hint]');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(address || ''))) {
+    actions.hidden = true;
+    return;
+  }
+  actions.hidden = false;
+  if (hint) setText(hint, 'This is the existing embedded wallet for your X identity. Ponsr holds no key for it.');
+
+  const explorer = actions.querySelector('[data-wallet-explorer]');
+  if (explorer) explorer.href = `https://robinhoodchain.blockscout.com/address/${address}`;
+
+  const copy = actions.querySelector('[data-wallet-copy]');
+  if (!copy || copy.dataset.wired) return;
+  copy.dataset.wired = 'yes';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setText(copy, 'Copied');
+    } catch {
+      // A refused clipboard is not a failed page. The address is on screen and
+      // selectable, so say what happened rather than pretending it worked.
+      setText(copy, 'Copy blocked — select it above');
+    }
+    setTimeout(() => setText(copy, 'Copy address'), 2400);
+  });
+}
+
 function paintAccountSession(session){const root=document.querySelector('.account-shell');if(!root)return;const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]'),label=root.querySelector('[data-account-session-label]'),title=root.querySelector('[data-account-session-title]'),detail=root.querySelector('[data-account-session-detail]'),mode=root.querySelector('[data-account-mode]');if(session?.state==='authenticated'){root.dataset.authState='authenticated';root.dataset.identityState='verified';root.dataset.privateDataState='authenticated';root.dataset.executionAuthority='NONE_PREVIEW_ONLY';setText(label,`Verified X identity · @${session.identity.handle}`);setText(title,'Existing wallet continuity verified');setText(detail,`${session.wallet.address} · read-only account access · signing, send and swap remain disabled. Collecting needs no signature: the split pays this wallet whoever sends it.`);setText(mode,'Phase B · Authenticated read-only');setText(root.querySelector('.account-sidebar-state strong'),'Authenticated');const badge=root.querySelector('.state-badge');if(badge&&!badge.classList.contains('status-readonly'))setText(badge,'Authenticated · read-only');if(signIn)signIn.hidden=true;if(logout)logout.hidden=false;const wallet=root.querySelector('.wallet-address-shell strong');if(wallet)setText(wallet,session.wallet.address);for(const stat of root.querySelectorAll('.account-stat')){const label=stat.querySelector('p')?.textContent;if(label==='Embedded wallet')setText(stat.querySelector('strong'),shortAddress(session.wallet.address));}for(const item of root.querySelectorAll('.security-list article')){const label=item.querySelector('strong')?.textContent;if(label==='Identity binding')setText(item.querySelector('span'),'Verified');if(label==='Wallet continuity')setText(item.querySelector('span'),'Verified');if(label==='Session controls')setText(item.querySelector('span'),'Active');}return;}root.dataset.authState='signed-out';root.dataset.identityState='unavailable';root.dataset.privateDataState='locked';if(logout)logout.hidden=true;}
-async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
+async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);wireWalletAddress(session?.wallet?.address);paintOverview(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
 
 async function readFeed() {
   // The function is authoritative; the committed snapshot is the fallback. A
@@ -525,6 +635,54 @@ boot();
  * "nothing accrued" and "we could not ask" are different answers, and one of
  * them tells a creator there is no money waiting.
  */
+/**
+ * The summary cells, from the same payload as the rows below them.
+ *
+ * Deliberately not a second read: a summary computed from its own request can
+ * disagree with the detail underneath it, and a reader who spots that has no way
+ * to know which half is wrong. The arithmetic lives in `feeTotals`, which is
+ * tested with real values.
+ */
+function paintFeeSummary(payload, session) {
+  const panel = document.querySelector('[data-account-fee-summary]');
+  if (!panel) return;
+  const t = feeTotals(payload?.launches, session);
+
+  const scopeBadge = panel.querySelector('[data-fee-summary-scope]');
+  if (scopeBadge) setText(scopeBadge, t.scope === 'mine' ? 'Your launches' : 'Public record');
+
+  const write = (key, wei, hint) => {
+    const cell = panel.querySelector(`[data-fee-total="${key}"]`);
+    if (!cell) return;
+    const value = cell.querySelector('strong');
+    const note = cell.querySelector('span');
+
+    if (!t.launches) {
+      cell.classList.add('is-unavailable');
+      setText(value, t.scope === 'mine' ? 'None' : 'Unavailable');
+      setText(note, t.scope === 'mine' ? 'No launch on record pays this wallet.' : 'No launch has a fee splitter to read.');
+      return;
+    }
+    if (t.mixed) {
+      cell.classList.add('is-unavailable');
+      setText(value, `${t.launches} ${plural(t.launches, 'launch', 'launches')}`);
+      setText(note, 'Balances are held in different assets and are not added together.');
+      return;
+    }
+    cell.classList.remove('is-unavailable');
+    // No unit means nothing has accrued anywhere, so the figure is a plain zero
+    // rather than a zero of some asset nobody is holding.
+    setText(value, t.unit ? amountFromWei(wei, 6, t.unit) : whole(0));
+    setText(note, hint);
+  };
+
+  write('accrued', t.accrued, t.unreadable
+    ? `${t.unreadable} balance${t.unreadable > 1 ? 's' : ''} could not be read and ${t.unreadable > 1 ? 'are' : 'is'} excluded.`
+    : 'Read from the escrow, right now.');
+  write('creator', t.creator, 'Paid to the creator’s own wallet.');
+  write('treasury', t.treasury, 'What the treasury keeps.');
+}
+
 function paintCreatorFees(payload, session) {
   const host = document.querySelector('[data-fee-escrow-rows]');
   if (!host) return;
@@ -650,7 +808,10 @@ async function wireCreatorFees() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     // An unreadable session simply means no controls, never a wrong one.
-    paintCreatorFees(await response.json(), await readSession());
+    const body = await response.json();
+    const session = await readSession();
+    paintFeeSummary(body, session);
+    paintCreatorFees(body, session);
   } catch {
     // The panel says why rather than emptying itself, and never falls back to
     // zero -- a figure a reader could act on must not be invented by a failure.

@@ -115,3 +115,74 @@ describe('POST /api/account/claim', () => {
     expect(codes.filter((c) => c === 429).length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A BALANCE THAT COULD NOT BE READ IS NOT A BALANCE OF ZERO.
+ *
+ * The overview card says "Native balance". Zero there is a statement that the
+ * reader has nothing; null is a statement that nobody could ask. This
+ * repository has already shipped the first mistake twice -- an unreadable
+ * launch fee became 0n and `/status` published `launchpad: ok` for a launch
+ * whose price nobody had read, and an unknown rolling spend fell back to the
+ * calendar day and published `daily-cap: ok`.
+ */
+describe('GET /api/account/wallet balance', () => {
+  const WALLET_2 = '0xcdce6c82D995d3223D4e956A3C28D36BaD875dc0';
+  let server: any, base: string;
+
+  const boot = async (balanceOf?: any, authenticated = true) => {
+    const express = require('express');
+    const { accountRouter } = require('../src/accountRoutes');
+    const app = express();
+    app.use(express.json());
+    const service: any = {
+      readiness: () => true,
+      siteOrigin: () => 'https://ponsr.fun',
+      assertOrigin: () => undefined,
+      wallet: () =>
+        authenticated
+          ? { state: 'authenticated', wallet: { address: WALLET_2 } }
+          : { state: 'unauthenticated' },
+    };
+    app.use('/api', accountRouter(service, undefined, balanceOf));
+    server = app.listen(0);
+    base = `http://127.0.0.1:${(server.address() as any).port}`;
+  };
+
+  afterEach(() => server?.close());
+
+  it('reports a read balance', async () => {
+    await boot(async () => '1234500000000000000');
+    const body: any = await (await fetch(`${base}/api/account/wallet`)).json();
+    expect(body.balanceWei).toBe('1234500000000000000');
+  });
+
+  it('reports null when the read throws, never zero', async () => {
+    await boot(async () => {
+      throw new Error('rpc unreachable');
+    });
+    const body: any = await (await fetch(`${base}/api/account/wallet`)).json();
+    expect(body.balanceWei).toBeNull();
+    expect(body.balanceWei).not.toBe('0');
+    // The route must still answer: an unreadable extra cannot take the wallet
+    // address down with it.
+    expect(body.wallet.address).toBe(WALLET_2);
+  });
+
+  it('reports null when no reader is wired at all', async () => {
+    await boot(undefined);
+    const body: any = await (await fetch(`${base}/api/account/wallet`)).json();
+    expect(body.balanceWei).toBeNull();
+  });
+
+  it('asks for no balance when nobody is signed in', async () => {
+    let asked = 0;
+    await boot(async () => {
+      asked += 1;
+      return '1';
+    }, false);
+    const response = await fetch(`${base}/api/account/wallet`);
+    expect(response.status).toBe(401);
+    expect(asked).toBe(0);
+  });
+});
