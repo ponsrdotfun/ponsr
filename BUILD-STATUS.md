@@ -64,7 +64,8 @@
 > consecutive review reports told an external reviewer the opposite. Each was true when
 > written.
 >
-> What remains is not code — see `docs/action-checklist.md`.
+> What remains is not code — it is account signups and a cold wallet, tracked by the
+> operator outside this repository.
 >
 > ## On the treasury: the bot's key could empty the hot wallet — closed 2026-08-22
 >
@@ -196,4 +197,4 @@ best-effort assumptions about how they'll behave. That's not a caveat unique to 
 it's true of any software that hasn't been through its own integration/staging environment
 yet. The project's own implementation roadmap (Phase 1: testnet first) exists precisely to
 close that gap safely, with fake money, before real money is ever at risk — and that phase
-still needs to happen, starting with the action-checklist.md items.
+still needs to happen, starting with the operator's own account and wallet setup.

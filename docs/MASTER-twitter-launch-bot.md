@@ -1230,7 +1230,7 @@ full, honestly, in `BUILD-STATUS.md` inside the delivered package -- short versi
 that can be tested without a live third-party account is built and passing; the Privy,
 Turnkey, twitterapi.io, and real Pons ABI integration points are clearly-marked stubs with
 TODO comments, because completing them requires accounts only you can create (see Section A
-of the Consolidated Open Questions below, and `action-checklist.md`).
+of the Consolidated Open Questions below).
 
 This code is ready for Phase 1 (testnet) per the implementation roadmap above -- it is not,
 and does not claim to be, a substitute for that phase. A professional audit of

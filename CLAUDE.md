@@ -21,13 +21,22 @@ survives in historical notes.
    contracts and real mainnet launches actually showed. Where two sections disagree, the later
    one wins. §9.10 is an incident report worth reading before touching the deploy path.
 2. `BUILD-STATUS.md` — what's real/tested vs. a clearly-marked stub right now.
-3. `docs/action-checklist.md` — everything that requires the owner's direct action (account
-   signups, API keys, emails). Nothing here should be "completed" past a stub without the
-   corresponding checklist item being done first.
+3. `backend/docs/SETUP.md` — how to get from "tests pass on mocks" to a running backend, and
+   where every credential comes from. What requires the owner's own action — account signups,
+   API keys, funding a wallet — is tracked by the operator outside this repository. Nothing
+   here should be "completed" past a stub without the corresponding account existing first.
 4. `docs/MASTER-twitter-launch-bot.md` — the full spec. Every architectural decision traces
    back to a specific Part in this document. Sections A–D of its Consolidated Open Questions
    list what is still undecided; items #17–21 came from the pons docs.
 5. `backend/docs/SECURITY-BOUNDARIES.md` — the non-negotiable rules.
+
+**On the `PONSR-*.txt` reports cited throughout this file.** They are operator records —
+canary completions, abort reports, audit closures — and they are **not in this repository**.
+They name wallet balances, machine state and the sequence of live signing ceremonies, which
+is operator business rather than source. Every conclusion they reached that still matters is
+summarised here, in the section that cites them; the citation says where the evidence came
+from, not where to click. The same is true of the `docs/` files this history refers to that
+you cannot find: the ceremony record, the migration acceptance, and the two emails.
 
 ## Current state
 
@@ -440,7 +449,6 @@ Still blocked on the owner:
    probe, both removals, final probe. No disposable credential was ever created: the owner
    authorised every step with the EXISTING root passkey, so the ceremony added no
    credential to destroy afterwards. The step that used to exist for one is gone.
-   See `docs/TURNKEY-V1-REVOCATION-CEREMONY.md`.
 3. ~~Backend hosting, for the listener to run 24/7~~ — **done, and has been for a while.**
    `ponsr-backend` runs on Fly in `iad`, machine `867634bee0e048`, `min_machines_running = 1`
    and `auto_stop_machines = false`, health check passing. This entry sat here as an open

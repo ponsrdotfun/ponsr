@@ -227,8 +227,8 @@ Also confirmed: WETH `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`, V3 factory
 
 The v1 docs contain **no create/launch function signature and no launch code sample** — the
 integration section only covers *reading* launches. So the single most important blocker is
-unchanged: the ABI still has to come from the verified contract on Blockscout
-(`action-checklist.md` item 1). Neither doc set closes it.
+unchanged: the ABI still has to come from the verified contract on Blockscout.
+Neither doc set closes it.
 
 ### New v1 facts we did not have
 
@@ -275,7 +275,7 @@ unchanged: the ABI still has to come from the verified contract on Blockscout
 
 **The one thing that has not changed:** the ABI still has to be pulled from a deployed,
 verified contract before any of it is trusted. For v2 that is not yet possible — the factory
-does not exist. For v1 it is still the Blockscout call in `docs/action-checklist.md` item 1.
+does not exist. For v1 it is still the Blockscout call against the verified contract.
 
 ---
 

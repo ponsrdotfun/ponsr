@@ -6,7 +6,7 @@ dotenv.config();
 /**
  * All external credentials the bot needs. Every one of these is a placeholder that must be
  * filled in with real values before Phase 1 (testnet) can run end to end -- see
- * docs/SETUP.md and the project's own action-checklist.md for where each of these comes from.
+ * backend/docs/SETUP.md for where each of these comes from.
  *
  * Fields are deliberately optional at the schema level (not required) so the backend can
  * boot in a partially-configured state for local development/testing -- individual modules
@@ -285,7 +285,7 @@ export function requireConfig<K extends keyof Config>(key: K): NonNullable<Confi
   const value = config[key];
   if (value === undefined || value === null || value === '') {
     throw new Error(
-      `Missing required config: ${String(key)}. See docs/SETUP.md and action-checklist.md for how to obtain it.`
+      `Missing required config: ${String(key)}. See backend/docs/SETUP.md for how to obtain it.`
     );
   }
   return value as NonNullable<Config[K]>;

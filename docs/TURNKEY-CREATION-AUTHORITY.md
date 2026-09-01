@@ -111,7 +111,6 @@ initcode is bound:
 <!-- historical -->
 - `CLAUDE.md` — "a leak of the bot's key now costs launches, not the treasury"
 - `BUILD-STATUS.md` — "A leak of that key costs launches, not the treasury."
-- `docs/MIGRATION-ACCEPTANCE-2026-08-20.md` §6
 - `docs/WRITER-BOT-BRIEF.md`
 - `scripts/turnkey-verify-policy.ts` — printed it on PASS
 <!-- /historical -->

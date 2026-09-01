@@ -13,7 +13,7 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `.env` per `action-checklist.md` in the project root. At minimum, to run the test
+Fill in `.env` per `backend/.env.example`. At minimum, to run the test
 suite you need nothing filled in (tests use mocks throughout). To run the server for real
 against testnet, you need:
 - `ANTHROPIC_API_KEY` (Claude Haiku 4.5 access)

@@ -81,8 +81,7 @@ proof and `backend/tests/v1HistoricalReader.test.ts` for the proof that v1 remai
 readable.
 
 **The code change does not remove signer permission.** Turnkey still allows the v1 factory
-as a destination. That is a separate owner ceremony — see
-`docs/TURNKEY-V1-REVOCATION-CEREMONY.md`.
+as a destination. That is a separate owner ceremony, completed 2026-08-28.
 
 ## Public website scope after the current-V2 canary
 

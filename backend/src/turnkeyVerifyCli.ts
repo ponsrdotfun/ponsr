@@ -125,8 +125,7 @@ export function renderVerification(input: VerificationInput): VerificationOutput
   }
   if (outcomes.v1Factory.kind === 'allowed' || outcomes.legacyFactory.kind === 'allowed') {
     say('  A superseded factory is still an allowed destination. Removing it is an');
-    say('  owner ceremony -- see docs/TURNKEY-V1-REVOCATION-CEREMONY.md, and read the');
-    say('  ordering there first: the v1 rule also carries the only zero-value');
+    say('  owner ceremony, and the ordering matters: the v1 rule also carries the only zero-value');
     say('  contract-creation clause, so deleting it alone leaves a bot that can launch');
     say('  and then cannot deploy its splitter.');
   }

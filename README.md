@@ -143,8 +143,7 @@ open website/index.html   # or drag it into any static host -- no build step nee
 ```
 
 Full setup instructions, including how to get from "tests pass on mocks" to "actually running
-on testnet with real (test) funds," are in `backend/docs/SETUP.md` and
-`docs/action-checklist.md`.
+on testnet with real (test) funds," are in `backend/docs/SETUP.md`.
 
 ## Test results
 
