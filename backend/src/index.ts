@@ -161,6 +161,10 @@ const pairAssets = (() => {
       // disagree. Passing an address and a block separately was two chances to name
       // different contracts.
       deployment: d,
+      // The watermark outlives the process. Without it every deploy swept from
+      // the deployment's first block to the head again -- 25 million blocks by
+      // 2026-09-01 -- and boot discovery failed half the time it was tried.
+      store: { get: (k) => db.getState(k), set: (k, v) => db.setState(k, v) },
     })
   );
 })();

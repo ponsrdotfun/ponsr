@@ -74,6 +74,22 @@ export interface ChainPairTokenSourceOptions {
   /** Lowest block to scan. Below the factory's deployment there is nothing to find. */
   fromBlock?: number;
   chunkSize?: number;
+  /**
+   * Where the scan watermark survives a restart.
+   *
+   * The scan is already incremental WITHIN a process -- `scannedTo` means the
+   * second call reads only new blocks. Across a restart it was not, so every
+   * deploy swept from the deployment's first block to the head again: 25 million
+   * blocks by 2026-09-01, in 1 000 000-block windows, against a shared public
+   * endpoint. Measured over ten hours of retained logs, boot discovery failed
+   * twice and succeeded twice -- and the sweep only gets longer.
+   *
+   * The same defect in three places on one day: this, the launchpad watch's
+   * `closed` flag, and the snapshot refresh. In-memory state that has to outlive
+   * the process is not state, it is a cache with an opinion.
+   */
+  store?: { get(key: string): string | null; set(key: string, value: string): void };
+  storeKey?: string;
 }
 
 export class ChainPairTokenSource implements PairTokenSource {
@@ -83,6 +99,12 @@ export class ChainPairTokenSource implements PairTokenSource {
   readonly deployment: import('./deployments').PonsDeployment;
   readonly factoryAddress: string;
   readonly fromBlock: number;
+
+  private hydrated = false;
+  /** Keyed by deployment: two deployments' approval histories are not the same list. */
+  private get storeKey(): string {
+    return this.opts.storeKey ?? `pair-approvals:${this.deployment.id}`;
+  }
 
   constructor(private opts: ChainPairTokenSourceOptions) {
     this.deployment = opts.deployment ?? executableDeployment();
@@ -139,6 +161,7 @@ export class ChainPairTokenSource implements PairTokenSource {
     // this.fromBlock, resolved once in the constructor from the deployment. Reading
     // opts.fromBlock again here meant a scanner constructed from a deployment alone
     // started at block 0 and swept millions of empty blocks.
+    this.hydrate();
     const from = this.scannedTo !== null ? this.scannedTo + 1 : this.fromBlock;
     const chunk = this.opts.chunkSize ?? DEFAULT_CHUNK;
     const filter = this.factory.filters.PairTokenApprovalUpdated();
@@ -176,7 +199,51 @@ export class ChainPairTokenSource implements PairTokenSource {
     // would be refused for as long as the process lives.
     this.seen = this.seen.concat(out);
     this.scannedTo = head;
+    this.persist();
     return this.seen;
+  }
+
+  /**
+   * Loads the watermark once, and only if it is coherent.
+   *
+   * A stored blob that cannot be parsed, or that claims to have scanned below
+   * the deployment's own first block, is discarded rather than trusted -- a
+   * corrupt watermark would skip the window it claims to have read, and an
+   * approval missed there becomes an asset the bot quietly refuses to offer.
+   * Starting over is slow; starting from a lie is wrong.
+   */
+  private hydrate(): void {
+    if (this.hydrated) return;
+    this.hydrated = true;
+    const store = this.opts.store;
+    if (!store) return;
+    try {
+      const raw = store.get(this.storeKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { scannedTo?: unknown; seen?: unknown };
+      const scannedTo = Number(parsed.scannedTo);
+      if (!Number.isInteger(scannedTo) || scannedTo < this.fromBlock) return;
+      if (!Array.isArray(parsed.seen)) return;
+      const seen = parsed.seen.filter(
+        (e: any) =>
+          e && typeof e.pairToken === 'string' && typeof e.approved === 'boolean' &&
+          Number.isInteger(e.blockNumber) && Number.isInteger(e.logIndex)
+      ) as ApprovalEvent[];
+      if (seen.length !== parsed.seen.length) return;
+      this.scannedTo = scannedTo;
+      this.seen = seen;
+    } catch {
+      // An unreadable memo costs one full sweep, which is what happened every
+      // time before this existed.
+    }
+  }
+
+  private persist(): void {
+    try {
+      this.opts.store?.set(this.storeKey, JSON.stringify({ scannedTo: this.scannedTo, seen: this.seen }));
+    } catch (err) {
+      console.error('[pairTokens] could not persist the scan watermark:', (err as Error)?.message ?? err);
+    }
   }
 
   async tokenMeta(address: string): Promise<{ symbol: string; name: string; decimals: number }> {
