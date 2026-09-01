@@ -300,8 +300,35 @@ function mascot() {
  * a token exists. Ponsr has a logo; Ponsr has no token. The sentence now says
  * which of the two is missing.
  */
+/**
+ * THE OFFICIAL TOKEN, PUBLISHED 2026-09-02.
+ *
+ * Read from the chain before it shipped: name PONSR, symbol PONSR, 18 decimals,
+ * 1 000 000 000 supply, 3 248 bytes of runtime code on chain 4663. That check
+ * exists because pons shows a token's address beside its pair and curve
+ * addresses, and the wrong one here is a permanent homepage link to somewhere
+ * else. It is the token.
+ *
+ * THE FULL ADDRESS IS PRINTED, NOT SHORTENED. Everywhere else this site
+ * abbreviates; here it must not. This is the string people check a token
+ * against before spending money, and an abbreviation is exactly what a copycat
+ * needs — 0xadaa…7eb6 is cheap to collide at both visible ends. The copy button
+ * carries the same value through `data-copy-address`, whose 40-hex guard is
+ * untouched.
+ *
+ * The line about Explore stays. It was written when no official token existed
+ * and it is doing MORE work now, not less: a verified launch is not an
+ * endorsement, and the moment an official token exists is the moment somebody
+ * launches something adjacent and hopes the board reads as approval.
+ */
+const OFFICIAL_TOKEN = Object.freeze({
+  address: '0xadaafdea5c310be1bd50d48c07f9450914057eb6',
+  symbol: 'PONSR',
+});
+
 function officialStage() {
-  return `<aside class="official-identity-strip" data-official-showcase><span class="official-sigil" aria-hidden="true"><img src="/logo-transparent.png" alt="" width="512" height="507" loading="lazy" decoding="async"></span><div><p class="eyebrow">Official token status</p><strong>No official Ponsr token has been published.</strong><p>The token's contract, artwork and launch record remain unpublished. Verified launches in Explore are not automatically official.</p></div><a class="section-action" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer"><span>Registry updates</span><i class="action-icon" aria-hidden="true">↗</i></a></aside>`;
+  const address = OFFICIAL_TOKEN.address;
+  return `<aside class="official-identity-strip" data-official-showcase><span class="official-sigil" aria-hidden="true"><img src="/logo-transparent.png" alt="" width="512" height="507" loading="lazy" decoding="async"></span><div><p class="eyebrow">Official token status</p><strong>${esc(OFFICIAL_TOKEN.symbol)} is the official Ponsr token.</strong><p>This contract address is the only one. Verified launches in Explore are not automatically official.</p><div class="identity-actions"><button class="ca-copy" type="button" data-copy-address="${esc(address)}" aria-label="Copy the official Ponsr contract address ${esc(address)}"><span class="mono">${esc(address)}</span><span data-copy-label role="status" aria-live="polite">Copy CA</span></button><a class="btn btn-ghost" href="${EXPLORER}/address/${esc(address)}" target="_blank" rel="noopener noreferrer"><span>Explorer ↗</span></a></div></div><a class="section-action" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer"><span>Registry updates</span><i class="action-icon" aria-hidden="true">↗</i></a></aside>`;
 }
 
 function page({ title, description, canonical, body, socialImage = socialImages.home, noindex = false }) {

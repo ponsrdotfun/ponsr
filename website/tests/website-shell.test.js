@@ -25,6 +25,10 @@ const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const PSTONKS = '0x7803f37e0db73105c47d5a5f3d054a0ae47e2199';
+// The official Ponsr token, published 2026-09-02. Deployed by the owner directly
+// on pons rather than through the bot, so it belongs on the homepage and NOT on
+// the board -- Explore means "launched through Ponsr".
+const OFFICIAL_TOKEN = '0xadaafdea5c310be1bd50d48c07f9450914057eb6';
 
 const pages = () => [
   'website/index.html',
@@ -73,7 +77,13 @@ test('the homepage uses exact production articulated mascot geometry and an offi
   assert.match(app, /botRect\.bottom<-120\|\|botRect\.top>window\.innerHeight\+120/, 'the gaze must stop when the robot is off-screen');
   assert.match(app, /state\.move\(\{transform:`translate\(calc\(-50%/);
   assert.match(html, /data-official-showcase/);
-  assert.match(html, /No official Ponsr token has been published/i);
+  // The official token exists as of 2026-09-02, so the strip states it. What is
+  // guarded has not changed: the CANARY is never presented as the official
+  // token here. That is what these four lines were always for -- the sentence
+  // "No official Ponsr token has been published" was how it was expressed while
+  // none existed, and pinning the sentence rather than the property would have
+  // made publishing one look like a regression.
+  assert.match(html, new RegExp(OFFICIAL_TOKEN, 'i'), 'the official contract address must be on the homepage');
   assert.doesNotMatch(html, new RegExp(PSTONKS, 'i'));
   assert.doesNotMatch(html, /PONSR STONKS|Generated record art/i);
   assert.doesNotMatch(html, /The first one|ONE REAL CANARY|validation launch|Inspect PSTONKS/i);
@@ -85,7 +95,11 @@ test('homepage is official-only while Explore lists every verified current-V2 Po
   const token = read(`website/token/${PSTONKS}/index.html`);
   assert.doesNotMatch(home, new RegExp(PSTONKS, 'i'));
   assert.doesNotMatch(home, /PONSR STONKS|PSTONKS/i);
-  assert.match(home, /No official Ponsr token has been published/i);
+  assert.match(home, new RegExp(OFFICIAL_TOKEN, 'i'));
+  // The official token is named on the homepage and is NOT a verified-launch
+  // row, so it must not appear on the board: Explore means "launched through
+  // Ponsr", and this one was deployed by the owner directly on pons.
+  assert.doesNotMatch(explore, new RegExp(OFFICIAL_TOKEN, 'i'));
   assert.match(explore, new RegExp(PSTONKS, 'i'));
   assert.match(explore, /PONSR STONKS|PSTONKS/i);
   assert.match(explore, /data-launch-scope="all-verified-v2"/);

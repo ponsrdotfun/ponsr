@@ -476,6 +476,18 @@ p { margin: 0; }
    `cover`, for the reason the launch cards already learned the hard way: a crop
    is an alteration, and a mark is the one image that must never be altered. */
 .official-sigil img { width:30px; height:30px; object-fit:contain; display:block; }
+/* THE FULL ADDRESS IS PRINTED HERE, AND 42 MONOSPACE CHARACTERS DO NOT FIT A
+   PHONE. Token pages abbreviate theirs, so their button may size to content;
+   this one must wrap instead. Measured at 375px before this rule: the button ran
+   to 450px and took the whole DOCUMENT with it, so the page scrolled sideways.
+   Three classes deep on purpose. `.identity-actions .ca-copy` sets `width:auto`
+   and is equally specific, so a two-class rule would win or lose on source order
+   — the same tie that shipped the dashed box on the hero request. */
+.official-identity-strip .identity-actions .ca-copy { width:100%; min-width:0; flex-wrap:wrap; justify-content:flex-start; gap:.3rem .6rem; }
+/* Left-aligned because this string is read character by character. The hero
+   centres its text on a phone, and a centred hex address that wraps puts the
+   second line's start somewhere different from the first's. */
+.official-identity-strip .identity-actions .ca-copy .mono { overflow-wrap:anywhere; min-width:0; text-align:left; }
 @keyframes pathwayPulse { 0%,100% { opacity:.42; transform:scale(.8); } 50% { opacity:1; transform:scale(1.2); } }
 @keyframes flowTrace { 0%,12% { transform:translateX(-120%); } 70%,100% { transform:translateX(420%); } }
 @media (max-width:880px) { .product-pathways { grid-template-columns:1fr; } .product-pathways>a { min-height:150px; } .protocol-flow { grid-template-columns:repeat(2,minmax(0,1fr)); } }
