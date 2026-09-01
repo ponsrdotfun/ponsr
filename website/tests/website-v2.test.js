@@ -77,11 +77,44 @@ test('hostile metadata is rendered as text and no untrusted innerHTML sink exist
   assert.doesNotMatch(js, /insertAdjacentHTML|document\.write/);
 });
 
-test('public launch gate false is preserved and has paused user copy', async () => {
+/**
+ * THE SNAPSHOT'S GATE MUST NOT REACH THE BUILT PAGE.
+ *
+ * This assertion used to read `feed.publicGate.enabled === false`, which pinned a
+ * STATE rather than a property, and on 2026-09-02 the two halves of that cost
+ * users a day. The owner opened the gate; the scheduled refresh read `true` from
+ * the chain; this assertion failed; the workflow refused to publish the snapshot
+ * that would have corrected the page. ponsr.fun went on telling visitors "New
+ * launches are paused" while the bot was answering them.
+ *
+ * Each half was defensible alone. Pinning the expected state is a reasonable
+ * guard, and refusing to publish a snapshot that fails its own suite is the
+ * right instinct. Together they were a ratchet: the only thing that could clear
+ * the failure was the publish the failure blocked.
+ *
+ * What is asserted instead is the rule the build actually has to obey -- it may
+ * ship only the CLOSED gate, because a built page is cached and outlives what was
+ * true when it was written, and the client raises it after reading a feed. That
+ * is checked against the build SOURCE, because checking its output only proves
+ * what today's snapshot happens to contain. Two tests in website-shell already
+ * read the output, and both passed while the build branched on the feed -- the
+ * snapshot's gate had simply never been true, so the open branch never ran.
+ */
+test('the gate copy the build ships never depends on the snapshot it read', async () => {
   const { publicGateMessage } = await import('../assets/data-state.mjs');
   assert.match(publicGateMessage(false), /paused/i);
+  assert.doesNotMatch(publicGateMessage(true), /paused/i);
+
   const feed = loadJson('website/data/launches.json');
-  assert.equal(feed.publicGate.enabled, false);
+  assert.equal(typeof feed.publicGate.enabled, 'boolean');
+
+  const build = read('scripts/build-website.mjs');
+  const markup = build.slice(build.indexOf('function statusStrip'));
+  assert.doesNotMatch(
+    markup,
+    /feed\.publicGate/,
+    'the build is branching its own copy on the gate it read; only the client may do that'
+  );
 });
 
 test('public UI has no invented market data or V1 Uniswap mechanics', () => {

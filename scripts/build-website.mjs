@@ -188,6 +188,24 @@ function nav(current) {
 }
 
 /**
+ * THE BUILD MAY ONLY EVER SHIP THE CLOSED GATE.
+ *
+ * Not "the gate as the snapshot found it" — the closed one, always. A built page
+ * is cached by Netlify, by browsers and by X's crawler, so it outlives whatever
+ * was true when it was written. Baking `open` into it means that the moment the
+ * gate closes, a stale copy invites requests that will be refused; baking
+ * `paused` can only ever understate, and the client raises it within a frame of
+ * reading a feed.
+ *
+ * This was written as `feed.publicGate.enabled ? … : …` in three places, and the
+ * two tests guarding the rule could not see it: the snapshot's gate had never
+ * been `true`, so the pessimistic branch was the only one they ever ran. When it
+ * did turn true on 2026-09-02 the build immediately published an open gate on
+ * every page.
+ */
+const BUILD_GATE_ENABLED = false;
+
+/**
  * Ships `stale`. See the honesty rule at the top of this file — the build has
  * observed nothing about right now, and says so.
  */
@@ -197,8 +215,8 @@ function statusStrip() {
     `<span class="sep" aria-hidden="true">·</span>` +
     `<span class="detail" data-status-detail>Registry snapshot through block ${esc(whole(feed.asOfBlock))}</span>` +
     `<span class="sep" aria-hidden="true">·</span>` +
-    `<span class="gate-pill" data-gate-pill>Ponsr launch tooling ${feed.publicGate.enabled ? 'open' : 'paused'}</span>` +
-    `<span class="gate" data-gate-message>${esc(gateMessage(feed.publicGate.enabled))}</span>` +
+    `<span class="gate-pill" data-gate-pill>Ponsr launch tooling ${BUILD_GATE_ENABLED ? 'open' : 'paused'}</span>` +
+    `<span class="gate" data-gate-message>${esc(gateMessage(BUILD_GATE_ENABLED))}</span>` +
     `</section>`;
 }
 
@@ -310,8 +328,8 @@ function home() {
         `<blockquote><span class="howto-mention">@${esc(X_HANDLE)}</span> launch a token called Micro Duck, symbol MICRODUCK</blockquote>` +
         `<button class="btn btn-ghost howto-copy" type="button" data-copy-text="@${esc(X_HANDLE)} launch a token called Micro Duck, symbol MICRODUCK">Copy this request</button>` +
       `</figure>` +
-      `<p class="note howto-gate" data-howto-gate><strong>${feed.publicGate.enabled ? 'Open now' : 'Paused right now'}</strong>` +
-        `${feed.publicGate.enabled
+      `<p class="note howto-gate" data-howto-gate><strong>${BUILD_GATE_ENABLED ? 'Open now' : 'Paused right now'}</strong>` +
+        `${BUILD_GATE_ENABLED
           ? 'Requests are being read. Post the tweet and Ponsr will answer it.'
           : `New launches are paused, so a request will not be answered yet. Follow <a href="https://x.com/${esc(X_HANDLE)}" target="_blank" rel="noopener noreferrer">@${esc(X_HANDLE)}</a> — that is where it is announced when they open.`}</p>` +
     `</section>` +

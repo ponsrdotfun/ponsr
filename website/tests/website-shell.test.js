@@ -637,26 +637,25 @@ test('no user-facing copy quotes the splitter share as the creator share', () =>
 });
 
 /**
- * THE CALL TO ACTION FOLLOWS THE REAL GATE.
+ * THE CLOSED NOTE IS NOT A DEAD END.
  *
- * "Paused" was a dead end: honest, and with nowhere to go. It offers the one
- * useful next step now, and when the gate opens the same section asks for the
- * tweet instead -- from the committed gate state, so nobody has to remember to
- * edit a paragraph on the day it matters.
+ * "Paused" alone was honest with nowhere to go, so the closed copy has to offer
+ * the one useful next step: follow the account where opening is announced.
+ *
+ * This test used to branch on `feed.publicGate.enabled` and demand "Open now"
+ * when the snapshot said open -- which contradicted, outright, the rule asserted
+ * forty lines below: the build ships the cautious state and the CLIENT raises it.
+ * Two tests demanding opposite things about one element could both pass only
+ * while the gate was false. On 2026-09-02 it turned true and they could not.
+ *
+ * The build's state is not this test's business any more. Only the copy is.
  */
-test('the how-to-launch note matches the committed gate state', () => {
+test('the closed how-to note still offers somewhere to go', () => {
   const html = read('website/index.html');
-  const feed = JSON.parse(read('website/data/launches.json'));
   const note = html.slice(html.indexOf('data-howto-gate'), html.indexOf('</section>', html.indexOf('data-howto-gate')));
 
-  if (feed.publicGate.enabled) {
-    assert.match(note, /Open now/);
-    assert.match(note, /Post the tweet/);
-  } else {
-    assert.match(note, /Paused right now/);
-    // Not a dead end.
-    assert.match(note, /x\.com\/ponsrdotfun/);
-  }
+  assert.match(note, /Paused right now/);
+  assert.match(note, /x\.com\/ponsrdotfun/);
 });
 
 /**
