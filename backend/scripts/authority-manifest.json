@@ -3,6 +3,16 @@
   "description": "Complete authority inventory for executable entrypoints in backend/scripts. Authority describes the maximum capability; defaultMode describes invocation without an explicit effect flag.",
   "scripts": [
     {
+      "script": "alert-probe.ts",
+      "authority": "remote-mutation",
+      "effects": [
+        "posts one test message to the operator's Telegram chat",
+        "sends nothing without --send"
+      ],
+      "defaultMode": "plan-only",
+      "explicitGate": "--send"
+    },
+    {
       "script": "apply-v2-policy.ps1",
       "authority": "remote-mutation",
       "effects": [

@@ -638,20 +638,28 @@ const crossCheck =
 // to it; reading its switch state is how an operator learns pons changed something on a
 // contract Ponsr still has tokens on.
 const launchpadWatches = [
-  { label: 'the v1 factory', address: deploymentById('pons-v1').factory },
+  // `launchesThrough: false` is the whole point of watching it. pons closing v1
+  // is not an outage for Ponsr -- the bot left that factory on 2026-08-26 and
+  // `pons-v1` is `executable: false`. Without this flag the watch sent CRITICAL
+  // saying "the bot cannot launch anything" while the bot launched fine through
+  // v2, three times in four hours on 2026-09-01.
+  { label: 'the v1 factory', address: deploymentById('pons-v1').factory, launchesThrough: false },
   // The CURRENT factory, from the registry. This watched
   // `config.PONS_V2_FACTORY_ADDRESS` until 2026-08-20 -- the superseded deployment --
   // which is how a "launchpad closed" alert kept firing accurately about a contract
   // pons had already replaced, while the one Ponsr would launch through was open the
   // entire time. A monitor pointed at the wrong contract does not go quiet; it reports
   // confidently on somewhere else.
-  { label: `the current factory (${executableDeployment().id})`, address: executableDeployment().factory },
-].map(({ label, address }) =>
+  { label: `the current factory (${executableDeployment().id})`, address: executableDeployment().factory, launchesThrough: true },
+].map(({ label, address, launchesThrough }) =>
   startLaunchpadWatch(
     { getLaunchReadiness: async () => getSwitchState(provider, address, await treasurySigner.address()) },
     notifier,
     15,
-    label
+    label,
+    // The store makes the edge survive a deploy. Each watch keys on its own
+    // label, so closing one factory cannot silence the alert for the other.
+    { launchesThrough, store: { get: (k) => db.getState(k), set: (k, v) => db.setState(k, v) } }
   )
 );
 
