@@ -144,3 +144,123 @@ describe('watching more than one factory', () => {
     expect(sent[1].message).toContain('grant that was asked for');
   });
 });
+
+/**
+ * A CRITICAL ALARM THAT IS FALSE IS WORSE THAN NO ALARM.
+ *
+ * Both factories are watched, and this alert was written for the one the bot
+ * launches through. So the v1 watch sent CRITICAL saying "the bot cannot launch
+ * anything until this changes" while the bot was launching perfectly well
+ * through v2 -- pons-v1 is `executable: false` and Ponsr left it on 2026-08-26.
+ *
+ * Three of those reached the owner's phone in four hours on 2026-09-01. That is
+ * how somebody learns to ignore the channel, and then misses the real one.
+ */
+describe('a factory the bot does not launch through', () => {
+  const closed = { getLaunchReadiness: async () => ({ launchEnabled: false, whitelisted: false }) };
+
+  it('is a warning that says nothing is broken, not a critical outage', async () => {
+    const sent: any[] = [];
+    const watch = startLaunchpadWatch(closed, { send: async (a: any) => { sent.push(a); } }, 15, 'the v1 factory', {
+      launchesThrough: false,
+    });
+    await watch.check();
+    watch.stop();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].severity).toBe('warning');
+    expect(sent[0].message).toMatch(/does NOT launch through/);
+    expect(sent[0].message).toMatch(/Nothing is broken/);
+    // The sentence that was false.
+    expect(sent[0].message).not.toMatch(/cannot launch anything/);
+  });
+
+  it('still says critical for the factory the bot does launch through', async () => {
+    const sent: any[] = [];
+    const watch = startLaunchpadWatch(closed, { send: async (a: any) => { sent.push(a); } }, 15, 'the current factory', {
+      launchesThrough: true,
+    });
+    await watch.check();
+    watch.stop();
+
+    expect(sent[0].severity).toBe('critical');
+    expect(sent[0].message).toMatch(/cannot launch anything/);
+  });
+});
+
+/**
+ * THE EDGE MUST OUTLIVE THE PROCESS, OR IT IS NOT AN EDGE.
+ *
+ * This file's own rule is to alert once on the way down and once on the way
+ * back, "because a repeat every interval for a condition that lasts days
+ * teaches everyone to mute the channel". The flag lived in memory, so every
+ * restart forgot it and announced a standing condition again -- one identical
+ * CRITICAL per deploy.
+ *
+ * A rule that only holds until the next deploy is not a rule.
+ */
+describe('the closed state survives a restart', () => {
+  const closed = { getLaunchReadiness: async () => ({ launchEnabled: false, whitelisted: false }) };
+
+  const makeStore = () => {
+    const values = new Map<string, string>();
+    return { get: (k: string) => values.get(k) ?? null, set: (k: string, v: string) => { values.set(k, v); }, values };
+  };
+
+  it('announces once across two process lifetimes', async () => {
+    const store = makeStore();
+    const sent: any[] = [];
+    const notifier = { send: async (a: any) => { sent.push(a); } };
+
+    const first = startLaunchpadWatch(closed, notifier, 15, 'the v1 factory', { launchesThrough: false, store });
+    await first.check();
+    first.stop();
+    expect(sent).toHaveLength(1);
+
+    // A deploy: brand new process, same database.
+    const second = startLaunchpadWatch(closed, notifier, 15, 'the v1 factory', { launchesThrough: false, store });
+    await second.check();
+    second.stop();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('keys on the label, so one factory closing cannot silence the other', async () => {
+    const store = makeStore();
+    const sent: any[] = [];
+    const notifier = { send: async (a: any) => { sent.push(a); } };
+
+    const v1 = startLaunchpadWatch(closed, notifier, 15, 'the v1 factory', { launchesThrough: false, store });
+    await v1.check();
+    v1.stop();
+
+    const current = startLaunchpadWatch(closed, notifier, 15, 'the current factory', { launchesThrough: true, store });
+    await current.check();
+    current.stop();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((a) => a.severity).sort()).toEqual(['critical', 'warning']);
+  });
+
+  it('still announces the recovery, and then stays quiet about it', async () => {
+    const store = makeStore();
+    const sent: any[] = [];
+    const notifier = { send: async (a: any) => { sent.push(a); } };
+    let open = false;
+    const deps = { getLaunchReadiness: async () => ({ launchEnabled: open, whitelisted: false }) };
+
+    const watch = startLaunchpadWatch(deps, notifier, 15, 'the v1 factory', { launchesThrough: false, store });
+    await watch.check();
+    open = true;
+    await watch.check();
+    await watch.check();
+    watch.stop();
+
+    expect(sent.map((a) => a.kind)).toEqual(['LAUNCHPAD_CLOSED', 'LAUNCHPAD_REOPENED']);
+
+    // And a restart after the recovery says nothing at all.
+    const after = startLaunchpadWatch(deps, notifier, 15, 'the v1 factory', { launchesThrough: false, store });
+    await after.check();
+    after.stop();
+    expect(sent).toHaveLength(2);
+  });
+});
