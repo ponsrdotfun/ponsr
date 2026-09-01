@@ -392,3 +392,45 @@ test('every sitemap URL corresponds to a file served at exactly that path', () =
   assert.ok(paths.some((r) => r.endsWith('/')), 'no directory-backed route listed');
   assert.ok(paths.some((r) => !r.endsWith('/') && r !== '/'), 'no file-backed route listed');
 });
+
+/**
+ * AN INTERNAL LINK MUST NAME THE URL THAT IS SERVED, NOT ONE THAT REDIRECTS.
+ *
+ * The sitemap and the canonical tags were corrected earlier; the navigation was
+ * not, so every "Explore" and "Account" click still cost a 301. Half a job is
+ * how a site ends up with three different opinions about its own addresses.
+ *
+ * The same layout rule decides it: a page written as `terms.html` is served at
+ * `/terms`, a directory at `explore/index.html` at `/explore/`. This asserts
+ * against the files on disk rather than against a list, so a new page cannot be
+ * linked wrongly and still pass.
+ */
+test('every internal link resolves to a file without a redirect', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.resolve(__dirname, '..');
+  const pages = walk(root).filter((f) => f.endsWith('.html') && !f.includes(`${path.sep}tests${path.sep}`));
+
+  const offenders = [];
+  for (const page of pages) {
+    const html = fs.readFileSync(page, 'utf8');
+    for (const match of html.matchAll(/href="(\/[^"#?]*)(?:[#?][^"]*)?"/g)) {
+      const href = match[1];
+      if (href.startsWith('//')) continue;
+      // Assets are files with extensions and are served exactly as written.
+      if (path.extname(href)) continue;
+      const asDirectory = path.join(root, href, 'index.html');
+      const asFile = `${path.join(root, href)}.html`;
+      const servedAsDirectory = fs.existsSync(asDirectory);
+      const servedAsFile = fs.existsSync(asFile);
+      if (!servedAsDirectory && !servedAsFile) {
+        offenders.push(`${path.relative(root, page)} -> ${href} (no such page)`);
+      } else if (servedAsDirectory && !href.endsWith('/')) {
+        offenders.push(`${path.relative(root, page)} -> ${href} (redirects to ${href}/)`);
+      } else if (servedAsFile && href.endsWith('/')) {
+        offenders.push(`${path.relative(root, page)} -> ${href} (redirects to ${href.slice(0, -1)})`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `internal links that redirect:\n  ${offenders.join('\n  ')}`);
+});
