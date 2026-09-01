@@ -501,6 +501,17 @@ const statusDepsFor = (session: AcquiredSession | null) => {
       alertsRoute: config.TELEGRAM_BOT_TOKEN ? 'Telegram' : 'console only -- alerts go nowhere a person will see',
       crossCheckHours: config.X_BEARER_TOKEN ? config.MENTION_CROSSCHECK_HOURS : 0,
       publicLaunchEnabled: config.PUBLIC_LAUNCH_ENABLED,
+      /**
+       * Published because a Fly secret's VALUE cannot be read back.
+       *
+       * This one is a price, not a formatting choice: X charges $0.200 for a
+       * post containing a URL against $0.015 without -- thirteen times, for one
+       * link. An operator who sets it and cannot observe it has bought a
+       * thirteenfold cost increase on faith, and this repository has already
+       * been bitten by a boolean setting that silently meant its opposite,
+       * because `z.coerce.boolean()` read "false" as true.
+       */
+      replyIncludeLink: config.REPLY_INCLUDE_LINK,
       // The PUBLIC string stays 'v1'/'v2' -- it is part of what /status has always
       // published -- but it is DERIVED from the selected deployment now rather than read
       // from a setting that could name a version the bot is not running.

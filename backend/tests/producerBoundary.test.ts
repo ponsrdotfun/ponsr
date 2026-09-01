@@ -355,6 +355,7 @@ describe('the real routes publish a closed shape and no raw text', () => {
       throw new Error(SECRET);
     };
     return {
+      replyIncludeLink: false,
       expectedChainId: D.chainId,
       getChainId: boom as never,
       getBlockNumber: boom as never,
@@ -617,6 +618,7 @@ describe('a clock failure at ANY read position fails closed', () => {
       }),
     };
     const makeDeps = (): StatusDeps => ({
+      replyIncludeLink: false,
       expectedChainId: D.chainId,
       getChainId: async () => D.chainId,
       getBlockNumber: async () => 1234,
