@@ -69,6 +69,32 @@ function paintStatus(state, feed) {
     if (message) setText(message, publicGateMessage(enabled));
   }
 
+  /**
+   * THE HOW-TO NOTE IS UPGRADED FROM THE FEED, LIKE THE STRIP ABOVE IT.
+   *
+   * The static build may only ship the pessimistic state, because it has
+   * observed nothing about right now -- a test enforces that. This note shipped
+   * "Paused right now" and nothing ever raised it, so on the day the gate opened
+   * the landing page went on telling visitors not to bother while the bot was
+   * answering. The gate moved and the page did not.
+   */
+  const howto = document.querySelector('[data-howto-gate]');
+  if (howto && feed) {
+    const open = feed.publicGate?.enabled === true;
+    howto.replaceChildren();
+    howto.append(element('strong', '', open ? 'Open now' : 'Paused right now'));
+    if (open) {
+      howto.append(document.createTextNode('Requests are being read. Post the tweet and Ponsr will answer it.'));
+    } else {
+      howto.append(document.createTextNode('New launches are paused, so a request will not be answered yet. Follow '));
+      const link = element('a', '', '@ponsrdotfun');
+      link.href = 'https://x.com/ponsrdotfun';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      howto.append(link, document.createTextNode(' — that is where it is announced when they open.'));
+    }
+  }
+
   const longform = document.querySelector('[data-gate-longform]');
   if (longform && feed) {
     setText(longform, feed.publicGate?.enabled === true

@@ -677,3 +677,37 @@ test('the example request uses the text copy path, not the address one', () => {
   // The address guard stays exactly as strict as it was.
   assert.match(app, /\^0x\[a-fA-F0-9\]\{40\}\$/);
 });
+
+/**
+ * THE GATE MOVED AND THE PAGE DID NOT.
+ *
+ * The static build may only ship the pessimistic state -- it has observed
+ * nothing about right now, and the test above enforces that. The status strip
+ * has always been raised from the feed once one is actually read.
+ *
+ * The how-to note was not. It shipped "Paused right now" and nothing ever
+ * upgraded it, so on the day the gate opened the landing page went on telling
+ * visitors not to bother while the bot was already answering them.
+ *
+ * Both halves are asserted: the built page stays pessimistic, and the client
+ * carries the copy for both states so it can raise it.
+ */
+test('the how-to note is raised from the feed, not frozen at build time', () => {
+  const html = read('website/index.html');
+  const app = read('website/assets/app.mjs');
+
+  // The build ships the cautious state and nothing else.
+  const note = html.slice(html.indexOf('data-howto-gate'), html.indexOf('</section>', html.indexOf('data-howto-gate')));
+  assert.match(note, /Paused right now/);
+  assert.doesNotMatch(note, /Open now/, 'the build is claiming a gate it has not observed');
+
+  // And the client can raise it, from a feed it actually read.
+  const branch = app.slice(app.indexOf('[data-howto-gate]'), app.indexOf('[data-gate-longform]'));
+  assert.ok(branch.length > 0, 'the client never looks at the how-to note');
+  assert.match(branch, /feed\.publicGate\?\.enabled === true/);
+  assert.match(branch, /'Open now'/);
+  assert.match(branch, /'Paused right now'/);
+  // Guarded on having a feed at all: with none, the build-time value stands
+  // rather than being replaced by a guess.
+  assert.match(branch, /howto && feed/);
+});
