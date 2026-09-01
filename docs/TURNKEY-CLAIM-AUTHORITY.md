@@ -57,13 +57,25 @@ creation carrying 1 ETH while every destination-only check reported green.
 
 ### A. Bind the address list — narrowest, needs maintenance
 
+The shape below is copied from the two policies already in force, read with
+`scripts/turnkey-read-policies.ts` on 2026-09-01, not written from memory.
+
 ```
-eth.tx.value == 0 &&
-eth.tx.to in [
-  '0x18d1d206a042260aa86f2af87a8bf7c959f899d5',   // Microduck
-  '0xa45a3615cf951bb0f0c29d4dee9ca9b2a27fa955'    // NOBI
-]
+name       ponsr-bot: claim creator fees
+effect     EFFECT_ALLOW
+condition  eth.tx.value == 0 && (eth.tx.to == '0x18d1d206a042260aa86f2af87a8bf7c959f899d5' || eth.tx.to == '0xa45a3615cf951bb0f0c29d4dee9ca9b2a27fa955')
+consensus  approvers.any(user, user.id == '009b2000-01e2-4984-9326-5bb743bf007a')
 ```
+
+Two details are not stylistic. **The addresses are lowercase**, because both
+existing conditions are — `eth.tx.to == '0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e'`
+is how the factory rule reads, and a checksummed spelling is a different string.
+And the destinations are joined with `||` rather than an `in` list, because `||`
+is the form already proven to be enforced here; an untested spelling that the
+engine cannot parse fails in the direction of refusing everything.
+
+The consensus names the same bot user as both existing rules. That is the user
+the signer authenticates as, so a rule naming anyone else grants nothing.
 
 Those two are the splitters whose `creator()` is the owner's wallet
 `0xcdce6c82…`, read from chain on 2026-09-01. PSTONKS's splitter
@@ -82,8 +94,7 @@ policy refuses.
 ### B. Bind the selector — covers every future launch
 
 ```
-eth.tx.value == 0 &&
-eth.tx.data[0..4] == '0x56c937fc'      // claimAndSplit(address)
+eth.tx.value == 0 && eth.tx.data[0..4] == '0x56c937fc'      // claimAndSplit(address)
 ```
 
 Residual: the treasury can send zero-value calls carrying that selector to any
