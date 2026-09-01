@@ -669,6 +669,30 @@ p { margin: 0; }
 .inline-links { display: flex; flex-wrap: wrap; gap: 0.7rem; }
 .text-link { color: var(--silver-bright); text-decoration-color: var(--line); text-underline-offset: 3px; }
 .text-link:hover { color: var(--emerald-bright); }
+
+/*
+ * The evidence link is the hardest thing on the page to tap, on the page whose
+ * entire purpose is "check this yourself".
+ *
+ * Measured on a 375px viewport: the `tx` links in the curve ledger were 29px
+ * wide by 44px tall -- tall enough, narrow enough to miss. Fourteen of them on
+ * one token page. The width comes from the text, so the fix is padding rather
+ * than a fixed size: the target grows, the type does not move, and a longer
+ * label is unaffected.
+ *
+ * Only inside a ledger row. A `.text-link` in a sentence must stay inline, and
+ * padding a link in running prose would push the line apart.
+ */
+.market-trade .text-link,
+.curve-row .text-link,
+.fee-claim .text-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: .35rem;
+  margin-inline: -.35rem;
+}
 .inspect-grid { display:grid; gap:1.2rem; }
 @media (min-width:900px) { .inspect-grid { grid-template-columns:1.05fr .95fr; align-items:start; } }
 .token-dossier { gap:clamp(1.25rem,2.5vw,2rem); }
