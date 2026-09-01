@@ -21,6 +21,25 @@ factory, the curve, the block, the fee — on a page anyone can check.
 No wallet to connect, no form, nothing to install. A wallet is created for that X identity
 the first time it launches, and it is the same wallet every time after.
 
+## The official Ponsr token
+
+```
+PONSR   0xadaafdea5c310be1bd50d48c07f9450914057eb6   Robinhood Chain · id 4663
+```
+
+**That address is the only one.** Published 2026-09-02, and the same address is printed on
+[ponsr.fun](https://ponsr.fun). Anything else calling itself a Ponsr token is not one, whatever
+it is named and wherever it appears.
+
+Two things about it are worth stating plainly, because both are easy to assume wrongly:
+
+- **It was deployed by the owner directly on pons, not through the Ponsr bot.** So its deployer
+  is not the treasury, and it does **not** appear on the Explore board — that board means
+  "launched through Ponsr", and widening it to include this would cost the board its meaning.
+- **Appearing on Explore is not endorsement.** It never was, and it matters more now: the moment
+  an official token exists is the moment somebody launches something adjacent and hopes a
+  verified row reads as approval.
+
 ## The rule this project is built around
 
 **If a number cannot be read from the chain, the site does not show it.**
