@@ -259,6 +259,35 @@ the fees claimed were accrued by earlier trading, so the LOCKER's 30% cut upstre
 exercised here, and the 66.5%/3.5% figures for trading fees remain arithmetic rather than
 observation.
 
+### The account pages, and one silent rot (2026-09-01)
+
+**The account pages described a product that no longer existed.** Four boxes read
+`Unavailable` above the working collect control; the overview told a connected reader
+`No verified identity is connected`; the nav said `Preview` six times; `/ready` published
+`executionAuthority: NONE_PREVIEW_ONLY` on a site that had just moved value. Each was true
+when written. The lesson is the one this file keeps relearning: **copy is a claim, and a
+claim that used to be true is still a claim.**
+
+Now: three live figures on the fees page from the same payload as the rows beneath them, a
+filled overview from three independent reads, per-module nav labels, and
+`NO_WALLET_AUTHORITY` — which says the half that is still true, that this site holds no key
+and asks for no signature, and drops the half that is not.
+
+`feeTotals` and `claimableBy` in `website/assets/claim.mjs` are pure and mutation-checked.
+Two rules there are load-bearing: **an unreadable cell is excluded and counted, never zero**,
+and **amounts are summed only when they are the same asset** — NVDA and SPCX both carry 18
+decimals, so adding them yields a number that formats perfectly and means nothing.
+`balanceWei` is null when unreadable for the same reason, and is session-scoped so it can
+never become an open RPC proxy.
+
+**And the scheduled snapshot refresh had been failing for three runs, forever.** It swept
+from the deployment's first block to the head every time — 24 million blocks — and refuses
+to write a partial scan. Each half right; together a ratchet, because one unreadable range
+sits behind every future run and the window only grows. It scans forward from `asOfBlock`
+now and MERGES rather than rebuilds: building the list from the window would delete every
+launch older than it, which is the partial-scan failure arriving through the front door.
+485k blocks, seconds, green in CI. `--from-genesis` still does the whole sweep.
+
 ## Immediate next actions
 
 **THE BACKEND IS FROZEN as of 2026-08-28.** The launch path is proven end to end on mainnet
@@ -362,11 +391,11 @@ Still blocked on the owner:
 
 ### Production, as actually deployed (2026-09-01)
 
-`ponsr-backend` on Fly runs **release v51**, image
-`sha256:9ee66f24ed544a20af5540cd1169c95a42c2efd24557bf67dbe989136651b170`. One machine
+`ponsr-backend` on Fly runs **release v53**, image
+`sha256:43f984a57841c6d0a503fcae83c9fd3b0d4489ffe9000ced3c906b81bb2579ee`. One machine
 (`867634bee0e048`, `iad`), volume `vol_r1j1nwjzdx6p7q3r` attached. Rollback target is the
-exact previous digest, `sha256:3489ae266369ddb03b69055048a8b748df9ffda84e11001bdcd888481190374d`
-(v50) — name the digest, never "the previous release".
+exact previous digest, `sha256:41276f9704bfb12c69669b30de46222a3ba6846173ee57e3719f49bf76893428`
+(v52) — name the digest, never "the previous release".
 
 **This section said v47 while production had been through v48, v49 and v50.** Those were
 config releases on one image, and the entry was not updated as they landed. The digest
