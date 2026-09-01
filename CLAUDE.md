@@ -203,9 +203,16 @@ Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key)
 A signed-in creator can press collect on `/account/fees`. Built as an owner brief, which is
 what the freeze requires before backend feature work.
 
-**Nothing can actually be sent yet, and that is the intended state.** The signer holds no
-policy permitting calls to splitter addresses, so every claim returns `policy-refused` and
-the page says so in those words. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
+**The policy exists as of 2026-09-01 and the path is open**, for two splitters only:
+`22f53547-16c6-49af-9b09-1fc86fba18f3`, `eth.tx.value == 0 && (Microduck || NOBI)`. Proven
+by signing, nothing broadcast: both ALLOWED, a funded claim denied, an arbitrary
+destination denied, the factory still ALLOWED. PSTONKS's splitter is **denied**, which is
+what proves the rule binds two destinations rather than being a blanket allow.
+
+**A launch made after that date is NOT covered.** Option A was chosen deliberately, and its
+cost is that each new splitter needs the policy edited or its creator's fees sit
+unclaimable behind a button that reports a refusal. Move to the selector-bound form before
+the public gate opens. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
 write the rule and which to choose; `scripts/turnkey-verify-claim.ts` proves it afterwards by
 signing, never by trusting a config flag. Measured 2026-09-01, nothing broadcast: claim
 **denied**, funded claim **denied**, arbitrary destination **denied**, factory ALLOWED —
@@ -230,8 +237,27 @@ Four things about this path are load-bearing:
   route that demanded one refused every real click as "not yours" — the most misleading refusal
   available, because it names a guard that never fired.
 
-The fee-collection path is still **untested end to end**: no swap, trade or claim has moved
-value. 95/5 remains asserted by the splitter's constants, not by anything having been paid.
+**THE FEE PATH IS PROVEN END TO END ON MAINNET (2026-09-01).** The owner signed in with X
+and pressed collect on the website; both claims landed, status 1, sent by the treasury.
+
+```
+MICRODUCK  0x62f152eb473eee8f9a312985b9eb275bc327f0f35245771033d83f0278fb6331  gas 183333
+NOBI       0x3fdff472be92bf980931e1c1cefcaed7e74a07e42035096f6b967f31d29ea76c  gas 183333
+
+asset   total accrued        creator (owner wallet)   treasury
+NVDA    20524420520164638    19498199494156406        1026221026008232
+SPCX     9443171751664034     8971013164080832         472158587583202
+```
+
+Both divide as **exactly `floor(total x 9500 / 10000)` to the creator and the remainder to
+the treasury, with nothing left behind** — checked by arithmetic against the totals, not by
+reading a percentage off a screen. Every escrow cell now reads 0.
+
+This is the first time value has moved through a splitter. Until today 95/5 was asserted by
+the contract's constants; it is now a measured fact. Note what it still does not establish:
+the fees claimed were accrued by earlier trading, so the LOCKER's 30% cut upstream is not
+exercised here, and the 66.5%/3.5% figures for trading fees remain arithmetic rather than
+observation.
 
 ## Immediate next actions
 
