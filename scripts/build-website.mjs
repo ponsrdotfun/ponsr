@@ -285,8 +285,23 @@ function mascot() {
     `<span class="bot-tilt" data-bot-tilt><span class="bot-avatar" data-bot-avatar><img src="/logo-noeyes.png" alt="The Ponsr robot" width="512" height="507"><span class="bot-eyes" aria-hidden="true"><span class="eye eye-l" data-bot-eye><i></i></span><span class="eye eye-r" data-bot-eye><i></i></span></span></span></span><span class="bot-shadow" aria-hidden="true"></span></div><span class="stage-caption" aria-hidden="true">PONSR · ROBINHOOD CHAIN</span></div>`;
 }
 
+/**
+ * THE SIGIL CARRIES PONSR'S OWN MARK, NEVER A TOKEN'S.
+ *
+ * This strip is Ponsr's identity, so the robot belongs on it -- the slot held a
+ * decorative dot before. It stays `aria-hidden` with an empty `alt` because the
+ * sentence beside it already says everything a screen reader needs; a logo that
+ * announces itself here would only repeat the heading.
+ *
+ * The wording moved from "Contract, artwork, and launch record" to "The token's
+ * contract, artwork and launch record" on the same edit, and that is not
+ * cosmetic. A mark sitting next to a line saying artwork is unpublished invites
+ * exactly one misreading -- that this IS the token's artwork, and therefore that
+ * a token exists. Ponsr has a logo; Ponsr has no token. The sentence now says
+ * which of the two is missing.
+ */
 function officialStage() {
-  return `<aside class="official-identity-strip" data-official-showcase><span class="official-sigil" aria-hidden="true"><i></i></span><div><p class="eyebrow">Official token status</p><strong>No official Ponsr token has been published.</strong><p>Contract, artwork, and launch record remain unpublished. Verified launches in Explore are not automatically official.</p></div><a class="section-action" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer"><span>Registry updates</span><i class="action-icon" aria-hidden="true">↗</i></a></aside>`;
+  return `<aside class="official-identity-strip" data-official-showcase><span class="official-sigil" aria-hidden="true"><img src="/logo-transparent.png" alt="" width="512" height="507" loading="lazy" decoding="async"></span><div><p class="eyebrow">Official token status</p><strong>No official Ponsr token has been published.</strong><p>The token's contract, artwork and launch record remain unpublished. Verified launches in Explore are not automatically official.</p></div><a class="section-action" href="https://x.com/ponsrdotfun" target="_blank" rel="noopener noreferrer"><span>Registry updates</span><i class="action-icon" aria-hidden="true">↗</i></a></aside>`;
 }
 
 function page({ title, description, canonical, body, socialImage = socialImages.home, noindex = false }) {

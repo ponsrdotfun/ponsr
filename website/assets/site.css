@@ -472,7 +472,10 @@ p { margin: 0; }
 .official-identity-strip strong { display:block; color:var(--silver-bright); font-size:1rem; }
 .official-identity-strip p:not(.eyebrow) { margin-top:.22rem; color:var(--steel); font-size:.82rem; }
 .official-sigil { width:46px; height:46px; display:grid; place-items:center; border:1px solid rgba(130,227,179,.32); border-radius:50%; background:radial-gradient(circle,rgba(70,200,140,.18),transparent 68%); }
-.official-sigil i { width:10px; height:10px; border:2px solid var(--emerald-bright); border-radius:50%; box-shadow:0 0 18px rgba(70,200,140,.55); }
+/* The slot held a 10px dot; it holds the Ponsr robot now. `contain` rather than
+   `cover`, for the reason the launch cards already learned the hard way: a crop
+   is an alteration, and a mark is the one image that must never be altered. */
+.official-sigil img { width:30px; height:30px; object-fit:contain; display:block; }
 @keyframes pathwayPulse { 0%,100% { opacity:.42; transform:scale(.8); } 50% { opacity:1; transform:scale(1.2); } }
 @keyframes flowTrace { 0%,12% { transform:translateX(-120%); } 70%,100% { transform:translateX(420%); } }
 @media (max-width:880px) { .product-pathways { grid-template-columns:1fr; } .product-pathways>a { min-height:150px; } .protocol-flow { grid-template-columns:repeat(2,minmax(0,1fr)); } }
