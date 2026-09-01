@@ -433,8 +433,18 @@ $0.015 without one), and the two ceilings `TREASURY_MAX_FEE_WEI` and
 `TREASURY_GAS_RESERVE_WEI`, both 0.002 ETH.
 Fly secret VALUES cannot be read, so their old values are not merely unknown but unknowable;
 what is recorded is what they ARE. **A clean boot is not evidence of a setting's value**:
-`parseAcknowledgement` accepts `false` as cleanly as `true`, so the only proof that
-`REPLY_INCLUDE_LINK` is on is a reply that carries a link — which the NOBI launch produced.
+`parseAcknowledgement` accepts `false` as cleanly as `true`.
+
+**`/status` publishes `spend.replyIncludeLink` as of 2026-09-01**, so the proof no longer has
+to be a reply that happens to carry a link. Read live the moment it shipped: `true`, beside
+`publicLaunchEnabled: false`. That pairing is itself the evidence the two are not wired
+together — they have both been false for weeks, so a copy-paste between them would have
+looked correct in every test.
+
+The reason to publish it is the reason it is worth caring about at all: it is a PRICE. X
+charges $0.200 for a post containing a URL against $0.015 without, and this setting was once
+parsed by `z.coerce.boolean()`, so writing `false` opted INTO the expensive behaviour. A
+guard against one way of getting a value wrong is not evidence of what the value IS.
 
 **`TREASURY_GAS_RESERVE_WEI` is ONE COMBINED budget for the complete two-transaction canary
 run — splitter creation plus token launch — not a per-transaction allowance.** It was passed
