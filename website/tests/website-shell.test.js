@@ -175,8 +175,18 @@ test('premium environment has layered cursor-reactive depth and bounded reduced 
   assert.match(app, /data-cursor-glow/);
   assert.match(app, /pointer:\s*fine/);
   assert.match(app, /\.animate\(/);
-  assert.match(app, /rect\.top<innerHeight&&rect\.bottom>0[^\n]+reveal-immediate/);
-  assert.match(css, /\.ready \.reveal\.reveal-immediate\s*\{[^}]*transition:\s*none/);
+  // Content already in view at load must not appear to arrive from a scroll, so
+  // it is still marked `reveal-immediate` and still has the scroll transition
+  // switched off. This assertion was pinned to the minified one-line form of
+  // that check, which is formatting rather than behaviour.
+  assert.match(app, /rect\.top < innerHeight && rect\.bottom > 0/);
+  assert.match(app, /'shown', 'reveal-immediate'/);
+  assert.match(css, /\.ready \.reveal\.reveal-immediate \{[\s\S]{0,120}?transition:none/);
+  // But not switched off ENTIRELY: that left the one part of every page a
+  // visitor sees first as the only part that never moved. It is staged on load
+  // instead, and the stagger is capped so the last element is not late.
+  assert.match(css, /animation:revealEnter/);
+  assert.match(css, /\.ready \.reveal\.reveal-step-6 \{ animation-delay:\.29s; \}/);
   assert.doesNotMatch(app, /\.style\.|setAttribute\(['"]style/);
   assert.match(css, /\.ambient\s*\{[^}]*position:\s*fixed[^}]*height:\s*auto/s);
   assert.match(css, /animation-timeline:\s*scroll\(root block\)/);
@@ -282,6 +292,20 @@ test('account routes are complete signed-out product surfaces with no invented i
     // hardcoded token made this fail the moment a second real launch appeared,
     // which is a test aging into a false alarm rather than a defect found.
     let accountWithoutVerifiedPublicLaunch = account;
+    // Ponsr's OWN published contracts, named one by one rather than by pattern.
+    // The security route shows them so a stranger can check which factory the
+    // bot launches through -- the opposite of invented data, and the most
+    // verifiable thing on the site. Listing them individually keeps the guard
+    // sharp: any OTHER address on an account page still fails.
+    for (const own of [
+      '0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e',
+      '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e',
+      '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa',
+    ]) {
+      for (const form of new Set([own, own.toLowerCase()])) {
+        accountWithoutVerifiedPublicLaunch = accountWithoutVerifiedPublicLaunch.replaceAll(form, 'PONSR_PUBLISHED_CONTRACT');
+      }
+    }
     for (const launch of JSON.parse(read('website/data/launches.json')).launches) {
       // Both forms: the snapshot may carry a checksummed address while the
       // build writes hrefs in lower case.

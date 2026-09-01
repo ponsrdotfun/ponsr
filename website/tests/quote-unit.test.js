@@ -153,3 +153,49 @@ test('the splitter is decoded only from THIS deployment\u2019s calldata', async 
   // And a committed splitter is never overwritten, nor quietly contradicted.
   assert.match(script, /committed splitter \$\{prior\.splitter\} is not what the calldata reports/);
 });
+
+/**
+ * A FEE FIGURE IS NEVER INVENTED BY A FAILURE.
+ *
+ * The account pages carried four boxes all reading "Unavailable" -- accrued,
+ * claimable, queued, paid -- on a page 972px tall carrying 115 words. It read as
+ * broken rather than as not-yet, and it was neither: the numbers exist and are
+ * public. Measured the day this was written, 0.02052 NVDA was waiting for
+ * Microduck's splitter and 0.00944 SPCX for NOBI's.
+ *
+ * The distinction the endpoint must never lose is between "nothing accrued" and
+ * "we could not ask". One of those tells a creator there is no money waiting.
+ */
+test('the escrow endpoint reports an unreadable balance as unavailable, never as zero', async () => {
+  const source = read('netlify/functions/creator-fees.mjs');
+  // The cell starts unavailable and is only promoted by a successful read, so a
+  // failure cannot leave a zero behind.
+  assert.match(source, /state: 'unavailable', problem: 'The escrow balance could not be read\.'/);
+  assert.match(source, /cell\.state = 'observed'/);
+  assert.doesNotMatch(source, /accruedWei: '0'/);
+
+  // Every balance is asked for at once: sequential reads divide one deadline
+  // into slices, and a single slow call starves the ones behind it.
+  assert.match(source, /await Promise\.all\(jobs\)/);
+
+  // The selector is the computed one. A wrong selector does not fail loudly --
+  // it calls something else and returns a number that looks like money.
+  const { keccak256, toUtf8Bytes } = await import('ethers');
+  const expected = keccak256(toUtf8Bytes('balanceOfToken(address,address)')).slice(0, 10);
+  assert.ok(source.includes(expected), `the escrow selector is not ${expected}`);
+});
+
+test('the escrow record does not claim to be anybody\u2019s', () => {
+  const source = read('netlify/functions/creator-fees.mjs');
+  // This endpoint knows nothing about who is asking, and says so in the payload
+  // itself -- a consumer that renders it without reading the docs must still
+  // render it honestly.
+  assert.match(source, /scope: 'public-record'/);
+  assert.match(source, /not account-scoped/i);
+
+  const build = read('scripts/build-website.mjs');
+  assert.match(build, /Public record &middot; no account required/);
+  // The creator share is quoted from the splitter's own constants, not from the
+  // headline share of trading fees, which is measured further upstream.
+  assert.match(source, /CREATOR_BPS = 9500n/);
+});

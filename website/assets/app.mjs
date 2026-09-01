@@ -25,6 +25,7 @@
  * to write the comment differently rather than to loosen the pattern.
  */
 import { reduceSourceState, publicGateMessage } from './data-state.mjs';
+import { claimableBy } from './claim.mjs';
 import { byEventTimeDesc, normaliseLaunch } from './feed-model.mjs';
 import { element, setText } from './render.mjs';
 // The build renders these same facts. Sharing the formatters is what stops the
@@ -85,7 +86,14 @@ function fact(list, label, value) {
 }
 
 function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(String(value));if(url.protocol!=='https:'||url.hostname!=='pbs.twimg.com'||url.username||url.password||url.port||!/^\/media\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname))return null;for(const key of url.searchParams.keys())if(!['format','name'].includes(key))return null;return url.toString();}catch{return null;}}
-function tokenArtNode(token){const logo=trustedLogoUrl(token.logo),art=element('div',`token-art${logo?' has-image':' unavailable'}`);if(logo){const image=document.createElement('img');image.src=logo;image.alt=`${token.name} token image`;image.loading='lazy';image.decoding='async';art.append(image);return art;}art.setAttribute('role','img');art.setAttribute('aria-label',`Token image unavailable for ${token.symbol}`);const fingerprint=element('span','record-fingerprint');fingerprint.append(element('i'),element('i'),element('i'));art.append(element('span','art-grid'),fingerprint,element('small','','Token image unavailable'));return art;}
+function tokenArtNode(token){const logo=trustedLogoUrl(token.logo),art=element('div',`token-art${logo?' has-image':' unavailable'}`);if(logo){const image=document.createElement('img');image.src=logo;image.alt=`${token.name} token image`;image.loading='lazy';image.decoding='async';art.append(image);return art;}art.setAttribute('role','img');art.setAttribute('aria-label',`Token image unavailable for ${token.symbol}`);// The ticker is the art when there is no logo: identity rather than absence.
+// See the build renderer for why. The accessible label above is unchanged.
+const symbol=element('span','art-symbol',String(token.symbol||'?').toUpperCase());
+// A data attribute, never an inline style: this site keeps a strict CSP and a
+// test guards it. CSS cannot measure text, so the length is published and the
+// stylesheet carries one static rule per length.
+symbol.dataset.artLen=String(Math.min(12,String(token.symbol||'?').length));
+art.append(element('span','art-grid'),symbol);return art;}
 
 function tokenCard(token) {
   const card=element('article','token-card');const art=tokenArtNode(token);
@@ -389,10 +397,26 @@ function revealOnScroll() {
       observer.unobserve(entry.target);
     }
   }, { rootMargin: '0px 0px 12% 0px', threshold: 0.04 });
+  let immediate = 0;
   for (const node of targets) {
     const rect=node.getBoundingClientRect();
-    if(rect.top<innerHeight&&rect.bottom>0)node.classList.add('shown','reveal-immediate');
-    else observer.observe(node);
+    if (rect.top < innerHeight && rect.bottom > 0) {
+      /**
+       * Above the fold at load: staged, not skipped.
+       *
+       * This used to add `reveal-immediate`, which sets `transition:none` --
+       * so the one part of every page a visitor sees first was the one part
+       * with its motion deliberately switched off. Everything simply existed,
+       * and only content below the fold ever moved.
+       *
+       * A step class rather than an inline delay, because this site's CSP
+       * forbids inline styles and a test enforces it. Capped at six: a stagger
+       * that keeps growing makes the last element feel late rather than
+       * considered.
+       */
+      immediate += 1;
+      node.classList.add('shown', 'reveal-immediate', `reveal-step-${Math.min(immediate, 6)}`);
+    } else observer.observe(node);
   }
   // Content must not remain invisible when a browser restores scroll position,
   // suppresses intersection callbacks, or captures a full page without scrolling.
@@ -406,10 +430,30 @@ function revealOnScroll() {
 /* Boot                                                                        */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The signed-in session, read ONCE per page.
+ *
+ * Two independent painters need it, and each asking for its own copy meant two
+ * round trips on every load of the fees page for one answer that cannot differ
+ * between them. The promise is shared, not the value, so a caller that arrives
+ * while the first read is still in flight waits on it instead of starting a
+ * second.
+ */
+let sessionRead = null;
+const readSession = () => {
+  if (!sessionRead) {
+    sessionRead = readAccountJson('/api/account/session').then(
+      (r) => r.body,
+      () => ({ state: 'unauthenticated' })
+    );
+  }
+  return sessionRead;
+};
+
 const accountCookie=(name)=>document.cookie.split(';').map((v)=>v.trim()).find((v)=>v.startsWith(`${name}=`))?.slice(name.length+1)||'';
 async function readAccountJson(path,options={}){const response=await fetch(path,{credentials:'same-origin',headers:{Accept:'application/json',...(options.headers||{})},...options});const body=await response.json().catch(()=>({state:'error'}));return{ok:response.ok,body};}
-function paintAccountSession(session){const root=document.querySelector('.account-shell');if(!root)return;const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]'),label=root.querySelector('[data-account-session-label]'),title=root.querySelector('[data-account-session-title]'),detail=root.querySelector('[data-account-session-detail]'),mode=root.querySelector('[data-account-mode]');if(session?.state==='authenticated'){root.dataset.authState='authenticated';root.dataset.identityState='verified';root.dataset.privateDataState='authenticated';root.dataset.executionAuthority='NONE_PREVIEW_ONLY';setText(label,`Verified X identity · @${session.identity.handle}`);setText(title,'Existing wallet continuity verified');setText(detail,`${session.wallet.address} · read-only account access · signing, send, swap, and claims remain disabled.`);setText(mode,'Phase B · Authenticated read-only');setText(root.querySelector('.account-sidebar-state strong'),'Authenticated');const badge=root.querySelector('.state-badge');if(badge&&!badge.classList.contains('status-readonly'))setText(badge,'Authenticated · read-only');if(signIn)signIn.hidden=true;if(logout)logout.hidden=false;const wallet=root.querySelector('.wallet-address-shell strong');if(wallet)setText(wallet,session.wallet.address);for(const stat of root.querySelectorAll('.account-stat')){const label=stat.querySelector('p')?.textContent;if(label==='Embedded wallet')setText(stat.querySelector('strong'),shortAddress(session.wallet.address));}for(const item of root.querySelectorAll('.security-list article')){const label=item.querySelector('strong')?.textContent;if(label==='Identity binding')setText(item.querySelector('span'),'Verified');if(label==='Wallet continuity')setText(item.querySelector('span'),'Verified');if(label==='Session controls')setText(item.querySelector('span'),'Active');}return;}root.dataset.authState='signed-out';root.dataset.identityState='unavailable';root.dataset.privateDataState='locked';if(logout)logout.hidden=true;}
-async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}let session={state:'unauthenticated'};try{session=(await readAccountJson('/api/account/session')).body;}catch{}paintAccountSession(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
+function paintAccountSession(session){const root=document.querySelector('.account-shell');if(!root)return;const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]'),label=root.querySelector('[data-account-session-label]'),title=root.querySelector('[data-account-session-title]'),detail=root.querySelector('[data-account-session-detail]'),mode=root.querySelector('[data-account-mode]');if(session?.state==='authenticated'){root.dataset.authState='authenticated';root.dataset.identityState='verified';root.dataset.privateDataState='authenticated';root.dataset.executionAuthority='NONE_PREVIEW_ONLY';setText(label,`Verified X identity · @${session.identity.handle}`);setText(title,'Existing wallet continuity verified');setText(detail,`${session.wallet.address} · read-only account access · signing, send and swap remain disabled. Collecting needs no signature: the split pays this wallet whoever sends it.`);setText(mode,'Phase B · Authenticated read-only');setText(root.querySelector('.account-sidebar-state strong'),'Authenticated');const badge=root.querySelector('.state-badge');if(badge&&!badge.classList.contains('status-readonly'))setText(badge,'Authenticated · read-only');if(signIn)signIn.hidden=true;if(logout)logout.hidden=false;const wallet=root.querySelector('.wallet-address-shell strong');if(wallet)setText(wallet,session.wallet.address);for(const stat of root.querySelectorAll('.account-stat')){const label=stat.querySelector('p')?.textContent;if(label==='Embedded wallet')setText(stat.querySelector('strong'),shortAddress(session.wallet.address));}for(const item of root.querySelectorAll('.security-list article')){const label=item.querySelector('strong')?.textContent;if(label==='Identity binding')setText(item.querySelector('span'),'Verified');if(label==='Wallet continuity')setText(item.querySelector('span'),'Verified');if(label==='Session controls')setText(item.querySelector('span'),'Active');}return;}root.dataset.authState='signed-out';root.dataset.identityState='unavailable';root.dataset.privateDataState='locked';if(logout)logout.hidden=true;}
+async function wireAccount(){const root=document.querySelector('.account-shell');if(!root)return;let ready={state:'unavailable'};try{ready=(await readAccountJson('/api/ready')).body;}catch{}const session=await readSession();paintAccountSession(session);const signIn=root.querySelector('[data-account-signin]'),logout=root.querySelector('[data-account-logout]');if(session.state==='authenticated'){const host=root.querySelector('[data-account-launches]');if(host)try{const result=await readAccountJson('/api/account/launches');if(!result.ok||!Array.isArray(result.body.launches)){setText(host,'Launch records are temporarily unavailable.');}else{const nodes=result.body.launches.map((launch)=>{const article=element('article','account-launch-record');article.append(element('strong','',`${launch.tokenName} · ${launch.tokenSymbol}`),element('p','',`${launch.status} · ${eventTime(launch.createdAt)}`));if(/^0x[a-fA-F0-9]{40}$/.test(String(launch.tokenAddress||''))){const link=element('a','text-link','Open token →');link.href=`/token/${String(launch.tokenAddress).toLowerCase()}`;article.append(link);}return article;});host.replaceChildren(...(nodes.length?nodes:[element('p','','No launch records are bound to this verified identity.') ]));}}catch{setText(host,'Launch records are temporarily unavailable.');}}if(session.state!=='authenticated'&&ready.state==='ready'&&ready.siteOrigin===location.origin&&signIn){signIn.disabled=false;signIn.removeAttribute('aria-disabled');signIn.classList.remove('btn-disabled');signIn.textContent='Sign in with X';signIn.addEventListener('click',async()=>{signIn.disabled=true;const result=await readAccountJson('/api/auth/x/start',{method:'POST'});if(result.ok&&result.body.authorizationUrl)location.assign(result.body.authorizationUrl);else{signIn.disabled=false;setText(root.querySelector('[data-account-session-detail]'),'Sign-in is temporarily unavailable. No wallet or private account state was changed.');}});}logout?.addEventListener('click',async()=>{const csrf=decodeURIComponent(accountCookie('__Host-ponsr_csrf'));const result=await readAccountJson('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});if(result.ok)location.assign('/account/');else setText(root.querySelector('[data-account-session-detail]'),'Sign-out failed. Your authenticated session remains active; retry before leaving this device.');});}
 
 async function readFeed() {
   // The function is authoritative; the committed snapshot is the fallback. A
@@ -453,6 +497,7 @@ async function boot() {
   wireActivityTabs();
   loadMarket();
   void wireAccount();
+  void wireCreatorFees();
 
   const { feed, error } = await readFeed();
   const state = reduceSourceState({ feed, error });
@@ -463,6 +508,222 @@ async function boot() {
   paintTokenPage(feed);
   paintDynamicTokenPage(feed, state);
   paintAccountSimulator(feed,state);
+  paintAccountPublicLaunches(feed);
+  paintPublicGate(feed);
 }
 
 boot();
+
+/**
+ * The escrow's own record, painted from chain.
+ *
+ * The fees page carried four boxes all reading "Unavailable" and read as broken
+ * rather than as not-yet. What is genuinely account-scoped still does; this is
+ * the part that was never private, and it is not shown as belonging to anybody.
+ *
+ * A row whose balance could not be read says so. It is never drawn as zero:
+ * "nothing accrued" and "we could not ask" are different answers, and one of
+ * them tells a creator there is no money waiting.
+ */
+function paintCreatorFees(payload, session) {
+  const host = document.querySelector('[data-fee-escrow-rows]');
+  if (!host) return;
+  const launches = Array.isArray(payload?.launches) ? payload.launches : [];
+  if (!launches.length) {
+    host.replaceChildren(element('p', 'note-inline', 'No verified launch has a fee splitter to read.'));
+    return;
+  }
+
+  const rows = launches.map((launch) => {
+    const row = element('article', 'fee-escrow-row');
+    const head = element('div', 'fee-escrow-head');
+    const name = element('div');
+    name.append(element('strong', '', launch.symbol || 'UNKNOWN'), element('small', '', launch.name || ''));
+    head.append(name);
+    if (/^0x[a-fA-F0-9]{40}$/.test(String(launch.token || ''))) {
+      const link = element('a', 'text-link', 'Open token →');
+      link.href = `/token/${String(launch.token).toLowerCase()}`;
+      head.append(link);
+    }
+    row.append(head);
+
+    const assets = Array.isArray(launch.assets) ? launch.assets : [];
+    if (!assets.length || launch.state === 'unavailable') {
+      row.append(element('p', 'note-inline', launch.problem || 'No escrow balance can be read for this launch.'));
+      return row;
+    }
+
+
+    const grid = element('div', 'fee-escrow-assets');
+    for (const asset of assets) {
+      const cell = element('article', `fee-asset ${asset.state === 'observed' ? '' : 'unavailable'}`.trim());
+      cell.append(element('span', '', `${asset.role} · ${asset.label ?? ''}`.trim()));
+      if (asset.state === 'observed') {
+        cell.append(
+          element('strong', '', amountFromWei(asset.accruedWei, 6, String(asset.label || 'units'))),
+          element('small', '', `creator ${amountFromWei(asset.creatorWei, 6, String(asset.label || 'units'))}`)
+        );
+      } else {
+        cell.append(element('strong', '', 'Unavailable'), element('small', '', asset.problem || 'The escrow balance could not be read.'));
+      }
+      if (claimableBy(launch, asset, session)) cell.append(claimControl(launch, asset));
+      grid.append(cell);
+    }
+    row.append(grid);
+    return row;
+  });
+
+  host.replaceChildren(...rows);
+}
+
+/**
+ * One claim button, and the honest reporting of what happens next.
+ *
+ * Every outcome the server can return is named. A policy refusal in particular
+ * is NOT dressed as a generic failure: until a policy permits calls to splitter
+ * addresses every claim is refused, and telling the reader that plainly is the
+ * difference between "this is not switched on yet" and "this is broken".
+ */
+function claimControl(launch, asset) {
+  const wrap = element('div', 'fee-claim');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-ghost fee-claim-button';
+  button.textContent = 'Collect';
+  const note = element('small', 'fee-claim-note', '');
+  wrap.append(button, note);
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    setText(note, 'Sending…');
+    let outcome = { state: 'unavailable' };
+    try {
+      const response = await fetch('/api/account/claim', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'content-type': 'application/json',
+          'X-CSRF-Token': decodeURIComponent(accountCookie('__Host-ponsr_csrf')),
+        },
+        body: JSON.stringify({ token: launch.token, erc20: asset.erc20 }),
+      });
+      outcome = await response.json();
+    } catch {
+      outcome = { state: 'unavailable', detail: 'network' };
+    }
+
+    const said = {
+      sent: 'Sent. The split pays your wallet directly.',
+      'policy-refused': 'The signing policy does not permit this yet. Nothing was sent and nothing was spent.',
+      'nothing-to-claim': 'Nothing has accrued for this asset yet.',
+      'in-flight': 'A collection for this asset is already on its way.',
+      'not-yours': 'This launch does not pay the signed-in wallet.',
+      'wallet-mismatch': 'The splitter on chain pays a different address than this session.',
+      unauthenticated: 'The session ended. Sign in again.',
+    }[outcome.state] ?? 'Temporarily unavailable. Nothing was sent.';
+
+    setText(note, said);
+    wrap.dataset.claim = outcome.state;
+    if (outcome.state === 'sent' && /^0x[a-fA-F0-9]{64}$/.test(String(outcome.hash || ''))) {
+      const link = element('a', 'text-link', 'tx ↗');
+      link.href = `https://robinhoodchain.blockscout.com/tx/${outcome.hash}`;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      wrap.append(link);
+    }
+    // Re-enabling a control whose transaction is already on its way invites a
+    // second one that spends gas to be refused.
+    if (outcome.state !== 'sent') button.disabled = false;
+  });
+
+  return wrap;
+}
+
+async function wireCreatorFees() {
+  const panel = document.querySelector('[data-account-fee-escrow]');
+  if (!panel) return;
+  const host = panel.querySelector('[data-fee-escrow-rows]');
+  try {
+    const response = await fetch('/.netlify/functions/creator-fees', {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // An unreadable session simply means no controls, never a wrong one.
+    paintCreatorFees(await response.json(), await readSession());
+  } catch {
+    // The panel says why rather than emptying itself, and never falls back to
+    // zero -- a figure a reader could act on must not be invented by a failure.
+    if (host) host.replaceChildren(element('p', 'note-inline', 'The escrow record is temporarily unavailable. No balance is shown rather than a wrong one.'));
+  }
+}
+
+/**
+ * The public launch record, on the account route that has no sign-in yet.
+ *
+ * Not a filtered view and it does not pretend to be: someone who launched a
+ * token can confirm it is recorded, with the same block and event time anyone
+ * else would read, before an account exists to claim it with.
+ */
+function paintAccountPublicLaunches(feed) {
+  const host = document.querySelector('[data-public-launch-rows]');
+  if (!host) return;
+  const launches = Array.isArray(feed?.launches) ? feed.launches.slice() : [];
+  if (!launches.length) {
+    host.replaceChildren(element('p', 'note-inline', 'The launch feed is unavailable, so no record is shown rather than an empty one.'));
+    return;
+  }
+  // Newest first: the record a reader came to check is usually the last one made.
+  launches.sort((a, b) => Number(b.blockNumber || 0) - Number(a.blockNumber || 0));
+
+  host.replaceChildren(
+    ...launches.map((launch) => {
+      const row = element('a', 'public-launch-row');
+      row.href = `/token/${String(launch.token).toLowerCase()}`;
+      const id = element('div', 'public-launch-id');
+      id.append(element('strong', '', launch.symbol || 'UNKNOWN'), element('small', '', launch.name || ''));
+      const pair = element('div', 'public-launch-cell');
+      pair.append(element('span', '', 'Paired with'), element('strong', '', launch.pairLabel || '—'));
+      const block = element('div', 'public-launch-cell');
+      block.append(element('span', '', 'Block'), element('strong', '', whole(launch.blockNumber)));
+      const when = element('div', 'public-launch-cell');
+      when.append(element('span', '', 'Event time'), element('strong', '', eventTime(launch.blockTimestamp)));
+      row.append(id, pair, block, when, element('i', 'public-launch-go', '→'));
+      return row;
+    })
+  );
+}
+
+/**
+ * Whether anyone can currently trigger a launch by mentioning the bot.
+ *
+ * The most consequential security fact a visitor can check, and the one that
+ * changes. Painted from the feed's own `publicGate`, which carries where it was
+ * read from and whether that read was fresh.
+ *
+ * A gate whose state could not be read is NOT drawn as closed. "Closed" is
+ * reassuring and would be a guess; an unread gate says it is unread.
+ */
+function paintPublicGate(feed) {
+  const host = document.querySelector('[data-public-gate]');
+  if (!host) return;
+  const gate = feed?.publicGate;
+  const value = host.querySelector('strong');
+  const note = host.querySelector('small');
+  if (!value || !note) return;
+
+  if (!gate || typeof gate.enabled !== 'boolean') {
+    host.dataset.gate = 'unknown';
+    setText(value, 'Unknown');
+    setText(note, 'The gate state could not be read, so none is shown rather than a reassuring guess.');
+    return;
+  }
+  host.dataset.gate = gate.enabled ? 'open' : 'closed';
+  setText(value, gate.enabled ? 'Open' : 'Closed');
+  setText(
+    note,
+    gate.enabled
+      ? `Anyone mentioning the bot can trigger a launch, paid from the treasury. Checked ${eventTime(gate.checkedAt)}.`
+      : `Mentions stop before parsing, wallet creation, signing or broadcast. Checked ${eventTime(gate.checkedAt)}.`
+  );
+}
