@@ -119,9 +119,9 @@ test('homepage replaces the oversized official campaign with compact identity an
 test('homepage routes people directly to Explore, dashboard, and verification with premium action hierarchy', () => {
   const html = read('website/index.html');
   const css = read('website/assets/site.css');
-  assert.match(html, /class="btn btn-primary home-action" href="\/explore"[^>]*data-home-action="explore"/);
+  assert.match(html, /class="btn btn-primary home-action" href="\/explore\/"[^>]*data-home-action="explore"/);
   assert.match(html, />\s*Explore launches\s*</);
-  assert.match(html, /class="btn btn-secondary home-action" href="\/account"[^>]*data-home-action="dashboard"/);
+  assert.match(html, /class="btn btn-secondary home-action" href="\/account\/"[^>]*data-home-action="dashboard"/);
   assert.match(html, />\s*Open dashboard\s*</);
   assert.match(html, /href="#verification-policy"[^>]*data-home-action="verification"/);
   assert.match(html, /Browse verified launches/);
@@ -264,7 +264,7 @@ test('account routes share a premium command-center shell with route-specific wo
     assert.match(html, /data-account-route=/);
     assert.match(html, /class="account-route-head"/);
     assert.match(html, /class="custody-boundary"/);
-    assert.match(html, /href="\/account" aria-current="page">Account<\/a>/);
+    assert.match(html, /href="\/account\/" aria-current="page">Account<\/a>/);
   }
   assert.match(css, /\.account-command-shell\s*\{[^}]*grid-template-columns:\s*250px\s+minmax\(0,1fr\)/s);
   assert.match(css, /\.account-sidebar/);
@@ -330,7 +330,7 @@ test('account architecture exposes the five agreed routes and separates financia
   const overview = read('website/account/index.html');
   const fees = read('website/account/fees/index.html');
   const wallet = read('website/account/wallet/index.html');
-  for (const href of ['/account', '/account/launches', '/account/fees', '/account/wallet', '/account/security']) {
+  for (const href of ['/account/', '/account/launches/', '/account/fees/', '/account/wallet/', '/account/security/']) {
     assert.ok(overview.includes(`href="${href}"`), `account navigation is missing ${href}`);
   }
   assert.match(fees, /Accrued/i);
@@ -553,4 +553,40 @@ test('V1 history is absent from every public surface and retained in the docs', 
   const doc = read('docs/v1-historical-launches.md');
   assert.match(doc, new RegExp(V1_FACTORY, 'i'));
   assert.match(doc, /public|website|exclu/i);
+});
+
+/**
+ * THE ACCOUNT BANNER HAS THREE STATES, AND ONE OF THEM HAD NO WORDS.
+ *
+ * The built HTML carries the "backend not ready" copy. `paintAccountSession`
+ * carries the signed-in copy. Between them sits "ready, signed out" -- and it
+ * rendered the not-ready copy with a working button beside it:
+ *
+ *     "Account connection unavailable until the authenticated backend reports ready"
+ *     [ Sign in with X ]                        <- enabled, works
+ *     "LIVE — X sign-in, resolving your existing wallet"   <- same screen
+ *
+ * The branch enabled the button and set its label, and touched none of the three
+ * copy elements. This asserts it writes all three, because writing one or two is
+ * the same defect in a quieter form.
+ */
+test('the ready-but-signed-out banner has copy of its own', () => {
+  const app = read('website/assets/app.mjs');
+  const branch = app.slice(
+    app.indexOf("signIn.textContent='Sign in with X'"),
+    app.indexOf('logout?.addEventListener')
+  );
+  assert.ok(branch.length > 0, 'the sign-in branch was not found');
+
+  for (const selector of ['session-label', 'session-title', 'session-detail']) {
+    assert.ok(
+      branch.includes(`[data-account-${selector}]`),
+      `the ready-but-signed-out branch never rewrites [data-account-${selector}]`
+    );
+  }
+
+  // And the copy must not still be the locked wording, which is what made the
+  // page contradict itself.
+  assert.doesNotMatch(branch, /Private account data is locked/);
+  assert.doesNotMatch(branch, /Account connection unavailable/);
 });

@@ -153,13 +153,24 @@ const facts = (rows) => `<dl class="facts">${rows
   .join('')}</dl>`;
 
 function nav(current) {
+  /**
+   * Current means "this page, or a page under it", compared on normalised paths.
+   *
+   * The rule used to be a string match against '/account'. When the links were
+   * corrected to name the URL that is actually served -- `/account/`, because
+   * the page is a directory with an index -- that comparison stopped matching
+   * and every account page silently lost its nav highlight. A trailing slash is
+   * a serving detail; it must not be able to switch behaviour off.
+   */
+  const withoutSlash = (path) => (path.length > 1 ? path.replace(/\/+$/, '') : path);
   const link = ([label, href]) => {
-    const active = href === current || (href === '/account' && current.startsWith('/account/')) ? ' aria-current="page"' : '';
+    const here = withoutSlash(current), target = withoutSlash(href);
+    const active = here === target || (target !== '/' && here.startsWith(`${target}/`)) ? ' aria-current="page"' : '';
     return `<a href="${href}"${active}>${esc(label)}</a>`;
   };
   return `<nav class="nav"><div class="nav-inner">` +
     `<a class="brand" href="/"><img src="/logo-transparent.png" alt="" width="32" height="32"><span>PONSR</span></a>` +
-    `<div class="nav-links">${[['Home', '/'], ['Explore', '/explore'], ['Account', '/account']].map(link).join('')}</div>` +
+    `<div class="nav-links">${[['Home', '/'], ['Explore', '/explore/'], ['Account', '/account/']].map(link).join('')}</div>` +
     `</div></nav>`;
 }
 
@@ -243,8 +254,8 @@ function home() {
         `<p class="lede">Ponsr launches tokens from a tag on X and writes down what actually happened — the factory, the curve, the block, the fee. ` +
           `If a number cannot be read from the chain, this site does not show it.</p>` +
         `<div class="hero-cta home-actions">` +
-          `<a class="btn btn-primary home-action" href="/explore" data-home-action="explore"><span>Explore launches</span><i class="action-icon" aria-hidden="true">→</i></a>` +
-          `<a class="btn btn-secondary home-action" href="/account" data-home-action="dashboard"><span>Open dashboard</span><i class="action-icon" aria-hidden="true">→</i></a>` +
+          `<a class="btn btn-primary home-action" href="/explore/" data-home-action="explore"><span>Explore launches</span><i class="action-icon" aria-hidden="true">→</i></a>` +
+          `<a class="btn btn-secondary home-action" href="/account/" data-home-action="dashboard"><span>Open dashboard</span><i class="action-icon" aria-hidden="true">→</i></a>` +
           `<a class="home-tertiary" href="#verification-policy" data-home-action="verification"><span>How Ponsr verifies records</span><i class="action-icon" aria-hidden="true">↓</i></a>` +
         `</div>` +
       `</div>` +
@@ -255,9 +266,9 @@ function home() {
 
     `<section class="section reveal home-product-section"><div class="section-head product-head"><div><p class="eyebrow">Built as a product—not a promise</p><h2>Three surfaces. One verifiable record.</h2><p class="lede">Discover launches, inspect exact token mechanics, or enter the account command center. Every surface keeps public facts separate from unavailable private state.</p></div></div>` +
     `<div class="product-pathways">` +
-      `<a href="/explore"><span class="pathway-index">01</span><div><p class="eyebrow">Discovery</p><h3>Explore launchpad</h3><p>Sort verified Protocol V2 launches by canonical activity and open exact token records.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
-      `<a href="/account"><span class="pathway-index">02</span><div><p class="eyebrow">Private workspace</p><h3>Account command center</h3><p>Launches, creator fees, wallet continuity, and security—only after verified identity exists.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
-      `<a href="/explore"><span class="pathway-index">03</span><div><p class="eyebrow">Market context</p><h3>Inspect token workstations</h3><p>Chart, curve ledger, holders, transfers, provenance, and read-only wallet analysis.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+      `<a href="/explore/"><span class="pathway-index">01</span><div><p class="eyebrow">Discovery</p><h3>Explore launchpad</h3><p>Sort verified Protocol V2 launches by canonical activity and open exact token records.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+      `<a href="/account/"><span class="pathway-index">02</span><div><p class="eyebrow">Private workspace</p><h3>Account command center</h3><p>Launches, creator fees, wallet continuity, and security—only after verified identity exists.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
+      `<a href="/explore/"><span class="pathway-index">03</span><div><p class="eyebrow">Market context</p><h3>Inspect token workstations</h3><p>Chart, curve ledger, holders, transfers, provenance, and read-only wallet analysis.</p></div><i class="action-icon" aria-hidden="true">→</i></a>` +
     `</div></section>` +
     `<section class="section reveal protocol-section"><div class="section-head"><p class="eyebrow">How a record becomes public</p><h2>Signal to chain, without the mythology.</h2></div><div class="protocol-flow"><span class="flow-trace" aria-hidden="true"></span>` +
       `<article><b>01</b><span>X signal</span><small>A recognized launch request begins the process.</small></article>` +
@@ -265,8 +276,8 @@ function home() {
       `<article><b>03</b><span>Bonding curve</span><small>Native-pair reserves and canonical events define lifecycle.</small></article>` +
       `<article><b>04</b><span>Public record</span><small>Block, curve, deployer, activity, and source state become inspectable.</small></article>` +
     `</div></section>` +
-    `<section class="section reveal compact-official-section" id="latest-launches"><div class="compact-official-head"><p class="eyebrow">Official Ponsr identity</p><a class="text-link" href="/explore">Browse verified launches →</a></div>` +
-      (officialLaunches.length ? `<aside class="official-identity-strip published" data-official-showcase><span class="official-sigil" aria-hidden="true"><i></i></span><div><p class="eyebrow">Official token status</p><strong>${esc(officialLaunches[0].name)} · ${esc(officialLaunches[0].symbol)}</strong><p>Explicitly marked official in the verified Ponsr feed.</p></div><a class="section-action" href="/token/${esc(officialLaunches[0].token.toLowerCase())}"><span>Inspect token</span><i class="action-icon" aria-hidden="true">→</i></a></aside>` : officialStage()) +
+    `<section class="section reveal compact-official-section" id="latest-launches"><div class="compact-official-head"><p class="eyebrow">Official Ponsr identity</p><a class="text-link" href="/explore/">Browse verified launches →</a></div>` +
+      (officialLaunches.length ? `<aside class="official-identity-strip published" data-official-showcase><span class="official-sigil" aria-hidden="true"><i></i></span><div><p class="eyebrow">Official token status</p><strong>${esc(officialLaunches[0].name)} · ${esc(officialLaunches[0].symbol)}</strong><p>Explicitly marked official in the verified Ponsr feed.</p></div><a class="section-action" href="/token/${esc(officialLaunches[0].token.toLowerCase())}/"><span>Inspect token</span><i class="action-icon" aria-hidden="true">→</i></a></aside>` : officialStage()) +
     `</section>` +
 
     `<section class="section reveal verification-policy" id="verification-policy"><div class="section-head">` +
@@ -336,7 +347,7 @@ function relativeTime(iso, anchor = feed.observedAt) {
 }
 function launchpadCard(token) {
   const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);const recent=relativeTime(latestCanonicalBuyTime(token));
-  return `<article class="launchpad-card"><a class="launchpad-card-link" href="${href}" aria-label="Inspect ${esc(token.name)}"></a><div class="launchpad-media">${tokenArt(token)}<span class="protocol-badge" data-protocol-badge>V2</span></div><div class="launchpad-card-body"><h3>${esc(token.name)}</h3><p class="launchpad-symbol">$${esc(token.symbol)}</p><p class="launchpad-mcap" data-card-market-cap><strong>Market cap unavailable</strong></p><div class="launchpad-progress"><span>${esc(progress.toFixed(2))}%</span><progress max="100" value="${esc(progress)}">${esc(progress.toFixed(2))}%</progress></div><p class="launchpad-deployer">by ${esc(shortAddress(token.deployer))}</p><div class="launchpad-bottom"><button type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span>${esc(shortAddress(token.token))}</span><i data-copy-label role="status" aria-live="polite">Copy</i></button><time datetime="${esc(token.blockTimestamp || '')}" data-card-relative-time>${esc(recent)}</time></div></div></article>`;
+  return `<article class="launchpad-card"><a class="launchpad-card-link" href="${href}/" aria-label="Inspect ${esc(token.name)}"></a><div class="launchpad-media">${tokenArt(token)}<span class="protocol-badge" data-protocol-badge>V2</span></div><div class="launchpad-card-body"><h3>${esc(token.name)}</h3><p class="launchpad-symbol">$${esc(token.symbol)}</p><p class="launchpad-mcap" data-card-market-cap><strong>Market cap unavailable</strong></p><div class="launchpad-progress"><span>${esc(progress.toFixed(2))}%</span><progress max="100" value="${esc(progress)}">${esc(progress.toFixed(2))}%</progress></div><p class="launchpad-deployer">by ${esc(shortAddress(token.deployer))}</p><div class="launchpad-bottom"><button type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span>${esc(shortAddress(token.token))}</span><i data-copy-label role="status" aria-live="polite">Copy</i></button><time datetime="${esc(token.blockTimestamp || '')}" data-card-relative-time>${esc(recent)}</time></div></div></article>`;
 }
 
 function explore() {
@@ -503,15 +514,15 @@ const unavailableAction = (label) => `<button class="btn btn-disabled" type="but
 const unavailableValue = (label, detail) => `<article class="account-stat is-unavailable"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
 
 function accountNav(current) {
-  return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account sections">${accountRoutes.map(([label, href, status],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>${esc(status)}</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
+  return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account sections">${accountRoutes.map(([label, href, status],index) => `<a href="${href}/"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>${esc(status)}</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
 }
 
 function accountSidebar(current) {
-  return `<aside class="account-sidebar"><a class="account-sidebar-brand" href="/account"><img src="/logo-transparent.png" alt="" width="36" height="36"><span><strong>PONSR</strong><small>Command center</small></span></a>${accountNav(current)}<div class="account-sidebar-state"><span class="terminal-source-dot"></span><div><small>Session state</small><strong>Signed out</strong></div></div><a class="sidebar-explore" href="/explore">Explore public launches <i>→</i></a></aside>`;
+  return `<aside class="account-sidebar"><a class="account-sidebar-brand" href="/account/"><img src="/logo-transparent.png" alt="" width="36" height="36"><span><strong>PONSR</strong><small>Command center</small></span></a>${accountNav(current)}<div class="account-sidebar-state"><span class="terminal-source-dot"></span><div><small>Session state</small><strong>Signed out</strong></div></div><a class="sidebar-explore" href="/explore/">Explore public launches <i>→</i></a></aside>`;
 }
 
 function accountConnection() {
-  return `<section class="custody-boundary" role="status" data-account-connection><span class="account-lock" aria-hidden="true">◇</span><div><span class="signed-out-label" data-account-session-label>Custody boundary · Phase B unavailable</span><strong data-account-session-title>Private account data is locked</strong><p data-account-session-detail>Account connection unavailable until the authenticated backend reports ready. Numeric X identity must map to the exact existing Ponsr embedded wallet without creating another wallet.</p></div><div class="connection-actions"><button class="btn btn-disabled" type="button" disabled aria-disabled="true" data-account-signin>Sign-in not available</button><button class="btn btn-ghost" type="button" hidden data-account-logout>Sign out</button><a class="btn btn-ghost" href="/explore"><span>Explore public records</span></a></div></section>`;
+  return `<section class="custody-boundary" role="status" data-account-connection><span class="account-lock" aria-hidden="true">◇</span><div><span class="signed-out-label" data-account-session-label>Custody boundary · Phase B unavailable</span><strong data-account-session-title>Private account data is locked</strong><p data-account-session-detail>Account connection unavailable until the authenticated backend reports ready. Numeric X identity must map to the exact existing Ponsr embedded wallet without creating another wallet.</p></div><div class="connection-actions"><button class="btn btn-disabled" type="button" disabled aria-disabled="true" data-account-signin>Sign-in not available</button><button class="btn btn-ghost" type="button" hidden data-account-logout>Sign out</button><a class="btn btn-ghost" href="/explore/"><span>Explore public records</span></a></div></section>`;
 }
 
 /**
@@ -531,7 +542,7 @@ function accountConnection() {
 function accountOverview() {
   const cell = (label, hint, key) =>
     `<article class="account-stat is-unavailable" data-overview="${key}"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(hint)}</span></article>`;
-  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">Launches, creator trading fees, wallet access and security, once your X identity and its existing wallet are verified.</p><div class="account-stats">${cell('Embedded wallet','Sign in to resolve your existing wallet.','wallet')}${cell('Native balance','Read from chain once an address is known.','balance')}${cell('Creator fees','Waiting in escrow for your launches.','fees')}${cell('Launches','Tokens launched by your X identity.','launches')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-readonly">Live</span>X sign-in, resolving your existing wallet</li><li><span class="status-readonly">Live</span>Collecting creator fees, gas paid by Ponsr</li><li><span class="status-disabled">Disabled</span>Send, swap, and any signing by this site</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
+  return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">Launches, creator trading fees, wallet access and security, once your X identity and its existing wallet are verified.</p><div class="account-stats">${cell('Embedded wallet','Sign in to resolve your existing wallet.','wallet')}${cell('Native balance','Read from chain once an address is known.','balance')}${cell('Creator fees','Waiting in escrow for your launches.','fees')}${cell('Launches','Tokens launched by your X identity.','launches')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-readonly">Live</span>X sign-in, resolving your existing wallet</li><li><span class="status-readonly">Live</span>Collecting creator fees, gas paid by Ponsr</li><li><span class="status-disabled">Disabled</span>Send, swap, and any signing by this site</li></ul><a class="btn btn-ghost" href="/explore/"><span>Browse public launches</span></a></aside></div>`;
 }
 
 /**
@@ -550,7 +561,7 @@ function accountPublicLaunches() {
 }
 
 function accountLaunches() {
-  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore"><span>Open public record</span></a></div></section>`;
+  return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore/"><span>Open public record</span></a></div></section>`;
 }
 
 /**
@@ -595,7 +606,7 @@ function accountWallet() {
 }
 
 function accountSimulator() {
-  return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Nothing here executes anything</strong>The lab reads history and does arithmetic on it. Receive, send and swap remain unavailable; collecting creator fees has moved to the fees page and needs no signature.</p></section>`;
+  return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}/#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Nothing here executes anything</strong>The lab reads history and does arithmetic on it. Receive, send and swap remain unavailable; collecting creator fees has moved to the fees page and needs no signature.</p></section>`;
 }
 
 /**
@@ -660,7 +671,7 @@ function dynamicTokenPage() {
       `<p class="lede" data-dynamic-token-message>The exact address is being checked against the canonical Ponsr feed.</p></div>` +
       statusStrip() +
       `<div data-dynamic-token-content></div>` +
-      `<p class="inline-links"><a class="btn btn-ghost" href="/explore"><span>Explore launches</span></a></p>` +
+      `<p class="inline-links"><a class="btn btn-ghost" href="/explore/"><span>Explore launches</span></a></p>` +
       `</main>`,
   });
 }
@@ -686,7 +697,7 @@ function notFound() {
         `<p class="lede">This page is not a current V2 launch recorded by Ponsr. That is different from a launch we could not read — ` +
         `if the source were failing, the record page would say so rather than showing you this.</p>` +
       `</div>` +
-      `<p class="inline-links"><a class="btn btn-primary" href="/explore"><span>Browse the record</span></a>` +
+      `<p class="inline-links"><a class="btn btn-primary" href="/explore/"><span>Browse the record</span></a>` +
       `<a class="btn btn-ghost" href="/"><span>Home</span></a></p></main>`,
   });
 }
