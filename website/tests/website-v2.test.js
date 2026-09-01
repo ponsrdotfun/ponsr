@@ -34,7 +34,11 @@ test('PSTONKS canonical deep route is a generated address page with token metada
   const route = `website/token/${PSTONKS.toLowerCase()}/index.html`;
   const html = read(route);
   assert.match(html, /<title>PONSR STONKS \(PSTONKS\) — Ponsr<\/title>/);
-  assert.match(html, new RegExp(`<link rel="canonical" href="https://ponsr\\.fun/token/${PSTONKS.toLowerCase()}"`));
+  // The trailing slash is the point. This page is written as
+  // `token/<address>/index.html`, so `/token/<address>` answers 301 and only
+  // `/token/<address>/` answers 200 -- and a canonical tag naming a redirect is
+  // a canonical pointing away from itself.
+  assert.match(html, new RegExp(`<link rel="canonical" href="https://ponsr\\.fun/token/${PSTONKS.toLowerCase()}/"`));
   assert.match(html, /data-ponsr-app/);
 });
 
@@ -351,4 +355,40 @@ test('package provides deterministic website test and build commands', () => {
   const pkg = loadJson('package.json');
   assert.ok(pkg.scripts['test:website']);
   assert.ok(pkg.scripts['build:website']);
+});
+
+/**
+ * EVERY SITEMAP ENTRY MUST NAME A URL THAT IS ACTUALLY SERVED THERE.
+ *
+ * Measured on the live site before this was written: ten of twelve entries
+ * answered 301. `/explore` redirects to `/explore/`, while `/terms` answers 200
+ * and `/terms/` redirects the other way -- so the rule is not "always add a
+ * slash", it is how the page was WRITTEN. A blanket trailing slash would have
+ * broken the two file-backed pages, which is why the build derives it from the
+ * layout rather than decreeing it.
+ *
+ * This asserts the property offline, against the layout on disk, which is the
+ * thing that actually decides it. A test that fetched the live site would prove
+ * the same point and fail whenever the network did.
+ */
+test('every sitemap URL corresponds to a file served at exactly that path', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.resolve(__dirname, '..');
+  const sitemap = fs.readFileSync(path.join(root, 'sitemap.xml'), 'utf8');
+  const paths = [...sitemap.matchAll(/<loc>https:[/][/]ponsr[.]fun([^<]*)<[/]loc>/g)].map((m) => m[1]);
+
+  assert.ok(paths.length >= 12, `expected the full route list, saw ${paths.length}`);
+  for (const route of paths) {
+    // A trailing slash means a directory with an index; no slash means a file.
+    const file = route.endsWith('/')
+      ? path.join(root, route.slice(1), 'index.html')
+      : `${path.join(root, route.slice(1))}.html`;
+    assert.ok(fs.existsSync(file), `${route} is listed but ${path.relative(root, file)} does not exist`);
+  }
+
+  // Both shapes must be present, so this cannot pass by every route happening
+  // to take the same form.
+  assert.ok(paths.some((r) => r.endsWith('/')), 'no directory-backed route listed');
+  assert.ok(paths.some((r) => !r.endsWith('/') && r !== '/'), 'no file-backed route listed');
 });
