@@ -115,7 +115,28 @@ async function attempt(call, attempts = 4) {
 const hex = (n) => `0x${n.toString(16)}`;
 const addressTopic = (a) => `0x${a.slice(2).toLowerCase().padStart(64, '0')}`;
 
-async function scanAll(fromBlock, toBlock, { page = 1_000_000, minPage = 12_500, label = 'range' } = {}) {
+/**
+ * Returns `{ logs, coveredThrough }` — what was read, and the last block it was
+ * read THROUGH. Never `toBlock` on faith.
+ *
+ * AN UNREADABLE RANGE USED TO DISCARD THE WHOLE RUN, INCLUDING WHAT IT HAD
+ * ALREADY FOUND. On 2026-09-02 a real user's launch was found at 95.3% of the
+ * scan and then thrown away, because the last 4 465 blocks would not read after
+ * eight attempts and the run refused rather than published. The site went on
+ * showing three launches while a stranger's token sat on chain unlisted — the
+ * third ratchet of this exact shape here, and the second in this file.
+ *
+ * The refusal was not wrong about the hazard. Writing a half-finished read is
+ * how a launch silently vanishes from the floor — but ONLY because `asOfBlock`
+ * is a CLAIM OF COVERAGE, and future runs start from it. Bank the progress and
+ * tell the truth about where it stops, and the danger is gone: the unread tail
+ * is simply retried next run, exactly as an unscanned window always was.
+ *
+ * The scan runs strictly forward, so stopping at the first unreadable range is
+ * always safe: everything behind the cursor was read, and nothing ahead is
+ * claimed.
+ */
+async function scanAll(fromBlock, toBlock, { page = 1_000_000, minPage = 1_000, label = 'range' } = {}) {
   const logs = [];
   let cursor = fromBlock;
   let size = page;
@@ -144,7 +165,9 @@ async function scanAll(fromBlock, toBlock, { page = 1_000_000, minPage = 12_500,
         size = Math.max(minPage, Math.floor(size / 2));
         log(`    ${label} ${cursor} narrowed to ${size} blocks`);
       } else if (attempt >= 8) {
-        refuse(`${label} ${cursor}-${end} could not be read at ${size} blocks after ${attempt} attempts`);
+        log(`    ${label} ${cursor}-${end} unreadable at ${size} blocks after ${attempt} attempts`);
+        log(`    banking ${logs.length} event(s) read through ${cursor - 1}; the rest is next run's window`);
+        return { logs, coveredThrough: cursor - 1 };
       }
       await sleep(Math.min(20_000, 500 * 2 ** Math.min(attempt, 5)));
       continue;
@@ -160,7 +183,7 @@ async function scanAll(fromBlock, toBlock, { page = 1_000_000, minPage = 12_500,
     log(`  ${done.toFixed(1).padStart(5)}%  ${logs.length} events`);
     await sleep(120);
   }
-  return logs;
+  return { logs, coveredThrough: toBlock };
 }
 
 /**
@@ -191,8 +214,24 @@ const scanFrom = FROM_GENESIS
   : Math.max(DEPLOYMENT.startBlock, Number(existing.asOfBlock || 0) - REORG_OVERLAP);
 
 log(`scanning ${head - scanFrom} blocks for launches${FROM_GENESIS ? ' (from genesis)' : ` from ${scanFrom}`}...`);
-const discovery = { logs: await scanAll(scanFrom, head, { label: 'launch range' }) };
+const discovery = await scanAll(scanFrom, head, { label: 'launch range' });
+/**
+ * `asOfBlock` IS A CLAIM OF COVERAGE, AND EVERY FUTURE RUN STARTS FROM IT.
+ *
+ * So it is what the scan actually READ THROUGH, never the head it was aiming
+ * at. Writing `head` after an unreadable tail would put those blocks behind
+ * every future window and make anything launched in them permanently invisible
+ * — which is the outcome the partial-scan refusal existed to prevent, arriving
+ * through the front door.
+ *
+ * It can never move backwards either. A first chunk that fails leaves
+ * `coveredThrough` below the existing value, and a snapshot that un-claims
+ * ground it already holds would re-scan it forever.
+ */
+const coveredThrough = Math.max(Number(existing.asOfBlock || 0), discovery.coveredThrough);
+const shortBy = head - coveredThrough;
 log(`found           ${discovery.logs.length} launch events in that window`);
+if (shortBy > 0) log(`covered through ${coveredThrough} (${shortBy} blocks short of head; next run picks them up)`);
 
 const observedAt = new Date().toISOString();
 const decoded = await decodeLaunches(rpc, discovery.logs, observedAt);
@@ -453,7 +492,7 @@ const refreshed = {
   ...existing,
   generatedAt: observedAt,
   observedAt,
-  asOfBlock: head,
+  asOfBlock: coveredThrough,
   publicGate: { ...gate, state: 'stale' },
   sources: [
     {
@@ -462,7 +501,7 @@ const refreshed = {
       // What this run actually read, not what the first run once did. A source
       // that overstates its own coverage is worse than one that admits a window.
       fromBlock: FROM_GENESIS ? DEPLOYMENT.startBlock : scanFrom,
-      throughBlock: head,
+      throughBlock: coveredThrough,
       authoritativeTimestamps: true,
       scope: 'verified last-known-good snapshot; live function advances with 128-block overlap',
     },

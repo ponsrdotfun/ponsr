@@ -62,18 +62,45 @@ test('a quiet day does not publish, and a new launch does', () => {
   assert.match(workflow(), /--stale-after=/);
 });
 
-test('a partial scan is never written, scheduled or not', () => {
+/**
+ * A SHORT SCAN MUST BANK ITS PROGRESS AND SAY WHERE IT STOPPED.
+ *
+ * This asserted that an unreadable range refuses the whole run. The hazard it
+ * named is real — writing a half-finished read is how a launch vanishes from the
+ * floor — but the refusal was the wrong remedy, and on 2026-09-02 it cost a real
+ * user. Their launch was FOUND at 95.3% of the scan and thrown away, because the
+ * last 4 465 blocks would not read; the site went on showing three launches while
+ * a stranger's token sat on chain unlisted. Third ratchet of this shape here.
+ *
+ * The hazard only exists because `asOfBlock` is a claim of coverage that every
+ * future run starts from. Bank what was read and write the block it was read
+ * THROUGH, and the unread tail is just next run's window — which is what an
+ * incremental scan has always been. So what is pinned now is the honesty of the
+ * coverage figure, not the discarding of work.
+ */
+test('a short scan banks what it read and never claims the head it did not reach', () => {
   const script = read('scripts/refresh-snapshot.mjs');
-  // Writing what a half-finished read returned is how a launch silently
-  // disappears from the site's own floor. This is the guard that made the very
-  // first run refuse rather than publish a short list.
+
+  // The scan reports coverage rather than a bare list, and the exhausted branch
+  // returns it instead of killing the run.
+  assert.match(script, /return \{ logs, coveredThrough: cursor - 1 \}/, 'an unreadable range must bank its progress');
+  assert.match(script, /return \{ logs, coveredThrough: toBlock \}/, 'a complete scan must report full coverage');
+
+  // The published figures come from what was READ, never from the head.
+  assert.match(script, /asOfBlock: coveredThrough/, 'asOfBlock must not claim the head');
+  assert.match(script, /throughBlock: coveredThrough/, 'the source must not overstate its own window');
+  assert.doesNotMatch(script, /asOfBlock: head/);
+
+  // And coverage may never move backwards, or a failed first chunk would
+  // un-claim ground the snapshot already holds and re-scan it forever.
+  assert.match(script, /coveredThrough = Math\.max\(/, 'coverage must never regress');
+
+  // refuse() still exists for the failures that are NOT a short read -- an
+  // identity the chain disagrees with is still fatal, and still aborts before
+  // anything is written.
   assert.match(script, /function refuse\(/);
   assert.match(script, /process\.exit\(1\)/);
-  // A range that cannot be read stops the run; it does not shorten the list.
-  assert.match(script, /refuse\(`\$\{label\} \$\{cursor\}-\$\{end\} could not be read/);
-  // And a committed identity the chain disagrees with is not papered over.
   assert.match(script, /is not what the chain reports/);
-  // The refusal must abort, never fall through to the write.
   const write = script.indexOf('await fs.writeFile(SNAPSHOT');
   assert.ok(write > script.lastIndexOf('refuse(`'), 'a refusal can be followed by a write');
 });
