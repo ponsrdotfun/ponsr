@@ -83,7 +83,7 @@ test('What-if model uses fixed-point integer math for actual versus never-sold v
   assert.equal(result.actualUsdMicros, '31004500');
   assert.equal(result.deltaUsdMicros, '-14004500');
   assert.equal(result.state, 'complete');
-  assert.equal(result.executionAuthority, 'NONE_PREVIEW_ONLY');
+  assert.equal(result.executionAuthority, 'NO_WALLET_AUTHORITY');
   assert.equal(result.canSign, false);
   assert.equal(result.canSend, false);
   assert.equal(result.canSwap, false);

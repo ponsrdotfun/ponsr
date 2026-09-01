@@ -2,7 +2,7 @@ const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
 const HASH = /^0x[a-fA-F0-9]{64}$/;
 const USD_SCALE = 1_000_000n;
 const PRICE_SCALE = 1_000_000_000_000_000_000n;
-export const PREVIEW_AUTHORITY = Object.freeze({ executionAuthority: 'NONE_PREVIEW_ONLY', canSign: false, canSend: false, canSwap: false, canClaim: false, isExecutableQuote: false });
+export const PREVIEW_AUTHORITY = Object.freeze({ executionAuthority: 'NO_WALLET_AUTHORITY', canSign: false, canSend: false, canSwap: false, canClaim: false, isExecutableQuote: false });
 
 export function decimalToScaled(value, scale = PRICE_SCALE) {
   const text = String(value ?? '').trim();

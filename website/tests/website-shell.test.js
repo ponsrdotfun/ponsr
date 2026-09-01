@@ -283,7 +283,7 @@ test('account routes are complete signed-out product surfaces with no invented i
     assert.match(account, /data-auth-state="signed-out"/);
     assert.match(account, /data-identity-state="unavailable"/);
     assert.match(account, /data-private-data-state="locked"/);
-    assert.match(account, /data-execution-authority="NONE_PREVIEW_ONLY"/);
+    assert.match(account, /data-execution-authority="NO_WALLET_AUTHORITY"/);
     for (const capability of ['sign','send','swap','claim']) assert.match(account, new RegExp(`data-can-${capability}="false"`));
     assert.match(account, /Account connection unavailable/i, `${file} does not disclose the auth boundary`);
     assert.match(account, /disabled[^>]*aria-disabled="true"|aria-disabled="true"[^>]*disabled/i, `${file} enables an unavailable account action`);
@@ -360,7 +360,7 @@ test('Phase B contract pins numeric X identity, one existing wallet, and session
 test('Phase B browser activation remains server-gated and read-only', () => {
   const app=read('website/assets/app.mjs'),build=read('scripts/build-website.mjs'),netlify=read('netlify.toml');
   assert.match(app,/\/api\/ready/);assert.match(app,/\/api\/account\/session/);assert.match(app,/\/api\/auth\/x\/start/);assert.match(app,/\/api\/auth\/logout/);
-  assert.match(app,/executionAuthority='NONE_PREVIEW_ONLY'/);assert.match(build,/data-can-sign="false"/);assert.match(build,/data-can-send="false"/);assert.match(build,/data-can-swap="false"/);assert.match(build,/data-can-claim="false"/);
+  assert.match(app,/executionAuthority='NO_WALLET_AUTHORITY'/);assert.match(build,/data-can-sign="false"/);assert.match(build,/data-can-send="false"/);assert.match(build,/data-can-swap="false"/);assert.match(build,/data-can-claim="false"/);
   assert.doesNotMatch(app,/eth_sendTransaction|wallet_addEthereumChain|personal_sign|eth_signTypedData/);
   assert.match(netlify,/from\s*=\s*"\/api\/\*"[\s\S]*ponsr-backend\.fly\.dev\/api\/:splat/);
 });
