@@ -380,7 +380,13 @@ test('dynamic post-build launches receive the same data workstation contracts', 
   assert.match(app,/dynamicWorkstation/);assert.match(app,/dataset\.marketTerminal/);assert.match(app,/dataset\.whatIfSimulator/);assert.match(app,/geckoterminal\.com\/robinhood\/tokens/);
   assert.match(app,/aria-describedby/);assert.match(app,/aria-invalid/);assert.match(app,/aria-live/);
   const css=read('website/assets/site.css');
-  assert.match(css,/\.dynamic-token-panel \.token-art\s*\{[^}]*aspect-ratio:\s*1\.6/s);
+  // This used to pin `aspect-ratio: 1.6`, which turned out to be the defect
+  // rather than the contract: the rule also carried `width:100%` and
+  // `max-height:420px`, and at 1600px the ratio wanted a 697px box while the cap
+  // forced 418px -- so the frame resolved to 2.67:1 and `object-fit:cover` threw
+  // away most of a square photo. What the panel owes a launch is a bounded frame
+  // that does not crop it, which is what is pinned now.
+  assert.match(css,/\.dynamic-token-panel \.token-art\s*\{[^}]*aspect-ratio:\s*1;/s);
   assert.match(css,/\.token-description\s*\{[^}]*text-wrap:\s*pretty[^}]*hyphens:\s*none/s);
 });
 
