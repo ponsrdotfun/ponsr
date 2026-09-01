@@ -416,7 +416,7 @@ function marketTerminalBlock(token) {
 }
 
 function whatIfBlock(token) {
-  return `<section class="panel what-if-lab reveal" id="what-if" data-what-if-simulator data-token="${esc(token.token.toLowerCase())}">` +
+  return `<section class="panel what-if-lab reveal" id="what-if" data-what-if-simulator data-quote-unit="${esc(quoteUnit(token))}" data-token="${esc(token.token.toLowerCase())}">` +
     `<div class="what-if-head"><div><p class="eyebrow">Read-only wallet laboratory</p><h2>What if you never sold?</h2><p class="lede">Reconstruct your observed Ponsr trade history, then compare today's actual position with a never-sold counterfactual.</p></div><span class="read-only-badge">Read-only · no signing</span></div>` +
     `<div class="simulator-controls"><label><span>Wallet address</span><input type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="0x…" data-wallet-input></label><button class="btn btn-primary" type="button" data-run-simulator><span>Run analysis</span></button><button class="btn btn-ghost" type="button" data-connect-wallet><span>Select with MetaMask</span></button></div>` +
     `<p class="simulator-boundary">MetaMask is used only to return the address you explicitly select via <span class="mono">eth_requestAccounts</span>. Ponsr does not request a signature, chain switch, approval, or transaction.</p>` +
