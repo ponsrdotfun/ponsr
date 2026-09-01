@@ -36,7 +36,10 @@ describe('TelegramNotifier', () => {
     expect(url).toBe('https://api.telegram.org/botTOKEN/sendMessage');
     const body = JSON.parse(init.body);
     expect(body.chat_id).toBe('123');
-    expect(body.text).toContain('CRITICAL');
+    // The severity is still carried, in the words a person reads rather than a
+    // log level: the first line of a notification preview has to say whether to
+    // get up. The constant stays too, at the end, where it is searchable.
+    expect(body.text.split('\n')[0]).toContain('ACTION NEEDED');
     expect(body.text).toContain('TREASURY_LOW');
     expect(body.text).toContain('Hot wallet cannot fund a launch.');
   });
