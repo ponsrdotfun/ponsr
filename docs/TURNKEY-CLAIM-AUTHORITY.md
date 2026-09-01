@@ -11,6 +11,11 @@ NOBI      0xA45a3615…      ALLOWED  denied     denied     ALLOWED   PASS  exit
 PSTONKS   0xF78DC016…       denied  denied     denied     ALLOWED   -
 ```
 
+**And it was used the same day.** Two claims sent from the website by the signed-in owner,
+`0x62f152eb…` and `0x3fdff472…`, both status 1: 0.019498 NVDA and 0.008971 SPCX to the
+creator's wallet, the remainder to the treasury, every escrow cell now zero. The policy is
+not merely correct in a probe; it has carried real value.
+
 **The PSTONKS row is the load-bearing one.** Its splitter is not in the address list, and
 it is refused — which is what proves the rule is bound to two destinations rather than
 being a blanket allow that would have passed the other two rows identically.
