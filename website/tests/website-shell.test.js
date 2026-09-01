@@ -678,6 +678,34 @@ test('the example request uses the text copy path, not the address one', () => {
 });
 
 /**
+ * A CASCADE FIX MUST NOT REST ON SOURCE ORDER.
+ *
+ * The hero's gate note carries `.note`, which brings a dashed border, padding
+ * and a background -- a box drawn inside the card that already has all three.
+ * The override was first written as a single `.hero-request-gate`, placed just
+ * after `.howto-gate` so it would win.
+ *
+ * It lost. `.note` is declared 200 lines further down and is equally specific,
+ * so the later rule took it, and the dashed box survived on the deployed page
+ * while the stylesheet plainly contained the fix.
+ *
+ * Worth recording how that was nearly missed: the look was previewed by setting
+ * the properties through CSSOM on the live element, which always wins and so
+ * bypasses the cascade entirely. It proved the design and could not have shown
+ * the bug. Verified against a real browser over the built file instead.
+ */
+test('the hero gate note beats .note on specificity, not on position', () => {
+  const css = read('website/assets/site.css');
+  const rule = css.match(/^([^\n{]*hero-request-gate[^\n{]*)\{/m);
+  assert.ok(rule, 'nothing overrides the hero gate note');
+
+  const selector = rule[1].trim();
+  const classes = (selector.match(/\.[A-Za-z][\w-]*/g) || []);
+  assert.ok(classes.includes('.note'), `${selector} does not out-specify .note, so source order decides it`);
+  assert.ok(classes.length >= 2, 'a single class ties with .note and loses to whichever comes last');
+});
+
+/**
  * THE GATE MOVED AND THE PAGE DID NOT.
  *
  * The static build may only ship the pessimistic state -- it has observed

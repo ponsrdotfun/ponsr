@@ -442,8 +442,14 @@ p { margin: 0; }
 .hero-request-line { margin:0; color:var(--ivory); font-size:clamp(.9rem,2vw,1.02rem); line-height:1.55; }
 /* `.note` carries its own dashed border, padding and background, which inside
    this card reads as a box drawn inside a box. Stripped back to a hairline rule
-   so the request and its gate read as one object with a divider, not two. */
-.hero-request-gate { width:100%; margin:.15rem 0 0; padding:.75rem 0 0; border:0; border-top:1px solid rgba(130,227,179,.14); border-radius:0; background:none; font-size:.8rem; }
+   so the request and its gate read as one object with a divider, not two.
+
+   TWO CLASSES, DELIBERATELY. `.note` is declared at the bottom of this file --
+   later than here and equally specific -- so a single `.hero-request-gate`
+   loses the cascade and the dashed box survives. Written as `.note.x` it wins
+   on specificity wherever either rule sits, which is the property that should
+   hold rather than an ordering that a future edit can quietly undo. */
+.note.hero-request-gate { width:100%; margin:.15rem 0 0; padding:.75rem 0 0; border:0; border-top:1px solid rgba(130,227,179,.14); border-radius:0; background:none; font-size:.8rem; }
 
 .economics-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; overflow:hidden; border:1px solid var(--line-soft); border-radius:18px; background:var(--line-soft); }
 .economics-figure { display:grid; align-content:center; gap:.35rem; padding:1.35rem 1.15rem; background:linear-gradient(180deg,rgba(20,25,28,.97),rgba(8,10,12,.99)); }
