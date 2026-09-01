@@ -344,11 +344,36 @@ test('Netlify config serves modular CSP-safe assets and canonical SEO files', ()
   assert.match(index, /data-ponsr-app/);
 });
 
-test('terms distinguish current V2 native escrow mechanics and untested collection', () => {
+/**
+ * THE TERMS MUST SEPARATE WHAT WAS OBSERVED FROM WHAT WAS NOT.
+ *
+ * This asserted the literal words "not been tested end-to-end", which were true
+ * until 1 September 2026 and false the moment the owner collected real fees.
+ * Pinning the sentence rather than the property is how a disclaimer becomes a
+ * stale claim on the one page that may not carry one.
+ *
+ * The property survives the change: escrow collection is now stated as tested,
+ * and the launchpad locker's upstream cut is stated as NOT exercised by that
+ * observation -- because the fees collected had accrued from earlier trading, so
+ * the resulting share of trading fees is still arithmetic. Both halves are
+ * required, and asserting only the first would let the page overclaim.
+ */
+test('terms separate the escrow collection that was observed from the locker cut that was not', () => {
   const terms = read('website/terms.html');
   assert.match(terms, /native ETH/i);
   assert.match(terms, /escrow/i);
-  assert.match(terms, /not been tested end.to.end/i);
+
+  // What was measured.
+  assert.match(terms, /Escrow collection was tested end.to.end/i);
+  assert.match(terms, /95\/5 exactly/i);
+
+  // What was not, and must keep being said.
+  assert.match(terms, /locker takes its cut upstream/i);
+  assert.match(terms, /not exercised by it/i);
+  assert.match(terms, /remains arithmetic rather than a measured figure/i);
+
+  // And the distinction that predates both.
+  assert.match(terms, /does not mean delivered/i);
 });
 
 test('package provides deterministic website test and build commands', () => {

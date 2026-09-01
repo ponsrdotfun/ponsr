@@ -95,7 +95,8 @@ blocked on an account signup for weeks.) ABIs are checked in at `backend/src/abi
 
   Three things differ between the V2 deployments, each failing differently: the calldata gains a
   `salt` (selector `0xf35abbcf`, not `0xa41d5f2b`), the fee escrow is different, and the approved
-  asset set is **23 rather than 8**, with RIVN already revoked. The escrow is the dangerous one —
+  asset set is **27 rather than 8** (23 when this was written, and it grows — read it live
+  from `/status` rather than quoting this line), with RIVN already revoked. The escrow is the dangerous one —
   immutable in each splitter, claims pay `msg.sender`, no `claimFor` — so the wrong one strands a
   creator's fees permanently. Asserted before the splitter is deployed and again before the
   calldata is built.
