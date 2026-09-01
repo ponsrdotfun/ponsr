@@ -298,6 +298,58 @@ now and MERGES rather than rebuilds: building the list from the window would del
 launch older than it, which is the partial-scan failure arriving through the front door.
 485k blocks, seconds, green in CI. `--from-genesis` still does the whole sweep.
 
+### The brutal audit, and the root cause under four of its findings (2026-09-01)
+
+An end-to-end audit was run as a user — cold landing page through to collecting a fee — and
+as a reader of the code. `PONSR-BRUTAL-AUDIT-2026-09-01.txt` is the report. Six groups of
+findings, all fixed and live, and one live defect found while fixing them that the report
+itself had missed.
+
+**THE ROOT CAUSE IS THE ONE THING TO REMEMBER FROM THIS DAY.** The site built every
+component TWICE — HTML strings in `scripts/build-website.mjs`, DOM nodes in
+`website/assets/app.mjs` — and 54 CSS classes were emitted by both. That produced four
+visible defects in a single day, and **every one was invisible to tests that read the built
+HTML**, because in each case the build script's copy was correct:
+
+```
+${UNIT} and ${quoteName(token)} printed literally on every token page
+"cumulative ETH movement" on a token paired with NVDA
+"by <treasury>" on cards the build script had corrected to credit the creator
+a cover link that redirected after the other copy was fixed not to
+```
+
+**Fixed structurally, not one at a time.** `website/assets/markup.mjs` describes a node;
+`toHtml` renders it for the build and `toDom` for the browser. `website/assets/cards.mjs`
+describes the launchpad card, the artwork block, the graduation arithmetic and the token
+href once each. **A new component belongs there, not in either producer.**
+
+`innerHTML` is not an option and the reason is not style: every value on these pages is
+attacker-influenced token metadata, and an existing test forbids the sink. A description
+renders through `createTextNode` and `setAttribute`, so escaping never arises on the client.
+
+**Values stay with their producer.** The client can show a market cap the static build never
+observed and anchors relative time against a clock the build lacks. Unifying those would be
+unifying the wrong half. Structure is shared; data policy is local.
+
+Proven rather than asserted: the built page was byte-for-byte unchanged, and in a browser
+the card the client repaints is now identical to the card the server sent — the same
+comparison that revealed the fourth defect.
+
+Also from the audit, and worth carrying:
+
+- **The landing page never said how to use the product.** `@ponsrdotfun` appeared only in
+  the footer, there was no example request, and `66.5`/`3.5%` appeared nowhere. Both
+  sections exist now and the call to action follows the real gate, so opening it needs no
+  copy edit.
+- **The board credited the treasury on every card.** True — it is the on-chain deployer —
+  and misleading, because "by" reads as authorship. `creator` is in the snapshot now,
+  backfilled for existing launches.
+- **A copy button nearly shipped dead.** `wireCopyButtons` refuses anything that is not a
+  40-hex address; the example request is a tweet, so it would have done nothing at all.
+- **`.reveal-step-2` through `-6` look dead and are not** — built at runtime as
+  `reveal-step-${n}`. Any dead-code sweep here must exclude dynamically-constructed names
+  before deleting, or the staged entrance animation disappears silently.
+
 ## Immediate next actions
 
 **THE BACKEND IS FROZEN as of 2026-08-28.** The launch path is proven end to end on mainnet
