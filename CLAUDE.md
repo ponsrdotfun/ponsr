@@ -203,16 +203,26 @@ Scripts, all dry-run by default: `new-treasury-wallet.ts` (never prints the key)
 A signed-in creator can press collect on `/account/fees`. Built as an owner brief, which is
 what the freeze requires before backend feature work.
 
-**The policy exists as of 2026-09-01 and the path is open**, for two splitters only:
-`22f53547-16c6-49af-9b09-1fc86fba18f3`, `eth.tx.value == 0 && (Microduck || NOBI)`. Proven
-by signing, nothing broadcast: both ALLOWED, a funded claim denied, an arbitrary
-destination denied, the factory still ALLOWED. PSTONKS's splitter is **denied**, which is
-what proves the rule binds two destinations rather than being a blanket allow.
+**The path is open for EVERY splitter, present and future, as of 2026-09-01.** The signer
+holds `af763edc-ec7a-4cbf-957e-c610d5065ffd`,
+`eth.tx.value == 0 && eth.tx.data[0..10] == '0x56c937fc'`. The address-list rule that
+preceded it by three hours, `22f53547-…`, has been deleted; the signer holds three
+policies.
 
-**A launch made after that date is NOT covered.** Option A was chosen deliberately, and its
-cost is that each new splitter needs the policy edited or its creator's fees sit
-unclaimable behind a button that reports a refusal. Move to the selector-bound form before
-the public gate opens. See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
+Proven by signing, nothing broadcast: a claim to a splitter no address list ever named is
+**ALLOWED**, a different selector to a splitter is **denied**, a funded claim is denied, an
+arbitrary destination is denied, and the launch path still passes its own six-probe matrix.
+Those first two are the migration in one line — under the address list they were exactly
+the other way round.
+
+**`[0..10]`, and the index is derived rather than guessed.** Turnkey's documented example
+slices calldata as `input[34..74]`, which is where an address argument sits only if the
+string carries the `0x` prefix and indices count hex characters. An earlier draft said
+`[0..4]`, which yields `"0x56"` and would have refused every claim.
+
+The residual is unchanged in kind: zero-value calls carrying that selector may be aimed
+anywhere, costing gas and never value. **The public gate is still false and opening it is
+a separate decision.** See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
 write the rule and which to choose; `scripts/turnkey-verify-claim.ts` proves it afterwards by
 signing, never by trusting a config flag. Measured 2026-09-01, nothing broadcast: claim
 **denied**, funded claim **denied**, arbitrary destination **denied**, factory ALLOWED —
