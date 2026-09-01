@@ -481,9 +481,22 @@ test('a launch is credited to its creator, and the treasury is named as the send
    * test passed. Fifty-four CSS classes are emitted by both producers; a check
    * that reads one of them proves nothing about what a visitor sees.
    */
+  /**
+   * ONE MODEL NOW, SO ONE PLACE TO ASSERT.
+   *
+   * This used to read the client's own copy of the card, because there were
+   * two and they had drifted. There is one -- `website/assets/cards.mjs` --
+   * rendered to a string at deploy time and to DOM nodes in the browser, and a
+   * separate test renders the same description both ways and requires the
+   * results to be identical. Reading it once is stronger, not weaker.
+   */
+  const cards = read('website/assets/cards.mjs');
+  assert.match(cards, /token\.creator\s*\?\s*`creator /, 'the shared card ignores the creator');
+  assert.doesNotMatch(cards, /`by \$\{shortAddress/, 'the bare "by" attribution is back');
+  // And the client must go through it rather than building its own again.
   const app = read('website/assets/app.mjs');
-  assert.match(app, /launchpad-deployer',\s*token\.creator\s*\?/, 'the client card ignores the creator');
-  assert.doesNotMatch(app, /launchpad-deployer',`by /, 'the client card still says "by"');
+  assert.match(app, /launchpadCardModel\(/);
+  assert.doesNotMatch(app, /element\('p','launchpad-deployer'/, 'the client is building the card itself again');
 
   // The token page names both, because the treasury really did send it.
   const page = read(`website/token/${microduck.token.toLowerCase()}/index.html`);
@@ -505,8 +518,8 @@ test('curve progress is named on the card, on screen and to a screen reader', ()
   assert.match(explore, /class="launchpad-progress"><span>[\d.]+% to graduation<\/span>/);
   assert.match(explore, /<progress[^>]*aria-label="Bonding curve progress to graduation"/);
 
-  // And the client's copy of the same card, for the same reason.
-  const app = read('website/assets/app.mjs');
-  assert.match(app, /\$\{progress\.toFixed\(2\)\}% to graduation/);
-  assert.match(app, /setAttribute\('aria-label','Bonding curve progress to graduation'\)/);
+  // From the shared model, which the client renders rather than reproduces.
+  const cards = read('website/assets/cards.mjs');
+  assert.match(cards, /\$\{percent\} to graduation/);
+  assert.match(cards, /'aria-label': 'Bonding curve progress to graduation'/);
 });

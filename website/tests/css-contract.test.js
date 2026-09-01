@@ -210,18 +210,26 @@ test('a card link does not underline its own contents', () => {
  * for exactly this and had simply never been rendered.
  */
 test('a launch with no image shows its ticker, not a failure notice', () => {
-  const build = read('scripts/build-website.mjs');
-  const app = read('website/assets/app.mjs');
+  /**
+   * Asserted at the SHARED model now, and on the built page.
+   *
+   * This used to read both producers' own copies of the artwork block, because
+   * there were two. There is one: `website/assets/cards.mjs`, rendered to a
+   * string at deploy time and to DOM nodes in the browser. Reading it once is
+   * not weaker -- it is the only place the answer can differ from itself.
+   */
+  const cards = read('website/assets/cards.mjs');
+  assert.match(cards, /art-symbol/, 'the shared model does not draw the ticker');
+  assert.doesNotMatch(cards, />Token image unavailable</, 'the failure notice is back on the card');
 
-  for (const [name, source] of [['build', build], ['client', app]]) {
-    assert.match(source, /art-symbol/, `${name} renderer does not draw the ticker`);
-    assert.doesNotMatch(source, /'Token image unavailable'\)|>Token image unavailable</,
-      `${name} renderer still prints the failure notice on the card`);
-  }
   // The accessible label is unchanged: a screen reader still learns there is no
   // image. The sighted reader is the one who did not need telling twice.
-  assert.match(build, /aria-label="Token image unavailable for/);
-  assert.match(app, /Token image unavailable for \$\{token\.symbol\}/);
+  assert.match(cards, /'aria-label': `Token image unavailable for/);
+
+  // And the page a visitor actually receives.
+  const explore = read('website/explore/index.html');
+  assert.match(explore, /class="art-symbol" data-art-len="\d+"/);
+  assert.match(explore, /aria-label="Token image unavailable for [A-Z]+"/);
 });
 
 test('the ticker is sized without an inline style', () => {
@@ -235,9 +243,13 @@ test('the ticker is sized without an inline style', () => {
   // CSS cannot measure text, so the length is published and the stylesheet
   // carries one static rule per length. An inline custom property would have
   // been an inline style, which this site's CSP forbids.
-  assert.match(build, /data-art-len="\$\{Math\.min\(12,/);
-  assert.match(app, /dataset\.artLen=String\(Math\.min\(12,/);
+  // One model now, so one assertion. The length is published as a data
+  // attribute by `cards.mjs`, and neither renderer can disagree with it.
+  const cards = read('website/assets/cards.mjs');
+  assert.match(cards, /'data-art-len': String\(Math\.min\(12,/);
+  assert.doesNotMatch(cards, /\.style\.setProperty\(['"]--art-len/);
   assert.doesNotMatch(app, /\.style\.setProperty\(['"]--art-len/);
+  assert.doesNotMatch(build, /style="[^"]*--art-len/);
 
   // Plain string matching: a regex built by interpolation reads `[data-art-len]`
   // as a character class, which is how the first version of this assertion threw

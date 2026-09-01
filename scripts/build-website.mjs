@@ -37,6 +37,8 @@ import { tokenArtDataUri } from '../netlify/functions/lib/tokenArt.mjs';
 /** Spread the picture and the proportions it kept, or nothing at all. */
 const artFields = (art) => (art ? { artHref: art.href, artAspect: art.aspect } : {});
 import { useVendoredFonts } from '../netlify/functions/lib/fonts.mjs';
+import { launchpadCard as launchpadCardModel, curveProgress, tokenArt as tokenArtModel, trustedLogoUrl } from '../website/assets/cards.mjs';
+import { h, toHtml, escapeHtml } from '../website/assets/markup.mjs';
 import { activityLine, amountFromWei, curveFlowSeries, ethFromWei, eventTime, plural, quoteName, quoteUnit, reserveRows, shortAddress, whole } from '../website/assets/format.mjs';
 
 const site = path.join(process.cwd(), 'website');
@@ -371,31 +373,6 @@ function home() {
 /* Explore                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function curveProgress(token) {
-  const reserve=BigInt(token.reserves?.realQuoteReserveWei||0);const threshold=BigInt(token.graduationThreshold||0);
-  return threshold>0n ? Number((reserve*100000n)/threshold)/1000 : 0;
-}
-function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(String(value));if(url.protocol!=='https:'||url.hostname!=='pbs.twimg.com'||url.username||url.password||url.port||!/^\/media\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname))return null;for(const key of url.searchParams.keys())if(!['format','name'].includes(key))return null;return url.toString();}catch{return null;}}
-function tokenArt(token) {
-  const logo=trustedLogoUrl(token.logo);
-  if(logo)return `<div class="token-art has-image"><img src="${esc(logo)}" alt="${esc(token.name)} token image" loading="lazy" decoding="async"></div>`;
-  /**
-   * NO LOGO IS NOT A BROKEN CARD.
-   *
-   * The placeholder was a radar pattern, three dots, and the words TOKEN IMAGE
-   * UNAVAILABLE across the middle -- which reads as a failure every time, on a
-   * card whose token is perfectly fine. Two of three launches have no image, so
-   * that was most of the board announcing a problem that does not exist.
-   *
-   * The token's own ticker is the art instead: set in the display face on the
-   * same ground, it reads as identity rather than absence. `.art-symbol` was
-   * already styled for exactly this and was simply never rendered.
-   *
-   * The accessible label is unchanged, so a screen reader still learns there is
-   * no image -- the sighted reader is the one who did not need telling twice.
-   */
-  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="art-symbol" data-art-len="${Math.min(12, String(token.symbol || '?').length)}">${esc(String(token.symbol || '?').toUpperCase())}</span></div>`;
-}
 function tokenCard(token) {
   const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);
   return `<article class="token-card">${tokenArt(token)}<div class="launch-card-body"><p class="eyebrow">Current V2 · ${esc(token.pairLabel)}</p><div class="launch-title"><div><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><a class="go" href="${href}">INSPECT →</a></div><p class="deployer">Deployed by <a href="${EXPLORER}/address/${esc(token.deployer)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(token.deployer))}</a>${token.creator && String(token.creator).toLowerCase() !== String(token.deployer).toLowerCase() ? ` &middot; creator <a href="${EXPLORER}/address/${esc(token.creator)}" target="_blank" rel="noopener noreferrer">${esc(shortAddress(token.creator))}</a>` : ''}</p><button class="ca-copy" type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span class="mono">${esc(shortAddress(token.token))}</span><span data-copy-label role="status" aria-live="polite">Copy CA</span></button><div class="curve-progress"><div><span>Curve progress</span><strong>${esc(progress.toFixed(2))}%</strong></div><progress max="100" value="${esc(progress)}">${esc(progress.toFixed(2))}%</progress></div><p class="launch-meta"><span>Block ${esc(whole(token.blockNumber))}</span><span>${esc(eventTime(token.blockTimestamp))}</span></p></div></article>`;
@@ -411,9 +388,29 @@ function relativeTime(iso, anchor = feed.observedAt) {
   const hours=Math.floor(minutes/60);if(hours<24)return `${hours}h ago`;
   return `${Math.floor(hours/24)}d ago`;
 }
+/**
+ * The card now comes from `website/assets/cards.mjs`, which the browser imports
+ * too. It was written here AND there, and the two copies had drifted four ways
+ * -- the cover link, the attribution, the percentage label, and the progress
+ * arithmetic. Structure is shared; the values this side knows stay here.
+ */
+/**
+ * The artwork block as a string, for the call sites that build HTML directly.
+ *
+ * A thin wrapper, not a second implementation: the structure comes from the
+ * shared model that the browser also renders, so the two cannot drift again.
+ */
+const tokenArt = (token) => toHtml(tokenArtModel(token));
+
 function launchpadCard(token) {
-  const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);const recent=relativeTime(latestCanonicalBuyTime(token));
-  return `<article class="launchpad-card"><a class="launchpad-card-link" href="${href}/" aria-label="Inspect ${esc(token.name)}"></a><div class="launchpad-media">${tokenArt(token)}<span class="protocol-badge" data-protocol-badge>V2</span></div><div class="launchpad-card-body"><h3>${esc(token.name)}</h3><p class="launchpad-symbol">$${esc(token.symbol)}</p><p class="launchpad-mcap" data-card-market-cap><strong>Market cap unavailable</strong></p><div class="launchpad-progress"><span>${esc(progress.toFixed(2))}% to graduation</span><progress max="100" value="${esc(progress)}" aria-label="Bonding curve progress to graduation">${esc(progress.toFixed(2))}%</progress></div><p class="launchpad-deployer">${token.creator ? `creator ${esc(shortAddress(token.creator))}` : `deployer ${esc(shortAddress(token.deployer))}`}</p><div class="launchpad-bottom"><button type="button" data-copy-address="${esc(token.token)}" aria-label="Copy contract address ${esc(token.token)}"><span>${esc(shortAddress(token.token))}</span><i data-copy-label role="status" aria-live="polite">Copy</i></button><time datetime="${esc(token.blockTimestamp || '')}" data-card-relative-time>${esc(recent)}</time></div></div></article>`;
+  return toHtml(launchpadCardModel({
+    token,
+    art: tokenArtModel(token),
+    // The static build has observed no price, and says so rather than leaving
+    // a gap the reader fills in.
+    marketCapLabel: 'Market cap unavailable',
+    relativeTime: relativeTime(latestCanonicalBuyTime(token)),
+  }));
 }
 
 function explore() {
