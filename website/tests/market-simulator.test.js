@@ -120,6 +120,68 @@ test('website wallet integration is read-only and exposes no signing or chain-mu
   assert.match(html, /Read-only/i);
 });
 
+/**
+ * A LOCAL CHAIN, SO "NOT FOUND" IS NOT A STATEMENT ABOUT THE NETWORK.
+ *
+ * This suite asserted that an unknown token answers 404. Reaching that answer
+ * requires discovery to SUCCEED and find nothing -- a token outside the snapshot
+ * triggers a real `eth_getLogs` sweep, and when that sweep fails the handler
+ * correctly says 503, because "we could not ask" is not "it does not exist".
+ *
+ * The handler was right and the test was wrong. It passed on a laptop and failed
+ * on GitHub's runners, where the public endpoint is slow or refused: 503 !== 404
+ * after 21.9 seconds. A test whose verdict depends on whether a third party
+ * answers is not testing this repository.
+ *
+ * So the chain is local here, and it can be switched from answering to refusing
+ * mid-test. That is the distinction the handler exists to make, and it can now
+ * be asserted in both directions offline. Modelled on `rpcPoolTransport.test.ts`:
+ * a real server on a real port, never a stub above the layer under test.
+ *
+ * The refusal is a flag rather than a per-token rule, because discovery sweeps
+ * for ALL launches in a range and matches the token locally -- the address never
+ * reaches the log filter, so a server cannot tell which token is being sought.
+ */
+const http = require('node:http');
+
+
+/**
+ * The head is derived from the committed snapshot, not written down.
+ *
+ * Discovery sweeps from just before `asOfBlock` up to the head. A head BELOW
+ * that start makes the sweep incomplete, which the handler reports as 503 -- so
+ * a hardcoded number would quietly stop testing the 404 path the first time the
+ * snapshot moved past it.
+ */
+const HEAD = `0x${(Number(require('../data/launches.json').asOfBlock) + 32).toString(16)}`;
+
+function localChain() {
+  const state = { refusing: false };
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        let call = {};
+        try { call = JSON.parse(body); } catch { /* answered as unknown below */ }
+        const send = (payload) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: call.id ?? 1, ...payload }));
+        };
+        if (call.method === 'eth_blockNumber') return send({ result: HEAD });
+        if (call.method === 'eth_getLogs') {
+          if (state.refusing) return send({ error: { code: -32000, message: 'log range unavailable' } });
+          return send({ result: [] });
+        }
+        return send({ result: '0x' });
+      });
+    });
+    server.listen(0, '127.0.0.1', () =>
+      resolve({ server, state, url: `http://127.0.0.1:${server.address().port}` })
+    );
+  });
+}
+
 test('server adapters whitelist verified launch identities and bound external calls', async () => {
   const market = read('netlify/functions/market-data.mjs');
   const simulator = read('netlify/functions/what-if.mjs');
@@ -132,17 +194,35 @@ test('server adapters whitelist verified launch identities and bound external ca
   assert.match(market + simulator, /AbortSignal\.timeout/);
   assert.match(market + simulator, /resolveVerifiedLaunch/);
   assert.doesNotMatch(market + simulator, /eth_sendRawTransaction|eth_sendTransaction|private.key|privateKey/i);
+  // Set before the first import: the modules read the endpoint into a const at
+  // load time, so a later assignment would be ignored in silence.
+  const chain = await localChain();
+  process.env.ROBINHOOD_RPC_URL = chain.url;
   const marketHandler = (await import('../../netlify/functions/market-data.mjs')).default;
   const whatIfHandler = (await import('../../netlify/functions/what-if.mjs')).default;
   const unknown = `0x${'9'.repeat(40)}`;
-  assert.equal((await marketHandler(new Request(`https://local/?token=${unknown}`))).status, 404);
+  try {
+    // Asked, and found nothing.
+    assert.equal((await marketHandler(new Request(`https://local/?token=${unknown}`))).status, 404);
+    // Could not ask. The same request shape, a different answer, and the reason
+    // it must never collapse into the one above: a reader told "not found" about
+    // their own launch would conclude it does not exist.
+    chain.state.refusing = true;
+    const unswept = await marketHandler(new Request(`https://local/?token=${unknown}`));
+    chain.state.refusing = false;
+    assert.equal(unswept.status, 503);
+    assert.match((await unswept.json()).problem, /unavailable/i);
   assert.equal((await whatIfHandler(new Request(`https://local/?token=${PSTONKS}&wallet=0x123`))).status, 400);
   assert.equal((await marketHandler(new Request('https://local/?token=garbage'))).status, 400);
   assert.equal((await whatIfHandler(new Request(`https://local/?token=garbage&wallet=0x${'1'.repeat(40)}`))).status, 400);
   const marketMethod=await marketHandler(new Request(`https://local/?token=${PSTONKS}`,{method:'POST'}));
   const whatIfMethod=await whatIfHandler(new Request(`https://local/?token=${PSTONKS}&wallet=0x${'1'.repeat(40)}`,{method:'POST'}));
-  assert.equal(marketMethod.status,405);assert.equal(marketMethod.headers.get('allow'),'GET');
-  assert.equal(whatIfMethod.status,405);assert.equal(whatIfMethod.headers.get('allow'),'GET');
+    assert.equal(marketMethod.status,405);assert.equal(marketMethod.headers.get('allow'),'GET');
+    assert.equal(whatIfMethod.status,405);assert.equal(whatIfMethod.headers.get('allow'),'GET');
+  } finally {
+    chain.server.close();
+    delete process.env.ROBINHOOD_RPC_URL;
+  }
 });
 
 test('What-if normalises exact chain Transfer logs without inventing timestamps', async () => {
