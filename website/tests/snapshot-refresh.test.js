@@ -78,6 +78,35 @@ test('a quiet day does not publish, and a new launch does', () => {
  * incremental scan has always been. So what is pinned now is the honesty of the
  * coverage figure, not the discarding of work.
  */
+/**
+ * THE ACCUMULATOR MUST NOT BE SHADOWED, AND THIS ONE WAITED FOR A STRANGER.
+ *
+ * `const observed = []` collects the refreshed launches at module scope. Inside
+ * the per-launch loop, the curve-activity read was ALSO called `observed`, so
+ * `observed.push(...)` at the end of that loop reached the activity object
+ * rather than the array.
+ *
+ * It could not fire on the three committed launches, which are carried forward
+ * unchanged without entering that path. It fired on the first genuinely new
+ * launch this repository ever processed — a real user's, on 2026-09-02 — and
+ * killed the refresh with `observed.push is not a function`.
+ *
+ * The quieter half is worse and is what this test really guards. Renaming only
+ * the declaration leaves `observed.state === 'complete'` reading `undefined` off
+ * an array: no crash, no message, and curve activity silently never recorded
+ * again. A shadow that throws is lucky; a shadow that merely answers wrongly is
+ * the one that ships.
+ */
+test('the launch accumulator is declared once and never shadowed', () => {
+  const script = read('scripts/refresh-snapshot.mjs');
+  const declarations = script.match(/\b(?:const|let|var)\s+observed\s*=/g) ?? [];
+  assert.equal(
+    declarations.length,
+    1,
+    `"observed" is declared ${declarations.length} times; an inner one shadows the accumulator`
+  );
+});
+
 test('a short scan banks what it read and never claims the head it did not reach', () => {
   const script = read('scripts/refresh-snapshot.mjs');
 

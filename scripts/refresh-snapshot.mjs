@@ -354,15 +354,15 @@ for (const launch of decoded) {
 
   let activity = prior.activity ?? null;
   const from = Math.max(Number(launch.blockNumber), Number(prior.activity?.observedThroughBlock ?? 0) - 128);
-  const observed = await collectCurveActivity({
+  const activityScan = await collectCurveActivity({
     rpc,
     curve: launch.curve,
     fromBlock: Math.max(DEPLOYMENT.startBlock, from),
     toBlock: head,
     initialChunk: 25_000,
   });
-  if (observed.state === 'complete') {
-    const events = [...(prior.activity?.events ?? []), ...observed.events];
+  if (activityScan.state === 'complete') {
+    const events = [...(prior.activity?.events ?? []), ...activityScan.events];
     const seen = new Set();
     const merged = events
       .filter((e) => {
@@ -374,7 +374,7 @@ for (const launch of decoded) {
       .sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
     activity = {
       state: 'observed',
-      observedThroughBlock: observed.throughBlock,
+      observedThroughBlock: activityScan.throughBlock,
       curveBuys: merged.filter((e) => e.kind === 'buy').length,
       curveSells: merged.filter((e) => e.kind === 'sell').length,
       observedAt,
