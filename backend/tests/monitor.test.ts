@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import { Db } from '../src/db';
-import { MockNotifier, Notifier, TreasuryMonitor, DEFAULT_THRESHOLDS, MonitorThresholds } from '../src/monitor';
+import { MockNotifier, TelegramNotifier, Notifier, TreasuryMonitor, DEFAULT_THRESHOLDS, MonitorThresholds } from '../src/monitor';
 import { TreasuryPolicy } from '../src/treasuryPolicy';
 import { LaunchRecord } from '../src/types';
 
@@ -303,5 +303,81 @@ describe('TreasuryMonitor -- hot/cold treasury split (Part 5 mitigation #7)', ()
     const assessment = await monitor.checkTreasuryBalance(forLaunches(100), 0n);
     expect(assessment.state).toBe('EMPTY');
     expect(notifier.kinds()).toEqual(['TREASURY_LOW']);
+  });
+});
+
+/**
+ * THE FIRST LINE IS THE WHOLE NOTIFICATION.
+ *
+ * A phone preview shows one line. The alert used to open
+ * `WARNING — LAUNCHPAD_CLOSED` -- a log level and a code constant -- and close
+ * with `2026-09-01T13:32:25.964Z`. It read as a log line pasted into a chat,
+ * and it never answered the only question that matters at three in the morning:
+ * do I have to get up?
+ */
+describe('the Telegram message is written for a person', () => {
+  const format = (alert: any) => (new TelegramNotifier('t', 'c') as any).format(alert);
+  const at = '2026-09-01T13:32:25.964Z';
+
+  it('answers "do I act?" in the first line, before anything else', () => {
+    const critical = format({ kind: 'CIRCUIT_BREAKER_TRIPPED', severity: 'critical', message: 'm', at });
+    const warning = format({ kind: 'LAUNCHPAD_CLOSED', severity: 'warning', message: 'm', at });
+    const info = format({ kind: 'MENTION_SWEEP_RECOVERED', severity: 'info', message: 'm', at });
+
+    expect(critical.split('\n')[0]).toMatch(/ACTION NEEDED/);
+    expect(warning.split('\n')[0]).toMatch(/Worth knowing/);
+    expect(info.split('\n')[0]).toMatch(/No action needed/);
+
+    // And the headline is readable, not a constant.
+    expect(critical.split('\n')[0]).toMatch(/Circuit breaker tripped/);
+    expect(critical.split('\n')[0]).not.toMatch(/CIRCUIT_BREAKER_TRIPPED/);
+  });
+
+  it('derives the headline rather than mapping it, so a new kind is never unlabelled', () => {
+    const out = format({ kind: 'SOME_FUTURE_ALERT', severity: 'warning', message: 'm', at });
+    expect(out.split('\n')[0]).toMatch(/Some future alert/);
+  });
+
+  it('keeps the constant searchable, at the end', () => {
+    const out = format({ kind: 'LAUNCHPAD_CLOSED', severity: 'warning', message: 'm', at });
+    const last = out.trim().split('\n').pop();
+    expect(last).toMatch(/^LAUNCHPAD_CLOSED/);
+    expect(last).toMatch(/13:32 UTC/);
+    // The machine timestamp is gone: Telegram stamps every message itself and a
+    // second clock with milliseconds is not something a person reads.
+    expect(out).not.toContain('2026-09-01T13:32:25.964Z');
+  });
+
+  it('renders detail as lines a person can read, not a JSON blob', () => {
+    const out = format({
+      kind: 'CIRCUIT_BREAKER_TRIPPED',
+      severity: 'critical',
+      message: 'm',
+      detail: { spentWei: '10000000000000000', launchesToday: 19 },
+      at,
+    });
+    expect(out).toMatch(/^spentWei: 10000000000000000$/m);
+    expect(out).toMatch(/^launchesToday: 19$/m);
+    expect(out).not.toMatch(/[{}]/);
+  });
+
+  it('stays inside Telegram\'s limit however long the detail is', () => {
+    const out = format({
+      kind: 'LAUNCH_FAILED',
+      severity: 'critical',
+      message: 'm',
+      detail: Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`key${i}`, 'x'.repeat(400)])),
+      at,
+    });
+    // A detail blob that pushed past 4096 would take the whole alert down.
+    expect(out.length).toBeLessThan(4096);
+  });
+
+  it('carries no parse_mode syntax that a token symbol could break', () => {
+    // `_MOON_` in Markdown mode makes the API refuse the message. Plain text
+    // always sends, so the format must not start relying on markup.
+    const out = format({ kind: 'LAUNCH_FAILED', severity: 'critical', message: 'Symbol _MOON_ failed', at });
+    expect(out).toContain('_MOON_');
+    expect(out).not.toMatch(/<\/?b>|\*\*/);
   });
 });

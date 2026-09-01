@@ -122,18 +122,64 @@ export class TelegramNotifier implements Notifier {
     private fallback: Notifier = new ConsoleNotifier()
   ) {}
 
+  /**
+   * WRITTEN FOR A PHONE AT THREE IN THE MORNING.
+   *
+   * This used to open `WARNING — LAUNCHPAD_CLOSED` and close with
+   * `2026-09-01T13:32:25.964Z`: a log level, a code constant, and a machine
+   * timestamp with milliseconds, wrapped around a paragraph. It reads as a log
+   * line pasted into a chat, and that is what the operator called it.
+   *
+   * A notification preview shows the FIRST LINE and nothing else. So that line
+   * has to answer the only question that matters when a phone buzzes: do I have
+   * to get up? "ACTION NEEDED" and "No action needed" are the two answers, and
+   * they come first.
+   *
+   * The constant moves to the last line, where it stays searchable without
+   * being the headline. The ISO timestamp goes: Telegram stamps every message
+   * itself, and a second clock with milliseconds adds nothing a person reads.
+   * A short UTC time stays, because an alert forwarded out of the app loses
+   * Telegram's own.
+   *
+   * Still no parse_mode, for the reason above: these carry user-supplied token
+   * symbols, and `_MOON_` would make the API refuse the whole message.
+   */
   private format(alert: Alert): string {
-    const lines = [
-      `${alert.severity.toUpperCase()} — ${alert.kind}`,
-      '',
-      alert.message,
-    ];
+    const lead: Record<Alert['severity'], string> = {
+      critical: '\u{1F534} ACTION NEEDED',
+      warning: '\u{1F7E1} Worth knowing',
+      info: '\u{1F7E2} No action needed',
+    };
+
+    // `LAUNCHPAD_CLOSED` -> `Launchpad closed`. Readable as a headline, and
+    // derived rather than mapped, so a new alert kind cannot arrive unlabelled.
+    const headline = alert.kind
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/^./, (c) => c.toUpperCase());
+
+    const lines = [`${lead[alert.severity]} — ${headline}`, '', alert.message];
+
     if (alert.detail && Object.keys(alert.detail).length > 0) {
-      // Truncated: Telegram caps a message at 4096 characters, and a detail blob that pushes
-      // past it would take the whole alert down with it.
-      lines.push('', JSON.stringify(alert.detail, null, 2).slice(0, 1500));
+      /**
+       * One `key: value` per line rather than a JSON blob.
+       *
+       * The blob was up to 1500 characters of braces and quotes in the middle
+       * of a chat message. Still bounded, and for the same reason: Telegram
+       * caps a message at 4096 characters and an oversized detail would take
+       * the whole alert down with it.
+       */
+      const detail = Object.entries(alert.detail)
+        .map(([key, value]) => {
+          const rendered = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
+          return `${key}: ${rendered.length > 160 ? `${rendered.slice(0, 157)}...` : rendered}`;
+        })
+        .join('\n')
+        .slice(0, 1200);
+      if (detail) lines.push('', detail);
     }
-    lines.push('', alert.at);
+
+    lines.push('', `${alert.kind} · ${alert.at.slice(11, 16)} UTC`);
     return lines.join('\n');
   }
 
