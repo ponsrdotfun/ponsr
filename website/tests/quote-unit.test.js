@@ -81,3 +81,121 @@ test('no renderer hardcodes the unit onto a curve amount', () => {
     assert.doesNotMatch(source, /Net ETH flow/, `${file} hardcodes the flow heading`);
   }
 });
+
+/**
+ * A TOKEN'S PICTURE IS PLACED IN ITS FRAME, NOT CROPPED TO FIT IT.
+ *
+ * Measured on NOBI's page at 1600px wide. `.dynamic-token-panel .token-art`
+ * carried `width:100%`, `aspect-ratio:1.6` AND `max-height:420px`, and the
+ * three fought: the ratio wanted a 697px tall box, the cap forced 418px, so the
+ * frame resolved to 1115x418 -- 2.67:1. With `object-fit:cover` a square photo
+ * lost most of its height, and a cat came out as a collar.
+ *
+ * This repository has already recorded one bug of exactly this shape: two rules
+ * fighting over the same element.
+ */
+test('the token panel frames the picture instead of cropping it', () => {
+  const css = read('website/assets/site.css');
+  const rule = css.match(/\.dynamic-token-panel \.token-art \{[^}]*\}/)?.[0] ?? '';
+  assert.ok(rule, 'the token panel art rule was not found');
+
+  // A capped height beside a fixed ratio is the fight itself.
+  assert.doesNotMatch(rule, /max-height: *\d/, 'a height cap can override the aspect ratio');
+  assert.doesNotMatch(rule, /aspect-ratio: *1\.6/, 'the banner ratio is back');
+  assert.match(rule, /aspect-ratio: *1\b/);
+  assert.match(rule, /width: *min\(/, 'the frame is unbounded on a wide screen');
+
+  // And the picture is fitted whole, at any aspect ratio.
+  const img = css.match(/\.dynamic-token-panel \.token-art\.has-image img \{[^}]*\}/)?.[0] ?? '';
+  assert.match(img, /object-fit: *contain/, 'the picture is still cropped to the frame');
+});
+
+/**
+ * EVERY LAUNCH NAMES ITS FEE SPLITTER.
+ *
+ * The launch event does not carry the splitter, so the feed published
+ * `splitter: null` for every launch except the one committed by hand, and the
+ * token page showed an empty "Fee splitter" row.
+ *
+ * Nothing was ever lost by that -- the splitter exists and is correctly wired
+ * on chain, and the backend records it in `launch_provenance`. It was the SITE
+ * that could not see it. Verified independently for NOBI's: creator() is the
+ * launcher's wallet, treasury() is Ponsr's, and escrow() is the current V2
+ * deployment's own escrow.
+ */
+test('the feed names a splitter for every launch', () => {
+  const feed = JSON.parse(read('website/data/launches.json'));
+  for (const launch of feed.launches) {
+    assert.match(
+      String(launch.splitter ?? ''),
+      /^0x[a-fA-F0-9]{40}$/,
+      `${launch.symbol} has no fee splitter`
+    );
+  }
+});
+
+test('the splitter is decoded only from THIS deployment\u2019s calldata', async () => {
+  const { DEPLOYMENT } = await import('../../netlify/functions/lib/collector.mjs');
+  const script = read('scripts/refresh-snapshot.mjs');
+
+  // The layout belongs to the deployment, not to the script: a superseded
+  // factory takes a different tuple, and the same word offset there is a
+  // different field -- which yields a plausible address that is not a splitter.
+  assert.equal(DEPLOYMENT.launchSelector, '0xf35abbcf');
+  assert.equal(DEPLOYMENT.feeWalletWord, 8);
+  assert.match(script, /startsWith\(DEPLOYMENT\.launchSelector\)/);
+  assert.match(script, /DEPLOYMENT\.feeWalletWord/);
+
+  // A word holding twenty non-zero bytes is not a splitter.
+  assert.match(script, /eth_getCode/);
+  assert.match(script, /is not a contract; leaving the splitter unrecorded/);
+
+  // And a committed splitter is never overwritten, nor quietly contradicted.
+  assert.match(script, /committed splitter \$\{prior\.splitter\} is not what the calldata reports/);
+});
+
+/**
+ * A FEE FIGURE IS NEVER INVENTED BY A FAILURE.
+ *
+ * The account pages carried four boxes all reading "Unavailable" -- accrued,
+ * claimable, queued, paid -- on a page 972px tall carrying 115 words. It read as
+ * broken rather than as not-yet, and it was neither: the numbers exist and are
+ * public. Measured the day this was written, 0.02052 NVDA was waiting for
+ * Microduck's splitter and 0.00944 SPCX for NOBI's.
+ *
+ * The distinction the endpoint must never lose is between "nothing accrued" and
+ * "we could not ask". One of those tells a creator there is no money waiting.
+ */
+test('the escrow endpoint reports an unreadable balance as unavailable, never as zero', async () => {
+  const source = read('netlify/functions/creator-fees.mjs');
+  // The cell starts unavailable and is only promoted by a successful read, so a
+  // failure cannot leave a zero behind.
+  assert.match(source, /state: 'unavailable', problem: 'The escrow balance could not be read\.'/);
+  assert.match(source, /cell\.state = 'observed'/);
+  assert.doesNotMatch(source, /accruedWei: '0'/);
+
+  // Every balance is asked for at once: sequential reads divide one deadline
+  // into slices, and a single slow call starves the ones behind it.
+  assert.match(source, /await Promise\.all\(jobs\)/);
+
+  // The selector is the computed one. A wrong selector does not fail loudly --
+  // it calls something else and returns a number that looks like money.
+  const { keccak256, toUtf8Bytes } = await import('ethers');
+  const expected = keccak256(toUtf8Bytes('balanceOfToken(address,address)')).slice(0, 10);
+  assert.ok(source.includes(expected), `the escrow selector is not ${expected}`);
+});
+
+test('the escrow record does not claim to be anybody\u2019s', () => {
+  const source = read('netlify/functions/creator-fees.mjs');
+  // This endpoint knows nothing about who is asking, and says so in the payload
+  // itself -- a consumer that renders it without reading the docs must still
+  // render it honestly.
+  assert.match(source, /scope: 'public-record'/);
+  assert.match(source, /not account-scoped/i);
+
+  const build = read('scripts/build-website.mjs');
+  assert.match(build, /Public record &middot; no account required/);
+  // The creator share is quoted from the splitter's own constants, not from the
+  // headline share of trading fees, which is measured further upstream.
+  assert.match(source, /CREATOR_BPS = 9500n/);
+});

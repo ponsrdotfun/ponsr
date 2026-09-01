@@ -231,6 +231,15 @@
       "explicitGate": "--execute"
     },
     {
+      "script": "turnkey-verify-claim.ts",
+      "authority": "signing",
+      "effects": [
+        "requests allow and deny test signatures for a fee claim",
+        "never broadcasts"
+      ],
+      "defaultMode": "signer-active"
+    },
+    {
       "script": "turnkey-verify-policy.ts",
       "authority": "signing",
       "effects": [

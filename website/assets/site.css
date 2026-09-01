@@ -621,7 +621,7 @@ p { margin: 0; }
 .launchpad-media .token-art small { left:.55rem; bottom:.45rem; max-width:calc(100% - 1.1rem); font-size:.5rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .protocol-badge { position:absolute; z-index:3; left:.45rem; top:.45rem; padding:.18rem .38rem; border:1px solid rgba(130,227,179,.34); border-radius:6px; color:var(--emerald-bright); background:rgba(5,11,9,.86); font-family:var(--font-mono); font-size:.53rem; font-weight:800; }
 .launchpad-card-body { display:grid; gap:.25rem; padding:.58rem; }
-.launchpad-card-body h3 { min-width:0; font-family:var(--font-sans); font-size:.78rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.launchpad-card-body h3 { min-width:0; font-family:var(--font-body); font-size:.78rem; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .launchpad-card-body h3 a { position:relative; z-index:2; color:var(--ivory); text-decoration:none; }
 .launchpad-symbol,.launchpad-deployer { min-width:0; color:var(--dim); font-size:.59rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .launchpad-mcap { min-height:1.1rem; color:var(--silver); font-size:.65rem; }
@@ -716,7 +716,9 @@ p { margin: 0; }
 @media (max-width:600px) { .dossier-head { display:grid; } .dossier-head h2 { max-width:none; } .dossier-chip { justify-self:start; font-size:.68rem; } .dossier-row { padding:.52rem 0; } .dossier-index { font-size:.68rem; } .dossier-row>div { grid-template-columns:1fr; gap:.22rem; } .dossier-row dt,.dossier-row dd { font-size:.82rem; text-align:left; } .mechanics-state { align-items:flex-start; flex-direction:column; } .mechanics-state p { text-align:left; } .mechanics-state span,.reserve-metric-grid span,.observation-grid span,.curve-state-row>span { font-size:.68rem; } .reserve-metric-grid,.observation-grid,.verification-grid { grid-template-columns:1fr; } }
 .token-identity-strip { width:var(--shell); margin-inline:auto; display:grid; grid-template-columns:88px minmax(0,1fr) minmax(220px,.42fr); gap:1rem; align-items:center; padding:.85rem 0; }
 .token-identity-strip .token-art { width:88px; aspect-ratio:1; border:1px solid var(--line-soft); border-radius:14px; }
-.token-identity-strip .art-symbol { max-width:82%; font-size:1rem; letter-spacing:-.07em; }
+/* 92%, matching the card: the size formula is calibrated against that share of
+   the box, and at 82% a nine-character ticker clipped in an 82px square. */
+.token-identity-strip .art-symbol { max-width:92%; letter-spacing:-.07em; }
 .token-identity-main { min-width:0; display:grid; gap:.35rem; }
 .token-identity-main h1 { font-size:clamp(2rem,4vw,3.35rem); line-height:.92; }
 .identity-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.45rem; }
@@ -1062,10 +1064,17 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
 .token-art.has-image img { width:100%; height:100%; display:block; object-fit:cover; filter:saturate(.94) contrast(1.03); transition:transform .55s var(--ease),filter .55s var(--ease); }
 @media (hover:hover) and (pointer:fine) { .token-card:hover .token-art.has-image img,.launchpad-card:hover .token-art.has-image img { transform:scale(1.025); filter:saturate(1) contrast(1.04); } }
 .dynamic-token-panel .proof-id { min-width:0; }
-.dynamic-token-panel .token-art { width:100%; max-height:420px; aspect-ratio:1.6; border:1px solid var(--line-soft); border-radius:14px; }
+/* The picture is PLACED, not cropped. `aspect-ratio:1.6` and `max-height:420px`
+   fought each other: measured on NOBI's page at 1600px, the ratio wanted a
+   697px tall box and the cap forced 418px, so the frame became 2.67:1 and
+   `cover` threw away most of a square photo -- a cat reduced to its collar.
+   A bounded square frame with `contain` shows whatever the launcher
+   attached, whole, at any aspect ratio. */
+.dynamic-token-panel .token-art { width:min(100%,420px); max-height:none; aspect-ratio:1; margin-inline:auto; border:1px solid var(--line-soft); border-radius:18px; }
+.dynamic-token-panel .token-art.has-image img { object-fit:contain; }
 .token-description { max-width:68ch; color:var(--steel); line-height:1.52; text-wrap:pretty; overflow-wrap:break-word; word-break:normal; hyphens:none; margin:.12rem 0 .28rem; }
 .token-identity-main .token-description { font-size:.9rem; }
-@media (max-width:520px) { .dynamic-token-panel .token-art { aspect-ratio:1.45; max-height:280px; } .token-description { line-height:1.48; margin-bottom:.18rem; } .token-identity-main .token-description { grid-column:1 / -1; font-size:.84rem; } }
+@media (max-width:520px) { .dynamic-token-panel .token-art { width:min(100%,300px); aspect-ratio:1; } .token-description { line-height:1.48; margin-bottom:.18rem; } .token-identity-main .token-description { grid-column:1 / -1; font-size:.84rem; } }
 
 @media (max-width: 420px) {
   :root { --shell: min(1180px, 100% - 1.6rem); }
@@ -1077,3 +1086,496 @@ main[data-token-address] > .status-strip .gate { flex:1 1 28ch; white-space:norm
   .sheen::after { display: none; }
   .bot { overflow: clip; border-radius: 50%; }
 }
+
+/* --------------------------------------------------------------------------
+   ESCROW RECORD ON THE FEES PAGE
+
+   The page carried four boxes all reading "Unavailable" and 115 words in 972px.
+   This panel is the part that was never private, so it is dense on purpose:
+   a figure per asset per launch, aligned so a reader compares down a column
+   rather than hunting across a card.
+
+   Motion is entry only, and once. A number that moves while being read is a
+   number a reader distrusts, and this one is money.
+   -------------------------------------------------------------------------- */
+.fee-escrow-rows { display:grid; gap:.7rem; }
+.fee-escrow-row { border:1px solid var(--line-soft); border-radius:16px; padding:.9rem 1rem; background:linear-gradient(158deg,rgba(18,26,24,.72),rgba(7,10,13,.72)); }
+.fee-escrow-head { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; margin-bottom:.65rem; }
+.fee-escrow-head strong { display:block; font-family:var(--font-mono); font-size:.92rem; letter-spacing:.04em; color:var(--ivory); }
+.fee-escrow-head small { display:block; color:var(--dim); font-size:.74rem; }
+.fee-escrow-assets { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.55rem; }
+
+.fee-asset { border:1px solid var(--line-soft); border-radius:12px; padding:.6rem .7rem; background:rgba(6,9,11,.55); display:grid; gap:.18rem; }
+.fee-asset > span { color:var(--dim); font-family:var(--font-mono); font-size:.61rem; letter-spacing:.09em; text-transform:uppercase; }
+/* Tabular figures so digits line up down the column; a fee table that jitters
+   between rows is harder to compare than one that is simply smaller. */
+.fee-asset strong { font-family:var(--font-mono); font-size:1.02rem; color:var(--ivory); font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+.fee-asset small { color:var(--emerald-bright); font-family:var(--font-mono); font-size:.7rem; font-variant-numeric:tabular-nums; }
+/* An unreadable balance is dimmed, never dressed as a zero. */
+.fee-asset.unavailable strong { color:var(--dim); font-size:.86rem; }
+.fee-asset.unavailable small { color:var(--dim); }
+
+/* The claim control sits inside the asset cell it applies to, so there is never
+   a question of WHICH balance a button would collect. It stays quiet until
+   hovered: the number is the subject of the cell, not the button. */
+.fee-claim { display:grid; gap:.3rem; margin-top:.45rem; }
+.fee-claim .btn { width:max-content; padding:.32rem .7rem; font-size:.68rem; letter-spacing:.08em; }
+.fee-claim-note { color:var(--dim); font-size:.68rem; line-height:1.45; font-family:var(--font-mono); }
+.fee-claim[data-claim='sent'] .fee-claim-note { color:var(--emerald-bright); }
+.fee-claim[data-claim='policy-refused'] .fee-claim-note { color:var(--amber); }
+.fee-claim .text-link { font-size:.68rem; }
+.fee-claim .btn[disabled] { opacity:.45; cursor:default; }
+
+.fee-escrow .note-inline { color:var(--dim); font-size:.82rem; margin:0; }
+
+/* Entry only: rows fade up once as the panel arrives, then hold still. */
+@media (prefers-reduced-motion:no-preference) {
+  .fee-escrow-row { animation:feeRowIn .42s var(--ease) both; }
+  .fee-escrow-row:nth-child(2) { animation-delay:.06s; }
+  .fee-escrow-row:nth-child(3) { animation-delay:.12s; }
+  .fee-escrow-row:nth-child(n+4) { animation-delay:.18s; }
+  @keyframes feeRowIn { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
+}
+
+/* --------------------------------------------------------------------------
+   AN ABSENT VALUE SPEAKS QUIETLY
+
+   `.account-stat strong` is bright silver at the value size. "Unavailable"
+   therefore arrived in exactly the voice a real figure uses, and four of them
+   on one page is why the fees page read as broken rather than as not-yet.
+
+   Nothing is hidden: the word stays, the reason stays, and the card keeps its
+   place so the layout does not shift when a value does arrive. It simply stops
+   competing with the facts around it.
+   -------------------------------------------------------------------------- */
+.account-stat.is-unavailable { background:linear-gradient(145deg,rgba(18,22,25,.6),rgba(7,9,11,.86)); border-color:rgba(196,205,218,.09); }
+.account-stat.is-unavailable strong { color:var(--dim); font-family:var(--font-mono); font-size:.86rem; letter-spacing:.06em; text-transform:uppercase; }
+/* The reason is what a reader actually needs from an empty box, so it is the
+   line that keeps its weight. */
+.account-stat.is-unavailable span { color:var(--steel); }
+
+/* --------------------------------------------------------------------------
+   THE CUSTODY BOUNDARY IS A STATE, NOT AN ALERT
+
+   It appeared on all six account routes, in amber, with an infinite scanning
+   sweep — the loudest element on every page, saying the same thing each time,
+   about a condition that is not going to change while you read.
+
+   Amber also broke the palette: every other surface is emerald, so the eye was
+   pulled to the least actionable thing on screen. It reads as a status strip
+   now, in the system's own colour, and it holds still.
+   -------------------------------------------------------------------------- */
+.custody-boundary { border-color:rgba(70,200,140,.18); background:linear-gradient(105deg,rgba(12,26,21,.82),rgba(7,10,13,.95)); padding:.72rem .95rem; }
+.custody-boundary::after { display:none; }
+.custody-boundary .account-lock { color:var(--emerald-bright); }
+.custody-boundary .signed-out-label { color:var(--emerald-bright); }
+.custody-boundary strong { font-size:.92rem; }
+.custody-boundary p { font-size:.74rem; color:var(--dim); }
+
+/* --------------------------------------------------------------------------
+   A BADGE THAT SAYS "THE DATA IS HERE" MUST NOT LOOK LIKE ONE THAT SAYS IT IS NOT
+
+   `.status-readonly` existed in the markup and changed nothing: both badges
+   computed to the same amber, so "Public read-only" — a panel full of real,
+   verifiable figures — wore the exact colour of "Account unavailable". Two
+   opposite meanings, one appearance.
+   -------------------------------------------------------------------------- */
+.state-badge.status-readonly { color:var(--emerald-bright); border-color:rgba(70,200,140,.32); background:rgba(70,200,140,.07); }
+
+/* --------------------------------------------------------------------------
+   ONE VOICE PER PAGE
+
+   The fees route carried an h1 at 64px and then two panel headings at 46.4px —
+   three display lines competing, so nothing led. The page title keeps its size;
+   a panel is a section within it and now reads as one.
+   -------------------------------------------------------------------------- */
+.account-module-head h2,
+.account-primary h2,
+/* The availability panel sits beside .account-primary and fell through to the
+   global h2 at 29.6px, so one column shouted while the other spoke. */
+.account-side h2 { font-size:clamp(1.35rem,2.4vw,1.75rem); letter-spacing:-.01em; }
+
+/* Panels arrive once, in order, and then hold still. Anything that keeps moving
+   under a figure makes the figure harder to trust. */
+@media (prefers-reduced-motion:no-preference) {
+  .account-workspace-body > .panel { animation:accountPanelIn .44s var(--ease) both; }
+  .account-workspace-body > .panel:nth-child(2) { animation-delay:.07s; }
+  .account-workspace-body > .panel:nth-child(n+3) { animation-delay:.13s; }
+  @keyframes accountPanelIn { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:none; } }
+}
+
+/* --------------------------------------------------------------------------
+   THE PUBLIC LAUNCH RECORD ON THE ACCOUNT ROUTE
+
+   A row per launch, columns aligned so a reader compares down rather than
+   across — the same reason the escrow figures are tabular. Whole rows are the
+   link, because a link that is only the symbol makes the rest of the row look
+   inert when it is the part being read.
+   -------------------------------------------------------------------------- */
+.public-launch-rows { display:grid; gap:.5rem; }
+.public-launch-row { display:grid; grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr)) auto; align-items:center; gap:1rem; padding:.72rem .9rem; border:1px solid var(--line-soft); border-radius:14px; background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.72)); text-decoration:none; transition:border-color .2s var(--ease),transform .2s var(--ease),background .2s var(--ease); }
+@media (hover:hover) and (pointer:fine) {
+  .public-launch-row:hover { border-color:rgba(70,200,140,.34); transform:translateX(2px); background:linear-gradient(158deg,rgba(22,34,30,.72),rgba(8,12,15,.8)); }
+}
+.public-launch-row:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }
+.public-launch-id strong { display:block; font-family:var(--font-mono); font-size:.9rem; color:var(--ivory); letter-spacing:.04em; }
+.public-launch-id small { display:block; color:var(--dim); font-size:.74rem; }
+.public-launch-cell { display:grid; gap:.12rem; min-width:0; }
+.public-launch-cell span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.public-launch-cell strong { font-family:var(--font-mono); font-size:.8rem; color:var(--steel); font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.public-launch-go { color:var(--emerald-bright); font-style:normal; }
+.public-launches .note-inline { color:var(--dim); font-size:.82rem; margin:0; }
+
+/* Columns collapse before they crush: four cells at 1fr each stop being
+   readable well before the viewport does. */
+@media (max-width:760px) {
+  .public-launch-row { grid-template-columns:minmax(0,1fr) auto; row-gap:.5rem; }
+  .public-launch-cell { grid-column:1 / -1; grid-template-columns:auto 1fr; display:grid; align-items:baseline; gap:.5rem; }
+  .public-launch-cell strong { text-align:right; }
+}
+
+/* --------------------------------------------------------------------------
+   THE BOARD: LET THE TOKEN LEAD ITS OWN CARD
+
+   Measured on a card 190px wide: the token's name was 12.48px at weight 400,
+   while "Market cap unavailable" sat beside it at weight 650. The card's
+   headline was outranked by a line saying a number is missing — the same defect
+   as the account pages, in the one place a reader looks first.
+
+   Nothing here changes what a card says. The name leads because it is the
+   identity; the metric supports because it is data about it, and that ordering
+   holds whether the number is missing or present.
+   -------------------------------------------------------------------------- */
+.launchpad-card-body h3 { font-size:.94rem; letter-spacing:-.01em; }
+.launchpad-card-body h3 a { color:var(--ivory); }
+.launchpad-symbol { font-size:.72rem; letter-spacing:.05em; }
+/* 650 -> 550, and a step down in colour. Legible when a real figure arrives,
+   never louder than the token it belongs to. */
+.launchpad-mcap strong { font-weight:550; color:var(--steel); }
+
+/* Five fixed columns put 8px type in a 190px card. A floor lets the grid choose
+   how many fit and gives the art and the name room to be read. */
+.launchpad-grid { grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:.8rem; }
+@media (max-width:900px) { .launchpad-grid { grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } }
+
+/* --------------------------------------------------------------------------
+   MOTION THAT SETTLES
+
+   `premiumCardIn` already existed and ran on every card at once, so the board
+   arrived as one block. A short stagger reads as the row assembling rather than
+   appearing, and it costs nothing — the cards are already animating.
+
+   Capped at the sixth card: a stagger that keeps growing makes the last card on
+   a long board feel broken rather than considered.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion:no-preference) {
+  .ready .launchpad-card:nth-child(2) { animation-delay:.05s; }
+  .ready .launchpad-card:nth-child(3) { animation-delay:.1s; }
+  .ready .launchpad-card:nth-child(4) { animation-delay:.15s; }
+  .ready .launchpad-card:nth-child(5) { animation-delay:.2s; }
+  .ready .launchpad-card:nth-child(n+6) { animation-delay:.24s; }
+}
+
+/* --------------------------------------------------------------------------
+   FACTS A STRANGER CAN CHECK
+
+   The security page carried four "Unavailable" rows and nothing a visitor could
+   verify, on the subject where verifying is the whole point. Those four
+   genuinely wait for a sign-in; these do not.
+
+   Addresses are the content, so they are set in mono at a size meant to be read
+   and compared against an explorer, not decorated.
+   -------------------------------------------------------------------------- */
+.verifiable-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; }
+.verifiable-fact { display:grid; gap:.22rem; padding:.7rem .8rem; border:1px solid var(--line-soft); border-radius:13px; background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.74)); min-width:0; }
+.verifiable-fact > span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.verifiable-fact strong { font-family:var(--font-mono); font-size:.76rem; color:var(--ivory); overflow-wrap:anywhere; font-weight:500; }
+.verifiable-fact small { color:var(--steel); font-size:.72rem; line-height:1.45; }
+
+/* The gate is the one fact here that changes, so it is given its own weight and
+   its own colour once it is known. */
+.verifiable-gate { display:grid; gap:.22rem; margin-top:.6rem; padding:.75rem .85rem; border:1px solid var(--line-soft); border-radius:13px; background:rgba(6,9,11,.6); }
+.verifiable-gate > span { color:var(--dim); font-family:var(--font-mono); font-size:.6rem; letter-spacing:.09em; text-transform:uppercase; }
+.verifiable-gate strong { font-family:var(--font-mono); font-size:1rem; letter-spacing:.03em; color:var(--steel); }
+.verifiable-gate small { color:var(--steel); font-size:.72rem; }
+.verifiable-gate[data-gate='closed'] { border-color:rgba(70,200,140,.24); }
+.verifiable-gate[data-gate='closed'] strong { color:var(--emerald-bright); }
+.verifiable-gate[data-gate='open'] { border-color:rgba(224,179,104,.3); }
+.verifiable-gate[data-gate='open'] strong { color:var(--amber); }
+/* Unknown is neither reassuring nor alarming: it is dim, because a gate nobody
+   could read must not be mistaken for one that is shut. */
+.verifiable-gate[data-gate='unknown'] strong { color:var(--dim); }
+
+/* --------------------------------------------------------------------------
+   A CARD IS NOT A TEXT LINK
+
+   The what-if directory renders each launch as `<a class="token-card">`, and the
+   anchor's own underline is drawn across everything inside it: the name, the
+   symbol, "OPEN LAB →", and the provenance footnote all arrived underlined.
+   Each child computes `text-decoration: none` individually, which is why this
+   survived — the line belongs to the anchor, not to them.
+
+   Removing it takes the affordance away, so it is replaced with one that suits
+   a card: the border lifts and the whole surface moves a little.
+   -------------------------------------------------------------------------- */
+a.token-card { text-decoration:none; }
+@media (hover:hover) and (pointer:fine) {
+  a.token-card { transition:border-color .22s var(--ease),transform .22s var(--ease),background .22s var(--ease); }
+  a.token-card:hover { border-color:rgba(70,200,140,.32); transform:translateY(-2px); }
+  a.token-card:hover .go { color:var(--emerald-bright); }
+}
+a.token-card:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:3px; }
+
+/* The provenance line is identical on every card in the directory, so it is
+   context rather than content. At 13.44px it was competing with the symbol. */
+.simulator-directory .token-card .footer-note { font-size:.72rem; color:var(--dim); line-height:1.45; }
+
+/* --------------------------------------------------------------------------
+   THE TICKER MUST FIT THE CARD IT IS THE ART OF
+
+   Measured: at 16cqi a nine-character ticker needs 208px of a 211px box, and a
+   twelve-character one needs 256px — so it clipped mid-character, which is the
+   same ugliness the placeholder was replaced to remove, moved one token along.
+
+   CSS cannot measure text, so the renderer publishes the length and the size is
+   divided by it. 140cqi is calibrated from the real face: nine characters
+   measured 208px at 36.6px, which is ~0.63em per character.
+   -------------------------------------------------------------------------- */
+.token-art .art-symbol { overflow:hidden; text-overflow:ellipsis; }
+/* One static rule per ticker length, because CSS cannot measure text and an
+   inline custom property would be an inline style -- which this site's CSP
+   forbids and a test enforces. 140 is calibrated from the real face: nine
+   characters measured 208px at 36.6px, about 0.63em each. */
+.token-art .art-symbol[data-art-len='1'] { font-size:min(16cqi,140.0cqi); }
+.token-art .art-symbol[data-art-len='2'] { font-size:min(16cqi,70.0cqi); }
+.token-art .art-symbol[data-art-len='3'] { font-size:min(16cqi,46.67cqi); }
+.token-art .art-symbol[data-art-len='4'] { font-size:min(16cqi,35.0cqi); }
+.token-art .art-symbol[data-art-len='5'] { font-size:min(16cqi,28.0cqi); }
+.token-art .art-symbol[data-art-len='6'] { font-size:min(16cqi,23.33cqi); }
+.token-art .art-symbol[data-art-len='7'] { font-size:min(16cqi,20.0cqi); }
+.token-art .art-symbol[data-art-len='8'] { font-size:min(16cqi,17.5cqi); }
+.token-art .art-symbol[data-art-len='9'] { font-size:min(16cqi,15.56cqi); }
+.token-art .art-symbol[data-art-len='10'] { font-size:min(16cqi,14.0cqi); }
+.token-art .art-symbol[data-art-len='11'] { font-size:min(16cqi,12.73cqi); }
+.token-art .art-symbol[data-art-len='12'] { font-size:min(16cqi,11.67cqi); }
+/* The divisor is calibrated on average glyph width, so a ticker of unusually
+   wide letters can still exceed it. Chasing that case with arithmetic would
+   make every ordinary ticker needlessly small, so the rare one ends in an
+   ellipsis instead of being cut through the middle of a letter. */
+
+/* --------------------------------------------------------------------------
+   THE HEADER SHOULD LOOK LIKE NAVIGATION, NOT LIKE FINE PRINT
+
+   Measured at 1440px: the bar is 1180px wide and `space-between`, so the brand
+   sits at one edge and three links at the other with a wide emptiness between.
+   The links were 14.4px at weight 400 — the size of body copy, at the edge of
+   the screen, which is why the header read as unfinished.
+
+   They are grouped into a segmented control instead. That is not a new idea
+   here: the board's own sort tabs are exactly this shape, so the header now
+   speaks the language the rest of the site already uses.
+   -------------------------------------------------------------------------- */
+.nav-links {
+  gap:.25rem;
+  padding:.28rem;
+  border:1px solid var(--line-soft);
+  border-radius:999px;
+  background:linear-gradient(158deg,rgba(18,26,24,.6),rgba(7,10,13,.72));
+  backdrop-filter:blur(6px);
+}
+.nav-links a {
+  padding:.42rem .95rem;
+  border-radius:999px;
+  font-size:.84rem;
+  font-weight:520;
+  letter-spacing:.01em;
+  transition:color .2s var(--ease),background .2s var(--ease);
+}
+@media (hover:hover) and (pointer:fine) {
+  .nav-links a:hover { background:rgba(70,200,140,.08); }
+}
+/* The current page is a filled segment rather than an underline: inside a
+   control, a rule underneath reads as a stray line. */
+.nav-links a[aria-current="page"] { background:rgba(70,200,140,.13); color:var(--ivory); }
+.nav-links a[aria-current="page"]::after { display:none; }
+.nav-links a:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }
+
+/* A little more height, so the bar has presence without becoming furniture. */
+.nav { padding-block:.62rem; }
+
+@media (max-width:560px) {
+  .nav-links { gap:.15rem; padding:.22rem; }
+  .nav-links a { padding:.38rem .7rem; font-size:.78rem; }
+}
+
+/* --------------------------------------------------------------------------
+   THE FIRST THING A VISITOR SEES SHOULD MOVE TOO
+
+   `.reveal-immediate` set `transition:none` for anything already in view at
+   load. The reasoning was sound -- content that is already visible must not
+   appear to arrive from a scroll -- but the effect was that the one part of
+   every page a visitor sees FIRST was the one part with its motion switched
+   off. Everything below the fold animated; the hero simply existed.
+
+   It is staged on load instead: a short, ordered entrance that settles. Motion
+   that introduces a page, not motion that decorates it.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion:no-preference) {
+  .ready .reveal.reveal-immediate {
+    transition:none;
+    animation:revealEnter .78s var(--ease) both;
+  }
+  .ready .reveal.reveal-step-2 { animation-delay:.07s; }
+  .ready .reveal.reveal-step-3 { animation-delay:.14s; }
+  .ready .reveal.reveal-step-4 { animation-delay:.2s; }
+  .ready .reveal.reveal-step-5 { animation-delay:.25s; }
+  .ready .reveal.reveal-step-6 { animation-delay:.29s; }
+  @keyframes revealEnter {
+    from { opacity:0; transform:translate3d(0,16px,0) scale(.994); filter:blur(3px); }
+    to { opacity:1; transform:none; filter:none; }
+  }
+}
+
+/* --------------------------------------------------------------------------
+   HERO DEPTH, DRIVEN BY THE SCROLL ITSELF
+
+   Applied to `.hero-inner`, which carries no animation of its own. That is
+   deliberate rather than convenient: `.hero-copy` runs `revealEnter` and
+   `.hero-stage` runs `heroStageBreathe`, and `animation` is not additive — a
+   second declaration on either would silently replace the first, which is the
+   kind of change that looks fine until somebody notices the robot stopped
+   breathing.
+
+   `animation-timeline: scroll()` rather than a scroll listener: it runs off the
+   main thread, so it cannot stutter while the page is busy, and it needs no
+   inline style — which this site's CSP forbids and a test enforces. The same
+   technique already drives the scroll-progress bar here.
+
+   The content leaves slightly faster than the ground behind it. That difference
+   IS the depth; anything larger stops reading as parallax and starts reading as
+   the page sliding apart.
+   -------------------------------------------------------------------------- */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-inner {
+      animation: heroDepth linear both;
+      animation-timeline: scroll(root block);
+      /* Ends before the hero does, so the effect is finished by the time the
+         next section arrives rather than still moving underneath it. */
+      animation-range: 0 70vh;
+      will-change: transform, opacity;
+    }
+    @keyframes heroDepth {
+      from { transform:translate3d(0,0,0); opacity:1; }
+      to { transform:translate3d(0,-38px,0); opacity:.82; }
+    }
+  }
+}
+
+/* --------------------------------------------------------------------------
+   THE WHITE FLASH HAD A CAUSE, AND IT WAS NOT THE TRANSITION
+
+   Measured: `body` is rgb(5,6,7) but `html` was transparent, so the browser
+   painted its own canvas — white — for the moment before the page's own
+   background existed. Every navigation flashed, and no amount of transition
+   would have covered it, because the flash happens before any of this runs.
+
+   `color-scheme: dark` is the part that does the work: the browser paints its
+   canvas dark from the very first frame, and the scrollbars and form controls
+   stop being light furniture on a dark page. The explicit background is the
+   belt to that braces.
+   -------------------------------------------------------------------------- */
+:root { color-scheme: dark; }
+html { background: var(--ink); }
+
+/* --------------------------------------------------------------------------
+   NAVIGATION THAT DISSOLVES INSTEAD OF BLINKING
+
+   A cross-document view transition: pure CSS, no script, and nothing to
+   coordinate. A browser without it simply navigates the way it does now, which
+   is why there is no fallback to maintain.
+
+   Kept short on purpose. A page transition long enough to admire is a page
+   transition that makes the site feel slow the second time you see it.
+   -------------------------------------------------------------------------- */
+@view-transition { navigation: auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) { animation:pageFadeOut .18s var(--ease) both; }
+  ::view-transition-new(root) { animation:pageFadeIn .26s var(--ease) both; }
+  @keyframes pageFadeOut { from { opacity:1; } to { opacity:0; } }
+  @keyframes pageFadeIn { from { opacity:0; transform:translate3d(0,6px,0); } to { opacity:1; transform:none; } }
+}
+/* A reader who asked for less motion still gets the navigation, without the
+   movement: the transition is suppressed rather than the page being left to
+   blink. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation:none; }
+}
+
+/* The header is the one thing on every page that should not appear to be
+   rebuilt on arrival, so it is carried across the transition rather than
+   cross-faded with the rest. */
+.nav { view-transition-name: ponsr-nav; }
+
+/* --------------------------------------------------------------------------
+   PRESS HAS TO FEEL LIKE PRESS
+
+   Audited: the whole stylesheet held exactly ONE `:active` rule, on `.btn`.
+   Cards, nav segments, copy buttons and sort tabs had none — they changed
+   colour on hover and then did nothing at all when actually pressed, which is
+   the moment a reader is asking the interface to confirm it heard them.
+
+   And nothing set `-webkit-tap-highlight-color`, so on a phone every tap drew
+   the OS's own grey box over the design. That single default undoes more
+   perceived quality than any animation adds.
+
+   TIMING IS THE WHOLE TRICK. The press is fast and the release settles: 90ms
+   down, 260ms back. Symmetric timing reads as a slideshow; asymmetric timing
+   reads as something with weight. The existing button used its 250ms hover
+   transition for both, so even the one press state that existed felt soft.
+   -------------------------------------------------------------------------- */
+.btn,
+.nav-links a,
+a.token-card,
+.launchpad-card,
+.ca-copy,
+.public-launch-row,
+[data-launch-sort] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn,
+  .nav-links a,
+  .ca-copy,
+  [data-launch-sort] {
+    transition-duration: .26s;
+  }
+  .btn:active,
+  .nav-links a:active,
+  .ca-copy:active,
+  [data-launch-sort]:active {
+    transition-duration: .09s;
+  }
+
+  /* Smaller controls move less: the same 3% on a nav segment and on a hero
+     button do not read as the same gesture. */
+  .btn:active { transform:scale(.972); }
+  .nav-links a:active { transform:scale(.985); }
+  .ca-copy:active,
+  [data-launch-sort]:active { transform:scale(.98); }
+
+  /* A card is pressed through the anchor that covers it, not through the
+     article, so the state has to be read from the child. */
+  a.token-card:active,
+  .public-launch-row:active { transform:translateY(0) scale(.992); transition-duration:.09s; }
+  .launchpad-card:has(.launchpad-card-link:active) { transform:translateY(-1px) scale(.994); transition-duration:.09s; }
+}
+
+/* Keyboard users never see :active, so the focus ring is what tells them the
+   control is theirs. Two of these families had none. */
+.ca-copy:focus-visible,
+[data-launch-sort]:focus-visible,
+.public-launch-row:focus-visible { outline:2px solid var(--emerald-bright); outline-offset:2px; }

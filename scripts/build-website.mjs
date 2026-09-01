@@ -43,6 +43,10 @@ const site = path.join(process.cwd(), 'website');
 const feed = JSON.parse(await fs.readFile(path.join(site, 'data/launches.json'), 'utf8'));
 
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
+// Named here rather than inlined: both are deployment identity, and a wrong one
+// would be a confident link to the wrong contract.
+const ESCROW_ADDRESS = '0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e';
+const DEPLOYER_ADDRESS = '0x08e01f1B3156a5D8fE42ED47f09dF5156e7C74Fa';
 const ZERO = '0x0000000000000000000000000000000000000000';
 
 const esc = (value) => String(value ?? '')
@@ -212,7 +216,7 @@ function officialStage() {
 function page({ title, description, canonical, body, socialImage = socialImages.home, noindex = false }) {
   const socialUrl = `${socialOrigin}${socialImage}`;
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><meta name="description" content="${esc(description)}">${noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}<link rel="canonical" href="${canonical}"><meta property="og:type" content="website"><meta property="og:site_name" content="Ponsr"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="${socialUrl}"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:site" content="@ponsrdotfun"><meta name="twitter:image" content="${socialUrl}"><link rel="icon" href="/logo-transparent.png"><link rel="apple-touch-icon" href="/logo-transparent.png"><link rel="stylesheet" href="/assets/site.css"><script type="module" src="/assets/app.mjs"></script></head><body><a class="skip" href="#content">Skip to content</a><div class="scroll-progress" data-scroll-progress aria-hidden="true"></div><div class="ambient" data-motion-field aria-hidden="true"><span class="ambient-stars"></span><span class="ambient-grid"></span><span class="ambient-aurora aurora-a"></span><span class="ambient-aurora aurora-b"></span><span class="ambient-beam beam-a"></span><span class="ambient-beam beam-b"></span><span class="ambient-sweep"></span><span class="ambient-orb orb-a"></span><span class="ambient-orb orb-b"></span></div><span class="cursor-glow" data-cursor-glow aria-hidden="true"></span>${nav(canonical.replace('https://ponsr.fun', '') || '/')}<div id="content" data-ponsr-app>${body}</div>${footer()}</body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#050607"><title>${esc(title)}</title><meta name="description" content="${esc(description)}">${noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}<link rel="canonical" href="${canonical}"><meta property="og:type" content="website"><meta property="og:site_name" content="Ponsr"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="${socialUrl}"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:site" content="@ponsrdotfun"><meta name="twitter:image" content="${socialUrl}"><link rel="icon" href="/logo-transparent.png"><link rel="apple-touch-icon" href="/logo-transparent.png"><link rel="stylesheet" href="/assets/site.css"><script type="module" src="/assets/app.mjs"></script></head><body><a class="skip" href="#content">Skip to content</a><div class="scroll-progress" data-scroll-progress aria-hidden="true"></div><div class="ambient" data-motion-field aria-hidden="true"><span class="ambient-stars"></span><span class="ambient-grid"></span><span class="ambient-aurora aurora-a"></span><span class="ambient-aurora aurora-b"></span><span class="ambient-beam beam-a"></span><span class="ambient-beam beam-b"></span><span class="ambient-sweep"></span><span class="ambient-orb orb-a"></span><span class="ambient-orb orb-b"></span></div><span class="cursor-glow" data-cursor-glow aria-hidden="true"></span>${nav(canonical.replace('https://ponsr.fun', '') || '/')}<div id="content" data-ponsr-app>${body}</div>${footer()}</body></html>
 `;
 }
 
@@ -298,7 +302,22 @@ function trustedLogoUrl(value){if(!value)return null;try{const url=new URL(Strin
 function tokenArt(token) {
   const logo=trustedLogoUrl(token.logo);
   if(logo)return `<div class="token-art has-image"><img src="${esc(logo)}" alt="${esc(token.name)} token image" loading="lazy" decoding="async"></div>`;
-  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="record-fingerprint"><i></i><i></i><i></i></span><small>Token image unavailable</small></div>`;
+  /**
+   * NO LOGO IS NOT A BROKEN CARD.
+   *
+   * The placeholder was a radar pattern, three dots, and the words TOKEN IMAGE
+   * UNAVAILABLE across the middle -- which reads as a failure every time, on a
+   * card whose token is perfectly fine. Two of three launches have no image, so
+   * that was most of the board announcing a problem that does not exist.
+   *
+   * The token's own ticker is the art instead: set in the display face on the
+   * same ground, it reads as identity rather than absence. `.art-symbol` was
+   * already styled for exactly this and was simply never rendered.
+   *
+   * The accessible label is unchanged, so a screen reader still learns there is
+   * no image -- the sighted reader is the one who did not need telling twice.
+   */
+  return `<div class="token-art unavailable" role="img" aria-label="Token image unavailable for ${esc(token.symbol)}"><span class="art-grid"></span><span class="art-symbol" data-art-len="${Math.min(12, String(token.symbol || '?').length)}">${esc(String(token.symbol || '?').toUpperCase())}</span></div>`;
 }
 function tokenCard(token) {
   const href=`/token/${esc(token.token.toLowerCase())}`;const progress=curveProgress(token);
@@ -460,7 +479,16 @@ const accountRoutes = [
 ];
 
 const unavailableAction = (label) => `<button class="btn btn-disabled" type="button" disabled aria-disabled="true" title="Requires verified account connection">${esc(label)}</button>`;
-const unavailableValue = (label, detail) => `<article class="account-stat"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
+/**
+ * An absent value is MARKED absent, not typeset as one.
+ *
+ * `.account-stat strong` is bright silver at the value size, so "Unavailable"
+ * arrived in exactly the voice a real figure would use. Four of those on one
+ * page is why it read as broken rather than as not-yet: the design was shouting
+ * an absence in the register reserved for facts. The class lets the stylesheet
+ * say it quietly instead.
+ */
+const unavailableValue = (label, detail) => `<article class="account-stat is-unavailable"><p>${esc(label)}</p><strong>Unavailable</strong><span>${esc(detail)}</span></article>`;
 
 function accountNav(current) {
   return `<div class="account-nav-wrap"><nav class="account-nav" aria-label="Account preview sections">${accountRoutes.map(([label, href],index) => `<a href="${href}"${href===current?' aria-current="page"':''}><i>${String(index+1).padStart(2,'0')}</i><span>${esc(label)}<small>Preview</small></span></a>`).join('')}</nav><span class="account-nav-cue" aria-hidden="true">Swipe modules →</span></div>`;
@@ -478,8 +506,36 @@ function accountOverview() {
   return `<div class="account-grid"><section class="panel account-primary"><p class="eyebrow">Command center</p><h2>Your Ponsr account</h2><p class="lede">One place for launches, creator trading fees, wallet access, and security—after identity and wallet continuity are verified.</p><div class="account-stats">${unavailableValue('Embedded wallet','Requires verified account binding.')}${unavailableValue('Native balance','No authenticated address is available.')}${unavailableValue('Creator fees','No reconciled account scope is available.')}${unavailableValue('Launches','No verified identity is connected.')}</div></section><aside class="panel account-side"><p class="eyebrow">Availability</p><h2>What works now</h2><ul class="account-status-list"><li><span class="status-readonly">Read-only</span>Public current-V2 launch records</li><li><span class="status-deferred">Not shipped</span>X identity and existing-wallet access</li><li><span class="status-disabled">Disabled</span>Claims, send, swap, and signing</li></ul><a class="btn btn-ghost" href="/explore"><span>Browse public launches</span></a></aside></div>`;
 }
 
+/**
+ * Every launch, as the public record already holds it.
+ *
+ * The route above is honest and empty: it will list launches bound to a signed-in
+ * identity, and there is no sign-in yet. That left a page with nothing on it about
+ * launches, which is the one subject where the record is completely public.
+ *
+ * This is not a filtered view and does not pretend to be. Someone who launched a
+ * token can confirm it is recorded, with the same block and event time anyone else
+ * would read, before an account exists to claim it with.
+ */
+function accountPublicLaunches() {
+  return `<section class="panel account-module public-launches" data-account-public-launches><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>Every verified launch</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">The complete current-V2 record, unfiltered. Signing in will narrow this to the launches bound to your identity; it will not reveal anything that is not already here.</p><div class="public-launch-rows" data-public-launch-rows><p class="note-inline">Reading the launch feed&hellip;</p></div></section>`;
+}
+
 function accountLaunches() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Your launches</p><h2>Launch records by verified identity</h2></div><span class="state-badge">Identity required</span></div><p class="lede">This view will list tokens whose immutable launch record maps to the signed-in numeric X identity. Public launches remain available without an account.</p><div class="account-empty" data-account-launches><strong>No authenticated launch scope</strong><p>Nothing is inferred from a handle, browser wallet, or public address. Authenticated records are keyed only by immutable numeric X identity.</p><a class="btn btn-ghost" href="/explore"><span>Open public record</span></a></div></section>`;
+}
+
+/**
+ * The escrow's own record, which needs no account at all.
+ *
+ * The page said "Unavailable" in every box -- accrued, claimable, queued, paid --
+ * and read as broken rather than as not-yet. It was neither: the numbers exist,
+ * they are public, and they were 0.02052 NVDA and 0.00944 SPCX when this was
+ * written. What is genuinely account-scoped stays in the panel above; this is
+ * the part that was never private.
+ */
+function accountFeeEscrow() {
+  return `<section class="panel account-module fee-escrow" data-account-fee-escrow><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>Waiting in escrow</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">What the deployment&rsquo;s escrow has credited to each launch&rsquo;s fee splitter, read from chain. Anyone can verify it, and anyone can trigger the split &mdash; the creator&rsquo;s share is pushed to the creator&rsquo;s own wallet, never to the caller.</p><div class="fee-escrow-rows" data-fee-escrow-rows><p class="note-inline">Reading the escrow&hellip;</p></div><p class="footer-note">Escrow credit per launch, not account-scoped and not a claim of ownership. A balance that cannot be read is shown as unavailable, never as zero.</p></section>`;
 }
 
 function accountFees() {
@@ -494,12 +550,36 @@ function accountSimulator() {
   return `<section class="panel account-module simulator-directory"><div class="account-module-head"><div><p class="eyebrow">Read-only What-if lab</p><h2>Historical counterfactuals by launch</h2></div><span class="status-readonly state-badge">Public read-only</span></div><p class="lede">Choose a verified Ponsr launch, then explicitly select or paste a wallet on its token page. No X identity, embedded-wallet lookup, signature, approval, or transaction is used.</p><div class="card-grid" data-account-simulator-launches>${launches.map((token)=>`<a class="token-card" href="/token/${esc(token.token.toLowerCase())}#what-if"><div class="top"><div><p class="eyebrow">What-if simulator</p><h3>${esc(token.name)}</h3><p class="proof-symbol">${esc(token.symbol)}</p></div><span class="go">OPEN LAB →</span></div><p class="footer-note">Canonical curve events · chain Transfer logs · RPC balance · GeckoTerminal price</p></a>`).join('')}</div><p class="note"><strong>Financial execution remains locked</strong>Receive, send, swap, creator-fee claims, and account-linked X/Privy access remain Phase B features.</p></section>`;
 }
 
+/**
+ * The security facts that need no account at all.
+ *
+ * The panel above is about ACCOUNT security -- identity binding, wallet
+ * continuity, session controls -- and every one of those genuinely waits for a
+ * sign-in. That left a security page with four "Unavailable" rows and nothing a
+ * visitor could check, on the subject where checking is the whole point.
+ *
+ * These are the boundaries a stranger can verify without trusting a word of it:
+ * which factory Ponsr launches through, which escrow credits creator fees, which
+ * address deploys, and whether the public gate is open. Every one is an on-chain
+ * fact with an explorer link beside it.
+ */
+function accountVerifiableNow() {
+  const fact = (label, value, kind, note) =>
+    `<article class="verifiable-fact"><span>${esc(label)}</span><strong>${kind ? `<a class="text-link" href="${EXPLORER}/${kind}/${esc(value)}" target="_blank" rel="noopener noreferrer">${esc(value)}</a>` : esc(value)}</strong><small>${esc(note)}</small></article>`;
+  return `<section class="panel account-module verifiable-now"><div class="account-module-head"><div><p class="eyebrow">Public record &middot; no account required</p><h2>What anyone can verify</h2></div><span class="state-badge status-readonly">Public read-only</span></div><p class="lede">The boundaries this bot operates inside, as addresses rather than assurances. Follow any of them to the explorer and check.</p><div class="verifiable-facts">` +
+    fact('Chain', 'Robinhood Chain · 4663', null, 'Every launch, fee and balance named on this site is on this chain.') +
+    fact('Launch factory', feed.deployment.factory, 'address', 'The only contract Ponsr launches through. A launch from any other factory is not ours.') +
+    fact('Fee escrow', ESCROW_ADDRESS, 'address', 'Where creator fees are credited before a splitter claims them.') +
+    fact('Deployer', DEPLOYER_ADDRESS, 'address', 'The on-chain deployer of every Ponsr launch. The creator receives their share through a per-launch splitter, not from this address.') +
+    `</div><div class="verifiable-gate" data-public-gate><span>Public launching</span><strong>Reading&hellip;</strong><small>Whether anyone can currently trigger a launch by mentioning the bot.</small></div></section>`;
+}
+
 function accountSecurity() {
   return `<section class="panel account-module"><div class="account-module-head"><div><p class="eyebrow">Security & recovery</p><h2>Authority must be proven, not assumed</h2></div><span class="state-badge">Phase B required</span></div><div class="security-list"><article><strong>Identity binding</strong><p>Stable numeric X user ID, verified server-side and independent of a mutable handle.</p><span>Unavailable</span></article><article><strong>Wallet continuity</strong><p>Exact existing Privy embedded wallet, with duplicate-creation races blocked.</p><span>Unavailable</span></article><article><strong>Session controls</strong><p>Expiration, CSRF defense, logout, replay protection, and recovery evidence.</p><span>Unavailable</span></article><article><strong>Signing authority</strong><p>No website signing, claim, send, swap, or treasury authority is enabled.</p><span>Disabled</span></article></div>${unavailableAction('Review recovery options')}</section>`;
 }
 
 function accountPage(route='/account') {
-  const content = route==='/account/launches' ? accountLaunches() : route==='/account/fees' ? accountFees() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() : accountOverview();
+  const content = route==='/account/launches' ? accountLaunches() + accountPublicLaunches() : route==='/account/fees' ? accountFees() + accountFeeEscrow() : route==='/account/wallet' ? accountWallet() : route==='/account/simulator' ? accountSimulator() : route==='/account/security' ? accountSecurity() + accountVerifiableNow() : accountOverview();
   const title = accountRoutes.find(([,href])=>href===route)?.[0] || 'Overview';
   const routeIntro = {
     '/account':['Creator operations','One command center for launches, fees, wallet continuity, and account authority.'],

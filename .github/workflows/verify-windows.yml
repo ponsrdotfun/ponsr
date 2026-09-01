@@ -1,0 +1,62 @@
+# THE WINDOWS HALF OF `verify.yml`, SPLIT OUT SO IT CAN BE SKIPPED.
+#
+# GitHub bills Windows minutes at TWICE the Linux rate, and this job ran on every
+# push -- including website-only changes that cannot reach the code it tests. A
+# job cannot carry its own `paths` filter, but a workflow can, so it lives here.
+#
+# The job itself is unchanged, including its name, so anything that refers to
+# `verify-windows-acl` still finds it.
+name: verify (windows)
+
+on:
+  pull_request:
+    paths: &backend
+      - 'backend/**'
+      - '.github/workflows/verify-windows.yml'
+  push:
+    branches: [main]
+    paths: *backend
+
+concurrency:
+  group: verify-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # A SECOND job, on real Windows, for one reason: the raw-transaction journal's
+  # protection there is an ACL and nothing else. Windows does not implement POSIX mode
+  # bits -- `fs.stat().mode` reports a synthesised 0666 whatever the real ACL says -- so
+  # the Linux job above cannot exercise that code path at all, and a defect in it went
+  # unnoticed precisely because nothing ran it.
+  #
+  # Scoped to the journal suites rather than the whole matrix. The point is custody of
+  # broadcast-ready bytes on the one platform where that is enforced differently, not a
+  # second full run of everything the Linux job already proved.
+  verify-windows-acl:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.0
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: backend npm ci
+        run: npm ci
+        working-directory: backend
+
+      - name: backend typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+        working-directory: backend
+
+      # The ACL suite, plus the journal and signing suites that write raw_tx, so the
+      # files whose custody is being asserted are produced by the real path.
+      - name: journal custody tests (Windows)
+        run: npx jest tests/journalWindowsAcl.test.ts tests/canaryJournal.test.ts tests/signedTxFlow.test.ts --runInBand
+        working-directory: backend
