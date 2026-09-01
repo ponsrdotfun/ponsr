@@ -231,8 +231,8 @@ string carries the `0x` prefix and indices count hex characters. An earlier draf
 `[0..4]`, which yields `"0x56"` and would have refused every claim.
 
 The residual is unchanged in kind: zero-value calls carrying that selector may be aimed
-anywhere, costing gas and never value. **The public gate is still false and opening it is
-a separate decision.** See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
+anywhere, costing gas and never value. **The public gate was still false when this was
+written; it was opened on 2026-09-01 and is open now.** See `docs/TURNKEY-CLAIM-AUTHORITY.md` for the two ways to
 write the rule and which to choose; `scripts/turnkey-verify-claim.ts` proves it afterwards by
 signing, never by trusting a config flag. Measured 2026-09-01, nothing broadcast: claim
 **denied**, funded claim **denied**, arbitrary destination **denied**, factory ALLOWED —
@@ -360,6 +360,47 @@ Also from the audit, and worth carrying:
   `reveal-step-${n}`. Any dead-code sweep here must exclude dynamically-constructed names
   before deleting, or the staged entrance animation disappears silently.
 
+### The gate opened and the site said paused (2026-09-02)
+
+**For a day after the owner opened the public gate, ponsr.fun told visitors "New launches
+are paused, so a request will not be answered yet" while the bot was answering them.** The
+site whose entire premise is that it shows only what it can read from the chain was turning
+away the people it had just invited. Four defects, and **not one was reachable while the
+gate stayed false** — every test, every guard and every code path had only ever run against
+a closed gate.
+
+- **`build-website.mjs` branched its copy on `feed.publicGate.enabled` in three places.**
+  The rule — written in that file's own docstring — is that the build may ship only the
+  pessimistic state: it has observed nothing about right now, and a built page is cached by
+  Netlify, browsers and X's crawler, so it outlives what was true when it was written. Baking
+  `open` means a stale copy invites requests that will be refused; baking `paused` can only
+  understate, and the client raises it within a frame of reading a feed. It is
+  `BUILD_GATE_ENABLED` now, stated once.
+- **Two tests demanded OPPOSITE things about the same element.** One required the built
+  how-to note to match the committed gate state; the other required it to stay "Paused right
+  now" and never say "Open now". Both could pass only while the gate was false. The first was
+  superseded and nobody noticed, because a contradiction that cannot be reached is invisible.
+- **A third test pinned the STATE and became a ratchet.** It asserted the gate was false, so
+  when the scheduled refresh read `true` from the chain it failed — and the workflow refuses
+  to publish a snapshot that fails its own suite, so it refused to publish the very snapshot
+  that would have corrected the page. Each half is defensible alone; together the only thing
+  that could clear the failure was the publish the failure blocked. **This is the second
+  ratchet of exactly this shape in this repository** — the snapshot sweep was the first. When
+  a guard and a publisher are wired in series, ask what clears the guard.
+- **The snapshot had gone stale in the one field that mattered.** Freshness is the refresh
+  workflow's job; agreement is a test's job. Conflating them is what built the ratchet.
+
+The general rule, and it is the third time this file has had to write a version of it:
+**a test that pins a value tests the world, not the code.** Assert the property — here, that
+the build's copy cannot depend on the snapshot at all, checked against the build SOURCE,
+because checking its output only proves what today's snapshot happens to contain. That is
+precisely how three separate tests missed this.
+
+Verified in a real browser after deploy, not by reading the built file: the static HTML
+carries `paused` and zero occurrences of `Open now`, and the rendered page reads
+`Open now · Requests are being read`. The refresh workflow then ran end to end and published,
+which is what proves the ratchet is gone.
+
 ## Immediate next actions
 
 **THE BACKEND IS FROZEN as of 2026-08-28.** The launch path is proven end to end on mainnet
@@ -374,10 +415,14 @@ The freeze is a default, not a prohibition. What it means concretely:
 
 - No backend feature work, refactor or dependency change without a reason that names a defect
   or a brief. "While I'm in here" is exactly what it exists to stop.
-- The public gate stays **false**. Opening it is an owner decision with its own authorisation,
-  not a step in some other task. It has been opened and closed twice since, each time for a
-  single owner-authorised launch and closed again immediately afterwards — that is the shape
-  such a decision takes, not a precedent for leaving it open.
+- **The public gate is OPEN as of 2026-09-01**, by the owner's decision, and is meant to stay
+  open so people can try Ponsr. This entry read "the gate stays **false**" for a day after
+  that, which is how the website came to tell visitors that launches were paused while the
+  bot was answering them — see the gate incident below. Closing it is an owner decision with
+  its own authorisation, exactly as opening it was; it is not a step in some other task.
+
+  **The treasury now spends on strangers' requests.** The anti-abuse checks in `validator.ts`
+  and the alerting in `monitor.ts` stopped being belt-and-braces on the day this flipped.
 - **Every remaining chain action that moves value needs its own fresh authorisation.** Three
   have been granted and all three are consumed: the canary of 2026-08-28, and the Microduck
   and NOBI launches of 2026-08-30 and 2026-08-31. The obvious next one — trading against the
@@ -480,15 +525,15 @@ version line too, and `flyctl image show` is the only thing that names the diges
 `mention-sweep` note below, and worth the same restraint. Do not diagnose a deploy from the
 first `/status` after it.
 
-Live `/status/core` reads `ok: true`, `problems: []`, `publicLaunchEnabled: false`. On the
-full `/status`, overall `degraded` is CORRECT — `public-launches` is the only non-ok check
-and it must stay paused. **`mention-sweep` reads `degraded` for the first 300 s after any
+Live `/status/core` reads `ok: true`, `problems: []`, and **`publicLaunchEnabled: true`** as
+of 2026-09-01 — read it before quoting it, because this line has been stale before.
+**`mention-sweep` reads `degraded` for the first 300 s after any
 restart**, because `setInterval` fires one interval AFTER boot and a sweep that has never run
 has proven nothing about itself. That is not a fault, and it was misread as one twice in a
 single session; wait one interval before diagnosing it.
 
 Five settings are established deliberately rather than inherited:
-`TURNKEY_POLICY_CONFIRMED=true`, `PUBLIC_LAUNCH_ENABLED=false`, **`REPLY_INCLUDE_LINK=true`**
+`TURNKEY_POLICY_CONFIRMED=true`, **`PUBLIC_LAUNCH_ENABLED=true`** (opened 2026-09-01), **`REPLY_INCLUDE_LINK=true`**
 (changed 2026-08-31 — replies now carry a link to the token's page, at $0.200 per post against
 $0.015 without one), and the two ceilings `TREASURY_MAX_FEE_WEI` and
 `TREASURY_GAS_RESERVE_WEI`, both 0.002 ETH.
