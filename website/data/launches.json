@@ -8,12 +8,12 @@
   "startBlock": 26841846,
   "mechanism": "current-v2-bonding-curve"
  },
- "generatedAt": "2026-09-01T21:35:52.563Z",
- "observedAt": "2026-09-01T21:35:52.563Z",
- "asOfBlock": 52044303,
+ "generatedAt": "2026-09-01T22:46:27.412Z",
+ "observedAt": "2026-09-01T22:46:27.412Z",
+ "asOfBlock": 52086102,
  "publicGate": {
   "enabled": true,
-  "checkedAt": "2026-09-01T21:36:01.012Z",
+  "checkedAt": "2026-09-01T22:47:09.603Z",
   "source": "https://ponsr-backend.fly.dev/status/core",
   "state": "stale"
  },
@@ -21,15 +21,15 @@
   {
    "id": "current-v2-chain",
    "state": "stale",
-   "fromBlock": 51942549,
-   "throughBlock": 52044303,
+   "fromBlock": 52039303,
+   "throughBlock": 52086102,
    "authoritativeTimestamps": true,
    "scope": "verified last-known-good snapshot; live function advances with 128-block overlap"
   },
   {
    "id": "ponsr-public-gate",
    "state": "stale",
-   "checkedAt": "2026-09-01T21:36:01.012Z"
+   "checkedAt": "2026-09-01T22:47:09.603Z"
   }
  ],
  "launches": [
@@ -665,15 +665,15 @@
    "logIndex": 74,
    "blockNumber": 52043151,
    "blockTimestamp": "2026-09-01T21:33:54.000Z",
-   "observedAt": "2026-09-01T21:35:52.563Z",
+   "observedAt": "2026-09-01T22:46:27.412Z",
    "reserves": {
     "state": "observed",
-    "observedAt": "2026-09-01T21:35:52.563Z",
-    "observedThroughBlock": 52044303,
-    "quoteReserveWei": "1709643000000000000",
-    "tokenReserveWei": "982661292445264888634644778",
-    "realQuoteReserveWei": "29643000000000000",
-    "trackedQuoteWei": "30000000000000000",
+    "observedAt": "2026-09-01T22:46:27.412Z",
+    "observedThroughBlock": 52086102,
+    "quoteReserveWei": "1680000000000000001",
+    "tokenReserveWei": "1000000000000000000000000000",
+    "realQuoteReserveWei": "1",
+    "trackedQuoteWei": "653430000000000",
     "graduated": false,
     "sourceState": "complete",
     "problem": null
@@ -691,14 +691,14 @@
    "launchFeeEth": "0.0005",
    "metadata": {
     "state": "stale",
-    "observedThroughBlock": 52044303
+    "observedThroughBlock": 52086102
    },
    "activity": {
     "state": "observed",
-    "observedThroughBlock": 52044303,
+    "observedThroughBlock": 52086102,
     "curveBuys": 2,
-    "curveSells": 0,
-    "observedAt": "2026-09-01T21:35:52.563Z",
+    "curveSells": 2,
+    "observedAt": "2026-09-01T22:46:27.412Z",
     "events": [
      {
       "kind": "buy",
@@ -725,8 +725,89 @@
       "tokenWei": "11491550269695513902575299",
       "feeWei": "238000000000000",
       "taxWei": "0"
+     },
+     {
+      "kind": "sell",
+      "blockNumber": 52045081,
+      "blockTimestamp": "2026-09-01T21:37:07.000Z",
+      "transactionHash": "0x8c1d7d5f6d7d9bd441e60c9d11103b87042a2e0ddc1432348891a31b717b9d24",
+      "logIndex": 2,
+      "actor": "0xbdb0b32d79fe5eabd043b2bdec3a102535729680",
+      "recipient": "0xbdb0b32d79fe5eabd043b2bdec3a102535729680",
+      "quoteWei": "19564380000000000",
+      "tokenWei": "11491550269695513902575299",
+      "feeWei": "197619999999999",
+      "taxWei": "0"
+     },
+     {
+      "kind": "sell",
+      "blockNumber": 52045115,
+      "blockTimestamp": "2026-09-01T21:37:10.000Z",
+      "transactionHash": "0xb542e6e3091ee2b013ee97b409ad7372ff56a73da1af90a574f074b57d1f39f9",
+      "logIndex": 244,
+      "actor": "0xb0817f2cc3365df7f564f970169026c866a14a44",
+      "recipient": "0xb0817f2cc3365df7f564f970169026c866a14a44",
+      "quoteWei": "9782190000000000",
+      "tokenWei": "5847157285039597462779923",
+      "feeWei": "98810000000000",
+      "taxWei": "0"
      }
     ]
+   }
+  },
+  {
+   "chainId": 4663,
+   "deploymentId": "pons-v2-current-7ed",
+   "factory": "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e",
+   "token": "0x8b3b3a7fbb282390abfddedb08d31204490cea15",
+   "name": "ROBINCAT",
+   "symbol": "CAT",
+   "curve": "0x22855aa3b0ad49b67ef37d112e4b2d2a11c1d05f",
+   "splitter": "0xdcee689086b0919a14c51f35aec2d9fba9671b48",
+   "deployer": "0x08e01f1b3156a5d8fe42ed47f09df5156e7c74fa",
+   "pairToken": "0x0000000000000000000000000000000000000000",
+   "pairLabel": "native ETH",
+   "launchConfigId": 0,
+   "graduationThreshold": "4200000000000000000",
+   "transactionHash": "0x7ccf71d085e5829b890cd4efc80e422a0a6a7d48edbdd137d2dd21162237686b",
+   "logIndex": 37,
+   "blockNumber": 52078659,
+   "blockTimestamp": "2026-09-01T22:33:53.000Z",
+   "observedAt": "2026-09-01T22:46:27.412Z",
+   "reserves": {
+    "state": "observed",
+    "observedAt": "2026-09-01T22:46:27.412Z",
+    "observedThroughBlock": 52086102,
+    "quoteReserveWei": "1680000000000000000",
+    "tokenReserveWei": "1000000000000000000000000000",
+    "realQuoteReserveWei": "0",
+    "trackedQuoteWei": "0",
+    "graduated": false,
+    "sourceState": "complete",
+    "problem": null
+   },
+   "liquidity": {
+    "state": "unavailable",
+    "reason": "No verified liquidity observation is published."
+   },
+   "feeCollection": {
+    "state": "untested"
+   },
+   "logo": "https://pbs.twimg.com/media/HRKiY7dbYAAzK-U.jpg",
+   "description": "",
+   "creator": "0x71a9df278cf8885d83513ae7579e1cd63d240363",
+   "launchFeeEth": "0.0005",
+   "metadata": {
+    "state": "stale",
+    "observedThroughBlock": 52086102
+   },
+   "activity": {
+    "state": "observed",
+    "observedThroughBlock": 52086102,
+    "curveBuys": 0,
+    "curveSells": 0,
+    "observedAt": "2026-09-01T22:46:27.412Z",
+    "events": []
    }
   }
  ]
