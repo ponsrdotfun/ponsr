@@ -8,12 +8,12 @@
   "startBlock": 26841846,
   "mechanism": "current-v2-bonding-curve"
  },
- "generatedAt": "2026-09-01T01:36:01.353Z",
- "observedAt": "2026-09-01T01:36:01.353Z",
- "asOfBlock": 51331486,
+ "generatedAt": "2026-09-01T05:30:44.095Z",
+ "observedAt": "2026-09-01T05:30:44.095Z",
+ "asOfBlock": 51471232,
  "publicGate": {
   "enabled": false,
-  "checkedAt": "2026-09-01T01:36:01.760Z",
+  "checkedAt": "2026-09-01T05:30:46.247Z",
   "source": "https://ponsr-backend.fly.dev/status/core",
   "state": "stale"
  },
@@ -21,15 +21,15 @@
   {
    "id": "current-v2-chain",
    "state": "stale",
-   "fromBlock": 50844926,
-   "throughBlock": 51331486,
+   "fromBlock": 51326486,
+   "throughBlock": 51471232,
    "authoritativeTimestamps": true,
    "scope": "verified last-known-good snapshot; live function advances with 128-block overlap"
   },
   {
    "id": "ponsr-public-gate",
    "state": "stale",
-   "checkedAt": "2026-09-01T01:36:01.760Z"
+   "checkedAt": "2026-09-01T05:30:46.247Z"
   }
  ],
  "launches": [
@@ -138,7 +138,8 @@
       "taxWei": "0"
      }
     ]
-   }
+   },
+   "creator": "0x08e01f1b3156a5d8fe42ed47f09df5156e7c74fa"
   },
   {
    "chainId": 4663,
@@ -375,7 +376,8 @@
       "taxWei": "0"
      }
     ]
-   }
+   },
+   "creator": "0xcdce6c82d995d3223d4e956a3c28d36bad875dc0"
   },
   {
    "chainId": 4663,
@@ -534,7 +536,8 @@
       "taxWei": "0"
      }
     ]
-   }
+   },
+   "creator": "0xcdce6c82d995d3223d4e956a3c28d36bad875dc0"
   }
  ]
 }
