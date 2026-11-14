@@ -8,12 +8,12 @@
   "startBlock": 26841846,
   "mechanism": "current-v2-bonding-curve"
  },
- "generatedAt": "2026-11-13T15:51:58.024Z",
- "observedAt": "2026-11-13T15:51:58.024Z",
- "asOfBlock": 113473243,
+ "generatedAt": "2026-11-14T08:12:02.637Z",
+ "observedAt": "2026-11-14T08:12:02.637Z",
+ "asOfBlock": 114019770,
  "publicGate": {
   "enabled": true,
-  "checkedAt": "2026-11-13T15:51:58.879Z",
+  "checkedAt": "2026-11-14T08:12:03.208Z",
   "source": "https://ponsr-backend.fly.dev/status/core",
   "state": "stale"
  },
@@ -21,15 +21,15 @@
   {
    "id": "current-v2-chain",
    "state": "stale",
-   "fromBlock": 112963322,
-   "throughBlock": 113473243,
+   "fromBlock": 113468243,
+   "throughBlock": 114019770,
    "authoritativeTimestamps": true,
    "scope": "verified last-known-good snapshot; live function advances with 128-block overlap"
   },
   {
    "id": "ponsr-public-gate",
    "state": "stale",
-   "checkedAt": "2026-11-13T15:51:58.879Z"
+   "checkedAt": "2026-11-14T08:12:03.208Z"
   }
  ],
  "launches": [
