@@ -8,9 +8,9 @@
   "startBlock": 26841846,
   "mechanism": "current-v2-bonding-curve"
  },
- "generatedAt": "2026-11-23T21:46:36.239Z",
- "observedAt": "2026-11-23T21:46:36.239Z",
- "asOfBlock": 121734613,
+ "generatedAt": "2026-11-24T16:22:20.107Z",
+ "observedAt": "2026-11-24T16:22:20.107Z",
+ "asOfBlock": 122361071,
  "publicGate": {
   "enabled": true,
   "checkedAt": "2026-11-20T18:42:58.094Z",
@@ -21,8 +21,8 @@
   {
    "id": "current-v2-chain",
    "state": "stale",
-   "fromBlock": 121311867,
-   "throughBlock": 121734613,
+   "fromBlock": 121729613,
+   "throughBlock": 122361071,
    "authoritativeTimestamps": true,
    "scope": "verified last-known-good snapshot; live function advances with 128-block overlap"
   },
